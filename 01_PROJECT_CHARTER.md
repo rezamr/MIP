@@ -12,6 +12,31 @@ Its purpose is to determine, with the strongest evidence that can practically be
 
 MIP is not committed in advance to a metaphysical, neurological, psychoacoustic, psychological, physiological, environmental, informational, or nonlocal explanation.
 
+For operational shorthand, MIP uses the term **MATRIX** for a hypothesized external or non-ordinary information source/substrate that could, in principle, participate in information exchange. The name is a test model, not a conclusion that such a substrate exists.
+
+## Primary operational objective
+
+The central practical objective of MIP is:
+
+> **Determine whether a stable, reproducible communication channel can be established with the hypothesized MATRIX and, in the strongest case, whether the participant can deliberately request and obtain specific desired information from that channel with verifiable accuracy.**
+
+The project is therefore not satisfied by unusual sensations, vivid imagery, altered states, perceived presence, or one-way impressions alone.
+
+The target progression is:
+
+1. **CONTACT / INTERACTION DETECTION** — determine whether a repeatable interaction-like state can be entered under controlled conditions.
+2. **READ** — determine whether verifiable hidden information can be acquired.
+3. **QUERY → RESPONSE** — determine whether a deliberately formulated question changes or structures the returned information.
+4. **TARGETED RETRIEVAL** — determine whether the participant can request a specific category or item of information and receive the requested content rather than uncontrolled material.
+5. **WRITE / TRANSMIT** — determine whether deliberately selected information can be transmitted outward in a reproducible way.
+6. **STORE / RETRIEVE** — determine whether information can be intentionally encoded with no contemporaneous receiver and later recovered.
+7. **HANDSHAKE** — determine whether a bidirectional challenge-response exchange can occur under cryptographic target secrecy.
+8. **RELIABLE COMMUNICATION** — characterize accuracy, error rate, latency, bandwidth, persistence, state dependence, and failure conditions well enough that communication becomes intentionally usable rather than anecdotal.
+
+The strongest MIP success state would be the ability to formulate a specific request before or during a Communication Session and recover the requested information with objective verification at a rate that survives blinding, controls, preregistration, and independent replication.
+
+If an apparent channel cannot survive those tests, MIP must report that result even if the subjective experience remains compelling.
+
 The project must remain capable of discovering any of the following:
 
 - a fully conventional mechanism;
@@ -86,7 +111,15 @@ The long-term objective is to reach the strongest defensible answer to all of th
    - temporal dependence;
    - possible physical or informational correlates.
 
-6. **What explanations survive serious falsification attempts?**
+6. **Can requested information be retrieved deliberately?**
+   - Does query wording matter?
+   - Can the requested domain be constrained?
+   - Can a participant distinguish response from spontaneous imagery?
+   - Can requested information be encoded in objectively scorable forms?
+   - Can repeated queries recover the same answer or independent pieces of the same answer?
+   - Can incorrect, misleading, null, or ambiguous responses be detected?
+
+7. **What explanations survive serious falsification attempts?**
    - expectation;
    - suggestion;
    - sensory leakage;
@@ -137,8 +170,9 @@ Every Communication Session must preserve separately:
 1. **Observed interaction** — what was experienced or measured.
 2. **Perceived agency/source** — whether the participant experienced the event as self-generated, spontaneous, environmental, externally directed, observed, interactive, or unknown.
 3. **Information content** — what specific content, if any, appeared to be sent or received.
-4. **Verification status** — whether that content was independently testable and whether it matched a hidden target or external fact.
-5. **Mechanism status** — conventional, anomalous, mixed, unresolved, or unknown.
+4. **Requested content** — what information was deliberately sought, if any.
+5. **Verification status** — whether returned content was independently testable and whether it matched a hidden target or external fact.
+6. **Mechanism status** — conventional, anomalous, mixed, unresolved, or unknown.
 
 This prevents both premature dismissal and premature external attribution.
 
@@ -155,6 +189,7 @@ Durable MIP records may use these classes:
 - `CS-STORE` — attempted encode-without-current-receiver session;
 - `CS-RETRIEVE` — attempted delayed retrieval;
 - `CS-QUERY` — question/request session;
+- `CS-TARGETED-RETRIEVAL` — deliberate request for a specific class or item of verifiable information;
 - `CS-HANDSHAKE` — challenge-response architecture;
 - `CS-CONTROL` — sham/baseline/control session;
 - `CS-REPLICATION` — repeat of a fixed prior protocol.
