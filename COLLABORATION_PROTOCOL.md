@@ -11,10 +11,13 @@ Before doing substantive work, read:
 1. `README.md`
 2. `COLLABORATION_PROTOCOL.md`
 3. `00_MASTER.md`
-4. `10_CONVERSATION_ORCHESTRATION.md`
-5. the relevant topic files for the requested task
+4. `01_PROJECT_CHARTER.md`
+5. `10_CONVERSATION_ORCHESTRATION.md`
+6. the relevant topic files for the requested task
 
 Do not ask the project owner to repeat information already preserved in the repository.
+
+The startup reader must treat `01_PROJECT_CHARTER.md` as the durable statement of MIP's long-term objective, communication-session terminology, advisor role, continuous-research policy, and safety doctrine.
 
 ## Repository language
 
@@ -29,7 +32,7 @@ The repository is the durable source of truth for:
 - research findings;
 - source verification;
 - project decisions;
-- experimental designs;
+- experimental and communication-session designs;
 - audio parameters;
 - unknown parameters;
 - session records;
@@ -42,6 +45,40 @@ The repository is the durable source of truth for:
 - next actions.
 
 A chat-only conclusion is not durable until written to the repository.
+
+## Long-horizon research rule
+
+MIP must not be declared complete simply because one research pass, one archive search, one session, or one hypothesis reaches a stopping point.
+
+When a material uncertainty remains and a meaningful investigation path exists, preserve it as an open research item and continue in later work.
+
+Research may span historical archives, audio engineering, psychoacoustics, physiology, neuroscience, statistics, information-transfer methodology, signal processing, personnel migration, patents, oral histories, adjacent programs, and other relevant domains.
+
+When new evidence changes the working model, revise the protocol. Do not preserve an obsolete design for consistency alone.
+
+A revision must state:
+
+- what changed;
+- why it changed;
+- what evidence triggered the change;
+- which prior sessions/results remain comparable;
+- which future sessions use the new version.
+
+## Communication-session terminology
+
+Use **Communication Session** as the operational label for exploratory owner-led sessions intended to establish, explore, send, receive, query, or characterize an apparent interaction.
+
+Do not infer from the label alone that an external agent, nonlocal substrate, or verified transfer has been demonstrated.
+
+Every session must separately preserve:
+
+- observation;
+- perceived source/agency;
+- information content;
+- verification status;
+- current mechanism status.
+
+Laboratory tests using randomization, hidden targets, sham conditions, or statistical endpoints remain `experiments` even when they are built around Communication Sessions.
 
 ## Evidence separation
 
@@ -90,6 +127,8 @@ Do not invent a missing value to make a protocol look complete.
 8. For blinded target tests, the raw response must be locked before target reveal.
 9. Never retroactively adjust a raw response to fit a revealed target.
 10. Preserve exact audio settings, device settings, timestamps, and file hashes whenever available.
+11. Record the Communication Session class when known (`CS-EXPLORE`, `CS-READ`, `CS-WRITE`, `CS-TRANSFER`, `CS-STORE`, `CS-RETRIEVE`, `CS-QUERY`, `CS-HANDSHAKE`, `CS-CONTROL`, `CS-REPLICATION`).
+12. Preserve unexpected, uncomfortable, null, and adverse observations with the same diligence as apparently successful events.
 
 ## Research integrity rules
 
@@ -102,6 +141,8 @@ Do not invent a missing value to make a protocol look complete.
 - A missing document is a documentary gap, not automatically deliberate suppression.
 - The public record may be incomplete; incompleteness is itself an empirical question.
 - Search cross-program terminology and personnel migration where direct Gateway terminology fails.
+- Do not dismiss a repeated observation solely because its mechanism is unknown.
+- Do not upgrade perceived communication or agency into an objective external-source claim without independent evidence.
 
 ## Experimental integrity rules
 
@@ -129,6 +170,27 @@ Whenever possible, use:
 - predeclared primary endpoints;
 - sham controls;
 - replication cohorts.
+
+## Advisor and safety responsibility
+
+The research coordinator must act as an advisor and risk monitor throughout the project.
+
+For every materially new protocol or session class, consider:
+
+- foreseeable physical or psychological risks;
+- audio exposure;
+- breathing method;
+- fatigue/sleep state;
+- loss or alteration of voluntary control;
+- interruption risk;
+- stop criteria;
+- termination procedure;
+- recovery period;
+- adverse-event logging.
+
+Do not deliberately escalate a phenomenon merely because it appears novel or promising.
+
+A safety event remains scientifically important data and must be preserved in the session record.
 
 ## Durable-update requirement
 
