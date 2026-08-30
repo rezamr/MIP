@@ -74,7 +74,7 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `protocols/MATRIX_TEMPORAL_RESPONSE_AND_PERSISTENCE_V0.1.md`
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.1.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.2.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
