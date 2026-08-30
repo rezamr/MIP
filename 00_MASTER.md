@@ -6,23 +6,42 @@ Last updated: 2026-08-29
 
 MIP — Mission Impossible — is a long-horizon forensic reconstruction, technical reverse-engineering, physiology, phenomenology, and information-behavior research program.
 
-Primary objective: determine what is actually occurring during the class of sessions historically associated with Gateway / Hemi-Sync / Bentov / CENTER LANE and during the project owner's own repeated sessions, then characterize it with the strongest reproducible evidence possible.
+Primary objective: determine whether a stable, reproducible communication/request-response interaction can be established and objectively characterized, while reconstructing the historical Gateway / Hemi-Sync / Bentov / CENTER LANE systems and testing the project owner's repeated session phenomena with progressively stronger controls.
 
-For operational shorthand, **MATRIX** means a hypothesized external or non-ordinary information source/substrate. This is a test model, not an established fact.
-
-### Primary practical target
-
-MIP's central practical goal is to determine whether a stable, reproducible communication channel can be established with the hypothesized MATRIX and, in the strongest case, whether the participant can deliberately request and obtain specific desired information from that channel with objectively verifiable accuracy.
-
-The progression is:
-
-`CONTACT → READ → QUERY/RESPONSE → TARGETED RETRIEVAL → WRITE → STORE/RETRIEVE → HANDSHAKE → RELIABLE COMMUNICATION`
-
-The strongest success condition is not merely having unusual experiences. It is being able to ask for specific information and recover the requested information in a form that survives blinding, controls, preregistration, objective scoring, and independent replication.
-
-The project does not assume in advance that a nonlocal information substrate exists, nor does it assume that all observed phenomena are internally generated. Mechanism remains open until evidence discriminates among competing explanations.
+For operational shorthand, **MATRIX** means a hypothesized external or non-ordinary interaction/information substrate or mechanism. This is a test model, not an established fact.
 
 The durable project charter is `01_PROJECT_CHARTER.md`.
+The durable primary-objective hierarchy and protocol-audit requirements are in `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md`.
+
+## Primary practical target
+
+MIP's main goal is **communication and request-response**, not passive information acquisition.
+
+The strongest simple operational test is:
+
+`participant requests outcome X -> independent random system operates at predefined time T -> test whether system output corresponds to X`
+
+Example:
+
+`Request: output 1 at time T -> isolated random system generates one value at T -> test whether output = 1`
+
+Passive information acquisition remains a secondary but essential comparison track.
+
+MIP must therefore maintain two separate core tracks:
+
+### Track A — READ / PERCEPTION
+
+`independent hidden system outcome -> participant attempts to perceive/report outcome`
+
+Example: the program privately selects a number and the participant attempts to identify that number.
+
+### Track B — REQUEST / INFLUENCE
+
+`participant precommits desired outcome -> independent random system operates later -> test whether requested outcome occurs above chance`
+
+Example: the participant requests that the system output `1` at a specified time, then the isolated system generates its value.
+
+A READ success is not evidence of influence. A REQUEST success is not evidence of remote perception. Analyze them independently.
 
 ## Long-term objective
 
@@ -37,42 +56,48 @@ The project is not considered complete merely because:
 - one hypothesis fails;
 - or one archive search returns no result.
 
-Research priorities, session procedures, audio configurations, instrumentation, controls, and communication protocols must be revised whenever new evidence justifies revision.
+Research priorities, session procedures, audio configurations, instrumentation, controls, random-source architecture, and communication protocols must be revised whenever new evidence justifies revision.
 
 The final target is the strongest defensible characterization of:
 
 1. the state being entered;
 2. how it is induced and controlled;
 3. the real historical operational architecture;
-4. whether reproducible information behavior occurs;
-5. whether deliberate query and targeted information retrieval are possible;
-6. its directionality, bandwidth, latency, persistence, and error structure if it occurs;
-7. and which conventional or anomalous explanations survive falsification.
+4. whether a stable request-response interaction occurs;
+5. whether specific requested machine outcomes correlate with later independent outputs above chance;
+6. whether hidden machine outcomes can also be perceived/read above chance;
+7. whether bidirectional behavior can be established after READ and REQUEST are independently validated;
+8. its directionality, bandwidth, latency, persistence, temporal specificity, target specificity, and error structure if it occurs;
+9. and which conventional or anomalous explanations survive falsification.
 
 `UNKNOWN` is a valid temporary state. No missing value may be invented to force completion.
 
 ## Communication-session doctrine
 
-Owner-led sessions are operationally called **Communication Sessions** when they are intended to establish, explore, transmit, receive, query, or characterize an apparent interaction.
+Owner-led sessions are operationally called **Communication Sessions** when they are intended to establish, explore, transmit, receive, query, request, influence, or characterize an apparent interaction.
 
-This naming does **not** by itself establish an external agent, a nonlocal substrate, or successful information transfer.
+This naming does **not** by itself establish an external agent, a nonlocal substrate, successful information transfer, or causal influence.
 
 For every Communication Session preserve separately:
 
 - the observed/perceived interaction;
 - perceived source or agency;
+- exact request/intention content, if any;
 - exact information content, if any;
-- exact requested information, if any;
-- whether content was independently verifiable;
-- whether a hidden target was matched above chance;
+- requested target time, if any;
+- machine/system outcome, if any;
+- whether content/outcome was independently verifiable;
+- whether the primary endpoint was matched above chance;
 - and the current mechanism status.
 
-This policy is intentionally symmetric: MIP must neither dismiss repeated unexplained observations nor promote them into external communication claims before verification.
+This policy is intentionally symmetric: MIP must neither dismiss repeated unexplained observations nor promote them into external communication/influence claims before verification.
 
 Supported communication-session classes include:
 
 - `CS-EXPLORE`
 - `CS-READ`
+- `CS-REQUEST`
+- `CS-INFLUENCE`
 - `CS-WRITE`
 - `CS-TRANSFER`
 - `CS-STORE`
@@ -92,15 +117,21 @@ The research coordinator must act as a rigorous advisor and risk monitor.
 Responsibilities include:
 
 - continuous source research across relevant domains;
+- exhaustive protocol recovery and comparison;
 - methodological design and revision;
 - identification of confounds and alternative explanations;
 - session preparation and post-session interrogation;
 - audio and instrumentation analysis;
-- target-generation and blinding design;
+- random-source selection/calibration;
+- target/request generation and cryptographic commitment design;
+- timing synchronization;
+- blinding design;
 - statistical planning;
 - preservation of null and failed results;
 - archival reconstruction;
 - and explicit monitoring of stop conditions and adverse events.
+
+Historical protocols are not immutable. MIP may change, combine, remove, or add components when evidence or methodological quality justifies it. Every change must be versioned and documented with its reason and timing relative to outcome inspection.
 
 Exploration must not require deliberate escalation of loss of voluntary control, unsafe sound levels, sleep deprivation, dangerous breathing practices, drugs, electrical stimulation, or other avoidable hazards.
 
@@ -108,13 +139,40 @@ Exploration must not require deliberate escalation of loss of voluntary control,
 
 1. Can the historically documented state-induction architecture be reproduced?
 2. Which audio components materially alter the reported or measured state?
-3. Can hidden information be acquired above chance under blinded conditions?
-4. Can a deliberately formulated query produce a verifiable response?
-5. Can a participant request a specific class or item of information and recover the requested content rather than uncontrolled imagery?
-6. Can information be transmitted above chance to an isolated receiver?
-7. Can deliberately encoded information persist without a contemporaneous receiver and later be retrieved?
-8. Can a true challenge-response architecture be demonstrated under target secrecy and cryptographic locking?
-9. Do any effects survive sham controls, leakage controls, preregistration, and independent replication?
+3. Can hidden machine-selected numbers/targets be identified above chance under blinded conditions? `READ`
+4. Can a participant precommit/request a specific later machine outcome and obtain above-chance correspondence? `REQUEST / INFLUENCE`
+5. Is any REQUEST effect specific to the requested value rather than device bias?
+6. Is any REQUEST effect specific to the requested time rather than generic nearby anomaly?
+7. Does the effect survive no-intention, sham, calibration, isolation, blinding, and randomized-request controls?
+8. Can a deliberately formulated query produce a verifiable response?
+9. Can information be transmitted above chance to an isolated receiver?
+10. Can deliberately encoded information persist without a contemporaneous receiver and later be retrieved?
+11. Can a true bidirectional challenge-response architecture be demonstrated only after READ and REQUEST are independently supported?
+12. Do any effects survive preregistration and independent replication?
+
+## Current protocol-family evidence
+
+### READ family
+
+Historical remote-viewing / remote-perception procedures provide strong methodological precedents for hidden-target acquisition tests.
+
+Status: `PROTOCOL FAMILY EXISTS — SOURCE-LEVEL AUDIT ONGOING`.
+
+### REQUEST / INFLUENCE family
+
+Historical analogues have been identified in:
+
+- U.S. Army `Remote Perturbation Techniques — Project Description and Experimental Protocol` (1979);
+- Princeton PEAR random-event-generator intention experiments;
+- PEAR remote human/machine interaction experiments.
+
+These protocols are more directly relevant to MIP's primary request-response question than ordinary remote viewing.
+
+Status: `HISTORICAL ANALOGUES CONFIRMED — EFFECT RELIABILITY AND EXACT PROTOCOLS REQUIRE FULL AUDIT`.
+
+Durable audit:
+
+- `research/PROTOCOL_FAMILIES_READ_VS_REQUEST.md`
 
 ## Current strongest archival findings
 
@@ -179,6 +237,7 @@ Keep separate unless documentary evidence explicitly joins them:
 - consumer Gateway training;
 - CENTER LANE customized MIAS/Hemi-Sync implementation;
 - SRI / GRILL FLAME remote-viewing procedures;
+- Army remote-perturbation protocols;
 - later Monroe patents;
 - PEAR / REG intention experiments;
 - later theoretical or internet-era additions.
@@ -199,7 +258,7 @@ Both are `RECONSTRUCTED FROM MEMORY`, not contemporaneous laboratory records.
 
 Do not retroactively classify 396 Hz as historical.
 
-## Current archival anomaly priorities
+## Current archival and protocol priorities
 
 1. Exact CENTER LANE custom tape waveforms.
 2. Full approximately ten-week advanced training record.
@@ -207,10 +266,14 @@ Do not retroactively classify 396 Hz as historical.
 4. Tape production sheets, oscillator settings, duplication logs, property records and disposition records.
 5. Missing custom-tape masters.
 6. Exact implementation of multi-frequency operational environments.
-7. Historical outbound / communication / perturbation procedures.
-8. Historical query/response or targeted-retrieval procedures.
-9. Any deliberate encode → no receiver → delay → later retrieve architecture.
-10. Any blinded query → hidden challenge → response architecture.
+7. Full primary-source extraction of Army Remote Perturbation Techniques protocol.
+8. Full PEAR REG intention protocol extraction and criticism/replication audit.
+9. Historical READ/remote-viewing protocol extraction for number/target tests.
+10. Identify any discrete requested-output protocols analogous to `REQUEST 0/1`.
+11. Identify target-time-specific intention/perturbation protocols.
+12. Historical query/response procedures.
+13. Any deliberate encode -> no receiver -> delay -> later retrieve architecture.
+14. Any true bidirectional request/response architecture.
 
 ## Current experiment / communication roadmap
 
@@ -220,40 +283,48 @@ Test whether reported phenomena recur under standardized sessions without hidden
 ### EXP-002 — Audio Component Isolation
 Compare candidate historical and experimental audio configurations using blinded/sham conditions.
 
-### EXP-003 — READ
-Hidden machine-selected target after state entry; raw response locked before reveal.
+### EXP-003 — READ / NUMBER PERCEPTION
+Machine selects a hidden number under a prespecified timing model; participant attempts to identify it; response locked before reveal.
 
-### EXP-004 — QUERY / TARGETED RETRIEVAL
-Formulate a precise request, constrain the answer space where possible, and determine whether the requested information is returned with objective verification.
+### EXP-004 — REQUEST / INFLUENCE / NUMBER SELECTION
+Participant receives/precommits a requested value; independent random system generates at predefined time T; exact request-output correspondence is primary endpoint.
 
-### EXP-005 — WRITE / TRANSFER
+### EXP-005 — QUERY / TARGETED RESPONSE
+Constrained question/request with response content captured and objectively verified where possible.
+
+### EXP-006 — WRITE / TRANSFER
 Random payload to sender; isolated blinded receiver; objective forced-choice scoring.
 
-### EXP-006 — STORE / RETRIEVE
+### EXP-007 — STORE / RETRIEVE
 Sender encodes payload with no receiver present; delayed blinded retrieval by another participant or later session.
 
-### EXP-007 — HANDSHAKE
-Query committed first; hidden challenge generated afterward; response locked before reveal.
+### EXP-008 — HANDSHAKE / BIDIRECTIONAL
+Only after READ and REQUEST components are independently supported, combine them into a challenge-response architecture.
 
-These laboratory designs remain experiments even when the underlying owner-led practice is operationally called a Communication Session.
+Detailed roadmap: `protocols/EXPERIMENT_ROADMAP.md`.
 
 ## Current immediate next actions
 
 1. Complete source-level verification of the five Priority-0 archival claims V-01 through V-05.
-2. Populate source, anomaly, and unknown-parameter registers.
-3. Preserve S0001 and S0002 as retrospective session records.
-4. Finalize the standardized session questionnaire and raw-report protocol.
-5. Design `CS-QUERY` and `CS-TARGETED-RETRIEVAL` so requested information can be distinguished from uncontrolled spontaneous content.
-6. Do not begin confirmatory hidden-target claims until raw-response locking, target generation, condition blinding, and scoring rules are defined.
-7. After V-01 through V-05 verification, launch targeted recovery work on custom tapes, biomonitoring feedback, ten-week training records, and government-property trail.
-8. Continue cross-domain research whenever an unresolved mechanism, parameter, historical gap, or session phenomenon can be meaningfully narrowed.
+2. Extract the full 1979 Army Remote Perturbation Techniques protocol from the primary document.
+3. Extract PEAR REG intention apparatus, intention instructions, timing, controls, run structure, feedback, and statistics.
+4. Find independent replications, null results, and critiques of REQUEST/INFLUENCE protocols.
+5. Audit READ/remote-viewing protocols separately.
+6. Design `MIP-NUM-READ v0.1`.
+7. Design `MIP-NUM-REQUEST v0.1` only after protocol audit.
+8. Require randomized requested values rather than always requesting one fixed number.
+9. Add no-intention, sham-request, calibration, and mismatched-time controls.
+10. Choose and characterize appropriate random sources; prefer hardware/physical random sources for influence testing.
+11. Validate timestamping, isolation, logging, and cryptographic commitments.
+12. Preserve S0001 and S0002 as retrospective session records.
+13. Continue source research and revise protocols whenever evidence justifies a change.
 
 ## Evidence ladder
 
 - `L0` — single subjective observation
 - `L1` — repeated subjective observation
 - `L2` — association with experimental condition
-- `L3` — blinded above-chance result
+- `L3` — blinded above-chance or instrumentally verified effect
 - `L4` — preregistered replication
 - `L5` — independent replication
 - `L6` — mechanism-sensitive replication
