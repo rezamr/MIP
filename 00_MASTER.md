@@ -8,6 +8,18 @@ MIP — Mission Impossible — is a long-horizon forensic reconstruction, techni
 
 Primary objective: determine what is actually occurring during the class of sessions historically associated with Gateway / Hemi-Sync / Bentov / CENTER LANE and during the project owner's own repeated sessions, then characterize it with the strongest reproducible evidence possible.
 
+For operational shorthand, **MATRIX** means a hypothesized external or non-ordinary information source/substrate. This is a test model, not an established fact.
+
+### Primary practical target
+
+MIP's central practical goal is to determine whether a stable, reproducible communication channel can be established with the hypothesized MATRIX and, in the strongest case, whether the participant can deliberately request and obtain specific desired information from that channel with objectively verifiable accuracy.
+
+The progression is:
+
+`CONTACT → READ → QUERY/RESPONSE → TARGETED RETRIEVAL → WRITE → STORE/RETRIEVE → HANDSHAKE → RELIABLE COMMUNICATION`
+
+The strongest success condition is not merely having unusual experiences. It is being able to ask for specific information and recover the requested information in a form that survives blinding, controls, preregistration, objective scoring, and independent replication.
+
 The project does not assume in advance that a nonlocal information substrate exists, nor does it assume that all observed phenomena are internally generated. Mechanism remains open until evidence discriminates among competing explanations.
 
 The durable project charter is `01_PROJECT_CHARTER.md`.
@@ -33,8 +45,9 @@ The final target is the strongest defensible characterization of:
 2. how it is induced and controlled;
 3. the real historical operational architecture;
 4. whether reproducible information behavior occurs;
-5. its directionality, bandwidth, latency, persistence, and error structure if it occurs;
-6. and which conventional or anomalous explanations survive falsification.
+5. whether deliberate query and targeted information retrieval are possible;
+6. its directionality, bandwidth, latency, persistence, and error structure if it occurs;
+7. and which conventional or anomalous explanations survive falsification.
 
 `UNKNOWN` is a valid temporary state. No missing value may be invented to force completion.
 
@@ -49,6 +62,7 @@ For every Communication Session preserve separately:
 - the observed/perceived interaction;
 - perceived source or agency;
 - exact information content, if any;
+- exact requested information, if any;
 - whether content was independently verifiable;
 - whether a hidden target was matched above chance;
 - and the current mechanism status.
@@ -64,6 +78,7 @@ Supported communication-session classes include:
 - `CS-STORE`
 - `CS-RETRIEVE`
 - `CS-QUERY`
+- `CS-TARGETED-RETRIEVAL`
 - `CS-HANDSHAKE`
 - `CS-CONTROL`
 - `CS-REPLICATION`
@@ -94,10 +109,12 @@ Exploration must not require deliberate escalation of loss of voluntary control,
 1. Can the historically documented state-induction architecture be reproduced?
 2. Which audio components materially alter the reported or measured state?
 3. Can hidden information be acquired above chance under blinded conditions?
-4. Can information be transmitted above chance to an isolated receiver?
-5. Can deliberately encoded information persist without a contemporaneous receiver and later be retrieved?
-6. Can a true challenge-response architecture be demonstrated under target secrecy and cryptographic locking?
-7. Do any effects survive sham controls, leakage controls, preregistration, and independent replication?
+4. Can a deliberately formulated query produce a verifiable response?
+5. Can a participant request a specific class or item of information and recover the requested content rather than uncontrolled imagery?
+6. Can information be transmitted above chance to an isolated receiver?
+7. Can deliberately encoded information persist without a contemporaneous receiver and later be retrieved?
+8. Can a true challenge-response architecture be demonstrated under target secrecy and cryptographic locking?
+9. Do any effects survive sham controls, leakage controls, preregistration, and independent replication?
 
 ## Current strongest archival findings
 
@@ -191,8 +208,9 @@ Do not retroactively classify 396 Hz as historical.
 5. Missing custom-tape masters.
 6. Exact implementation of multi-frequency operational environments.
 7. Historical outbound / communication / perturbation procedures.
-8. Any deliberate encode → no receiver → delay → later retrieve architecture.
-9. Any blinded query → hidden challenge → response architecture.
+8. Historical query/response or targeted-retrieval procedures.
+9. Any deliberate encode → no receiver → delay → later retrieve architecture.
+10. Any blinded query → hidden challenge → response architecture.
 
 ## Current experiment / communication roadmap
 
@@ -205,13 +223,16 @@ Compare candidate historical and experimental audio configurations using blinded
 ### EXP-003 — READ
 Hidden machine-selected target after state entry; raw response locked before reveal.
 
-### EXP-004 — WRITE / TRANSFER
+### EXP-004 — QUERY / TARGETED RETRIEVAL
+Formulate a precise request, constrain the answer space where possible, and determine whether the requested information is returned with objective verification.
+
+### EXP-005 — WRITE / TRANSFER
 Random payload to sender; isolated blinded receiver; objective forced-choice scoring.
 
-### EXP-005 — STORE / RETRIEVE
+### EXP-006 — STORE / RETRIEVE
 Sender encodes payload with no receiver present; delayed blinded retrieval by another participant or later session.
 
-### EXP-006 — HANDSHAKE
+### EXP-007 — HANDSHAKE
 Query committed first; hidden challenge generated afterward; response locked before reveal.
 
 These laboratory designs remain experiments even when the underlying owner-led practice is operationally called a Communication Session.
@@ -222,9 +243,10 @@ These laboratory designs remain experiments even when the underlying owner-led p
 2. Populate source, anomaly, and unknown-parameter registers.
 3. Preserve S0001 and S0002 as retrospective session records.
 4. Finalize the standardized session questionnaire and raw-report protocol.
-5. Do not begin confirmatory hidden-target claims until raw-response locking, target generation, condition blinding, and scoring rules are defined.
-6. After V-01 through V-05 verification, launch targeted recovery work on custom tapes, biomonitoring feedback, ten-week training records, and government-property trail.
-7. Continue cross-domain research whenever an unresolved mechanism, parameter, historical gap, or session phenomenon can be meaningfully narrowed.
+5. Design `CS-QUERY` and `CS-TARGETED-RETRIEVAL` so requested information can be distinguished from uncontrolled spontaneous content.
+6. Do not begin confirmatory hidden-target claims until raw-response locking, target generation, condition blinding, and scoring rules are defined.
+7. After V-01 through V-05 verification, launch targeted recovery work on custom tapes, biomonitoring feedback, ten-week training records, and government-property trail.
+8. Continue cross-domain research whenever an unresolved mechanism, parameter, historical gap, or session phenomenon can be meaningfully narrowed.
 
 ## Evidence ladder
 
