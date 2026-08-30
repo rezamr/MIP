@@ -12,12 +12,15 @@ Before doing substantive work, read:
 2. `COLLABORATION_PROTOCOL.md`
 3. `00_MASTER.md`
 4. `01_PROJECT_CHARTER.md`
-5. `10_CONVERSATION_ORCHESTRATION.md`
-6. the relevant topic files for the requested task
+5. `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md`
+6. `10_CONVERSATION_ORCHESTRATION.md`
+7. the relevant topic files for the requested task
 
 Do not ask the project owner to repeat information already preserved in the repository.
 
 The startup reader must treat `01_PROJECT_CHARTER.md` as the durable statement of MIP's long-term objective, communication-session terminology, advisor role, continuous-research policy, and safety doctrine.
+
+The startup reader must treat `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md` as the durable statement that MIP's primary practical objective is communication/request-response, with READ/perception as a separate secondary comparison track. READ and REQUEST/INFLUENCE must never be silently merged.
 
 ## Repository language
 
@@ -66,7 +69,7 @@ A revision must state:
 
 ## Communication-session terminology
 
-Use **Communication Session** as the operational label for exploratory owner-led sessions intended to establish, explore, send, receive, query, or characterize an apparent interaction.
+Use **Communication Session** as the operational label for exploratory owner-led sessions intended to establish, explore, send, receive, query, request, influence, or characterize an apparent interaction.
 
 Do not infer from the label alone that an external agent, nonlocal substrate, or verified transfer has been demonstrated.
 
@@ -75,10 +78,29 @@ Every session must separately preserve:
 - observation;
 - perceived source/agency;
 - information content;
+- request/intention content;
 - verification status;
 - current mechanism status.
 
 Laboratory tests using randomization, hidden targets, sham conditions, or statistical endpoints remain `experiments` even when they are built around Communication Sessions.
+
+## READ vs REQUEST separation
+
+MIP must preserve two distinct tracks:
+
+### READ
+
+`system outcome/target -> participant report`
+
+Tests hidden-information perception/prediction.
+
+### REQUEST / INFLUENCE
+
+`participant precommitted desired outcome -> later system output`
+
+Tests whether a specific request corresponds with a later independently generated output above chance.
+
+A READ success is not evidence of influence. A REQUEST success is not evidence of remote perception. Analyze them independently before any bidirectional interpretation.
 
 ## Evidence separation
 
@@ -127,7 +149,7 @@ Do not invent a missing value to make a protocol look complete.
 8. For blinded target tests, the raw response must be locked before target reveal.
 9. Never retroactively adjust a raw response to fit a revealed target.
 10. Preserve exact audio settings, device settings, timestamps, and file hashes whenever available.
-11. Record the Communication Session class when known (`CS-EXPLORE`, `CS-READ`, `CS-WRITE`, `CS-TRANSFER`, `CS-STORE`, `CS-RETRIEVE`, `CS-QUERY`, `CS-HANDSHAKE`, `CS-CONTROL`, `CS-REPLICATION`).
+11. Record the Communication Session class when known (`CS-EXPLORE`, `CS-READ`, `CS-WRITE`, `CS-TRANSFER`, `CS-STORE`, `CS-RETRIEVE`, `CS-QUERY`, `CS-HANDSHAKE`, `CS-CONTROL`, `CS-REPLICATION`, and future versioned request/influence classes).
 12. Preserve unexpected, uncomfortable, null, and adverse observations with the same diligence as apparently successful events.
 
 ## Research integrity rules
@@ -143,6 +165,8 @@ Do not invent a missing value to make a protocol look complete.
 - Search cross-program terminology and personnel migration where direct Gateway terminology fails.
 - Do not dismiss a repeated observation solely because its mechanism is unknown.
 - Do not upgrade perceived communication or agency into an objective external-source claim without independent evidence.
+- For protocol work, actively search both positive reports and null/failed replications.
+- Historical protocols may be modified when justified, but every change must be versioned and documented.
 
 ## Experimental integrity rules
 
@@ -157,18 +181,25 @@ Advanced tests must progressively control for:
 - multiple comparisons;
 - cueing from audio condition;
 - memory reconstruction;
-- ordinary statistical chance.
+- ordinary statistical chance;
+- random-device bias;
+- target-time ambiguity;
+- optional stopping;
+- post-hoc protocol changes.
 
 Whenever possible, use:
 
 - randomized conditions;
+- randomized requested outcomes;
 - blinded labels;
-- cryptographic target commitments;
+- cryptographic target/request commitments;
 - machine-generated targets;
+- independently characterized random sources;
 - immutable raw response records;
-- independent judges;
+- independent judges where subjective scoring is unavoidable;
 - predeclared primary endpoints;
-- sham controls;
+- sham/no-intention controls;
+- calibration runs;
 - replication cohorts.
 
 ## Advisor and safety responsibility
