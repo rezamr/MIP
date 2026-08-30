@@ -158,19 +158,57 @@ Historical remote-viewing / remote-perception procedures provide strong methodol
 
 Status: `PROTOCOL FAMILY EXISTS — SOURCE-LEVEL AUDIT ONGOING`.
 
-### REQUEST / INFLUENCE family
+### REQUEST / INFLUENCE family — major protocol anchor recovered
 
-Historical analogues have been identified in:
+The 7 November 1979 U.S. Army MICOM report `Remote Perturbation Techniques: Project Description and Experimental Protocol` directly tested the same basic direction of causality as MIP's REQUEST track:
 
-- U.S. Army `Remote Perturbation Techniques — Project Description and Experimental Protocol` (1979);
+`participant instructed to bias a physical binary random process toward 0 or 1 -> random stream generated -> statistical success tested`
+
+Important details now source-audited:
+
+- target alphabet was binary: `0` / `1`;
+- physical random-source families included electronic-noise and beta-decay RNGs;
+- pseudo-random sequences were also contemplated as a comparison/control;
+- participant received real-time visual/auditory feedback;
+- participant could initiate trials at a self-selected time;
+- the Army authors explicitly recognized that this did not distinguish causal influence from precognition of a favorable upcoming sequence;
+- the apparatus was duplicated at SRI and MICOM to strengthen credibility;
+- participant vs no-participant, source type, and feedback type were treated as primary variables;
+- the hardware was subjected to extensive Phase-I environmental and statistical validation.
+
+The 29 October 1980 Army managerial summary reports that the completed SRI contractor portion met its predefined criterion:
+
+- 7 participants;
+- 100 formal trials each;
+- 700 total formal trials;
+- two significant participant runs: `16/100` and `17/100`;
+- `87/700` successful trials overall;
+- reported `P = .021`;
+- control runs without experimenter/participants reportedly nonsignificant.
+
+Critical interpretation: `87/700` does **not** mean 87 correct one-bit predictions. A “successful trial” was a sequentially analyzed binary stream classified as sufficiently perturbed in the requested direction under the experiment's stopping/decision rule.
+
+At the date of the 29 October 1980 summary, the MICOM in-house experiment was still incomplete. Final MICOM outcome is currently `UNKNOWN / NOT YET RECOVERED`.
+
+Durable full audit:
+
+- `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
+
+Status:
+
+- `HISTORICAL BINARY REQUEST/INFLUENCE PRECEDENT = PRIMARY-SOURCE CONFIRMED`
+- `SRI CONTRACTOR POSITIVE RESULT UNDER THEIR PREDEFINED CRITERIA = PRIMARY-SOURCE CONFIRMED`
+- `FINAL MICOM REPLICATION RESULT = UNKNOWN`
+- `REMOTE INFLUENCE AS UNIQUE CAUSE = NOT ESTABLISHED`
+- `PRECOGNITION VS INFLUENCE = EXPLICITLY UNRESOLVED`
+
+Other related protocol families remain relevant:
+
 - Princeton PEAR random-event-generator intention experiments;
-- PEAR remote human/machine interaction experiments.
+- PEAR remote human/machine interaction experiments;
+- Schmidt-style RNG / PK experiments.
 
-These protocols are more directly relevant to MIP's primary request-response question than ordinary remote viewing.
-
-Status: `HISTORICAL ANALOGUES CONFIRMED — EFFECT RELIABILITY AND EXACT PROTOCOLS REQUIRE FULL AUDIT`.
-
-Durable audit:
+Durable comparison audit:
 
 - `research/PROTOCOL_FAMILIES_READ_VS_REQUEST.md`
 
@@ -260,20 +298,22 @@ Do not retroactively classify 396 Hz as historical.
 
 ## Current archival and protocol priorities
 
-1. Exact CENTER LANE custom tape waveforms.
-2. Full approximately ten-week advanced training record.
-3. Biomonitoring hardware and tuning logic.
-4. Tape production sheets, oscillator settings, duplication logs, property records and disposition records.
-5. Missing custom-tape masters.
-6. Exact implementation of multi-frequency operational environments.
-7. Full primary-source extraction of Army Remote Perturbation Techniques protocol.
-8. Full PEAR REG intention protocol extraction and criticism/replication audit.
-9. Historical READ/remote-viewing protocol extraction for number/target tests.
-10. Identify any discrete requested-output protocols analogous to `REQUEST 0/1`.
-11. Identify target-time-specific intention/perturbation protocols.
-12. Historical query/response procedures.
-13. Any deliberate encode -> no receiver -> delay -> later retrieve architecture.
-14. Any true bidirectional request/response architecture.
+1. Recover the final MICOM in-house Remote Perturbation result after 29 October 1980.
+2. Recover the complete SRI `Electronic System Perturbation Techniques` final report and trial-level tables.
+3. Recover the exact sequential-analysis stopping/decision boundaries used in the final formal phase.
+4. Determine how request direction (`0` vs `1`) was assigned in the formal phase.
+5. Determine source allocation and feedback modes used by the strongest SRI participants.
+6. Complete source-level verification of CENTER LANE custom-training findings V-01 through V-05.
+7. Exact CENTER LANE custom tape waveforms.
+8. Full approximately ten-week advanced training record.
+9. Biomonitoring hardware and tuning logic.
+10. Full PEAR REG intention protocol extraction and criticism/replication audit.
+11. Historical READ/remote-viewing protocol extraction for number/target tests.
+12. Identify any discrete requested-output protocols analogous to `REQUEST 0/1`.
+13. Identify target-time-specific intention/perturbation protocols.
+14. Historical query/response procedures.
+15. Any deliberate encode -> no receiver -> delay -> later retrieve architecture.
+16. Any true bidirectional request/response architecture.
 
 ## Current experiment / communication roadmap
 
@@ -288,6 +328,18 @@ Machine selects a hidden number under a prespecified timing model; participant a
 
 ### EXP-004 — REQUEST / INFLUENCE / NUMBER SELECTION
 Participant receives/precommits a requested value; independent random system generates at predefined time T; exact request-output correspondence is primary endpoint.
+
+Historical subfamily now identified:
+
+`stream-bias RP: participant requests 0 or 1 -> physical RNG produces ongoing binary stream -> sequential statistical analysis tests bias`
+
+MIP should compare at least:
+
+- historical participant-initiated stream-bias variant;
+- machine-timed stream-bias variant;
+- single scheduled 0/1 outcome variant;
+- real feedback vs sham feedback vs no feedback;
+- physical RNG vs deterministic/pseudo-random source.
 
 ### EXP-005 — QUERY / TARGETED RESPONSE
 Constrained question/request with response content captured and objectively verified where possible.
@@ -305,17 +357,17 @@ Detailed roadmap: `protocols/EXPERIMENT_ROADMAP.md`.
 
 ## Current immediate next actions
 
-1. Complete source-level verification of the five Priority-0 archival claims V-01 through V-05.
-2. Extract the full 1979 Army Remote Perturbation Techniques protocol from the primary document.
+1. Recover final MICOM Remote Perturbation outcome and the complete SRI 1980 final report.
+2. Extract exact final-phase sequential-analysis logic, source allocation, direction assignment, feedback modes, and participant-level results.
 3. Extract PEAR REG intention apparatus, intention instructions, timing, controls, run structure, feedback, and statistics.
 4. Find independent replications, null results, and critiques of REQUEST/INFLUENCE protocols.
 5. Audit READ/remote-viewing protocols separately.
 6. Design `MIP-NUM-READ v0.1`.
-7. Design `MIP-NUM-REQUEST v0.1` only after protocol audit.
+7. Design both `MIP-RP-HIST v0.1` and a stronger machine-timed `MIP-RP-FIXEDTIME v0.1` before running confirmatory REQUEST tests.
 8. Require randomized requested values rather than always requesting one fixed number.
 9. Add no-intention, sham-request, calibration, and mismatched-time controls.
 10. Choose and characterize appropriate random sources; prefer hardware/physical random sources for influence testing.
-11. Validate timestamping, isolation, logging, and cryptographic commitments.
+11. Validate timestamping, isolation, stage-to-stage logging, and cryptographic commitments.
 12. Preserve S0001 and S0002 as retrospective session records.
 13. Continue source research and revise protocols whenever evidence justifies a change.
 
