@@ -1,6 +1,6 @@
 # MIP — Mission Impossible
 
-MIP is a forensic reconstruction and experimental research project focused on neuroacoustic state induction, the historical Gateway / Hemi-Sync / Bentov / CENTER LANE record, and rigorous tests of anomalous information acquisition, transmission, persistence, and challenge-response behavior.
+MIP is a forensic reconstruction and experimental research project focused on neuroacoustic state induction, the historical Gateway / Hemi-Sync / Bentov / CENTER LANE record, and rigorous tests of communication/request-response, anomalous information acquisition, transmission, persistence, and challenge-response behavior.
 
 ## Core rule
 
@@ -24,8 +24,10 @@ Any new conversation or research agent must read, in this order:
 1. `README.md`
 2. `COLLABORATION_PROTOCOL.md`
 3. `00_MASTER.md`
-4. `10_CONVERSATION_ORCHESTRATION.md`
-5. the topic-specific files required for the current task
+4. `01_PROJECT_CHARTER.md`
+5. `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md`
+6. `10_CONVERSATION_ORCHESTRATION.md`
+7. the topic-specific files required for the current task
 
 The repository is the durable project memory and the single source of truth for MIP.
 
@@ -50,11 +52,25 @@ The repository is the durable project memory and the single source of truth for 
 - Monroe patent analysis
 - Bentov physiology reconstruction
 - Session phenomenology
+- REQUEST encoding / communication protocol development
 - Audio component isolation
-- Inbound information tests
-- Outbound information tests
+- READ / hidden-target tests
+- REQUEST / binary machine-outcome tests
 - Delayed store/retrieve tests
 - Challenge-response tests
 - Sham, blinding, leakage, and falsification controls
+- Local JSON/JSONL research tooling
+
+## Current active protocol-development files
+
+For work on binary REQUEST / READ testing, audio comparison, or the planned local research app, read these files before changing a protocol:
+
+- `protocols/REQUEST_ENCODING_V0.1.md`
+- `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
+- `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.1.md`
+- `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
+
+The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
 See `00_MASTER.md` for current status and next actions.
