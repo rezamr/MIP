@@ -75,12 +75,15 @@ The repository is the durable project memory and the single source of truth for 
 For work on REQUEST / READ testing, audio comparison, temporal mapping, target entropy, practical optimization, or the planned local research app, read these files before changing a protocol:
 
 - `05_PRACTICAL_DEVELOPMENT_STRATEGY.md`
+- `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.1.md`
 - `protocols/REQUEST_ENCODING_V0.1.md`
 - `protocols/MATRIX_TEMPORAL_RESPONSE_AND_PERSISTENCE_V0.1.md`
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
 - `engineering/CODEX_PROMPT_REQUEST_APP_V0.2.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
+
+`protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.1.md` is the current step-by-step execution guide for the first standardized MIP Communication Sessions.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
