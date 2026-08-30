@@ -1,6 +1,6 @@
 # MIP — Mission Impossible
 
-MIP is a forensic reconstruction and experimental research project focused on neuroacoustic state induction, the historical Gateway / Hemi-Sync / Bentov / CENTER LANE record, and rigorous tests of communication/request-response, anomalous information acquisition, transmission, persistence, and challenge-response behavior.
+MIP is a forensic reconstruction and experimental research project focused on neuroacoustic state induction, the historical Gateway / Hemi-Sync / Bentov / CENTER LANE record, and rigorous tests of communication/request-response, anomalous information acquisition, transmission, persistence, temporal behavior, and challenge-response behavior.
 
 ## Core rule
 
@@ -26,8 +26,9 @@ Any new conversation or research agent must read, in this order:
 3. `00_MASTER.md`
 4. `01_PROJECT_CHARTER.md`
 5. `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md`
-6. `10_CONVERSATION_ORCHESTRATION.md`
-7. the topic-specific files required for the current task
+6. `03_TEMPORAL_AND_ENTROPY_RESEARCH_PRIORITY.md`
+7. `10_CONVERSATION_ORCHESTRATION.md`
+8. the topic-specific files required for the current task
 
 The repository is the durable project memory and the single source of truth for MIP.
 
@@ -43,6 +44,8 @@ The repository is the durable project memory and the single source of truth for 
 - Statistical significance is not proof of a specific metaphysical explanation.
 - A documentary gap is not automatically evidence of deliberate suppression.
 - A negative finding is a valid result.
+- Timing, latency, persistence, execution semantics, and entropy capacity are empirical variables, not assumptions.
+- Do not substitute a post-hoc best time window for a failed preregistered target time.
 
 ## Current program areas
 
@@ -56,6 +59,8 @@ The repository is the durable project memory and the single source of truth for 
 - Audio component isolation
 - READ / hidden-target tests
 - REQUEST / binary machine-outcome tests
+- Temporal response / latency / persistence mapping
+- High-entropy exact-target tests
 - Delayed store/retrieve tests
 - Challenge-response tests
 - Sham, blinding, leakage, and falsification controls
@@ -63,9 +68,10 @@ The repository is the durable project memory and the single source of truth for 
 
 ## Current active protocol-development files
 
-For work on binary REQUEST / READ testing, audio comparison, or the planned local research app, read these files before changing a protocol:
+For work on REQUEST / READ testing, audio comparison, temporal mapping, target entropy, or the planned local research app, read these files before changing a protocol:
 
 - `protocols/REQUEST_ENCODING_V0.1.md`
+- `protocols/MATRIX_TEMPORAL_RESPONSE_AND_PERSISTENCE_V0.1.md`
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
 - `engineering/CODEX_PROMPT_REQUEST_APP_V0.1.md`
