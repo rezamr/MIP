@@ -27,8 +27,9 @@ Any new conversation or research agent must read, in this order:
 4. `01_PROJECT_CHARTER.md`
 5. `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md`
 6. `03_TEMPORAL_AND_ENTROPY_RESEARCH_PRIORITY.md`
-7. `10_CONVERSATION_ORCHESTRATION.md`
-8. the topic-specific files required for the current task
+7. `05_PRACTICAL_DEVELOPMENT_STRATEGY.md`
+8. `10_CONVERSATION_ORCHESTRATION.md`
+9. the topic-specific files required for the current task
 
 The repository is the durable project memory and the single source of truth for MIP.
 
@@ -41,11 +42,13 @@ The repository is the durable project memory and the single source of truth for 
 - Preserve unknown parameters as `UNKNOWN` rather than inventing values.
 - Preserve generation/version boundaries in Gateway and Hemi-Sync material.
 - Historical overlap is not proof of mechanism.
+- Historical positive results justify development and replication work, but do not by themselves identify a unique mechanism.
 - Statistical significance is not proof of a specific metaphysical explanation.
 - A documentary gap is not automatically evidence of deliberate suppression.
 - A negative finding is a valid result.
 - Timing, latency, persistence, execution semantics, and entropy capacity are empirical variables, not assumptions.
 - Do not substitute a post-hoc best time window for a failed preregistered target time.
+- MIP follows a development-and-validation strategy: reproduce a useful prior effect family, characterize it, improve it, and then scale toward practical use.
 
 ## Current program areas
 
@@ -65,11 +68,13 @@ The repository is the durable project memory and the single source of truth for 
 - Challenge-response tests
 - Sham, blinding, leakage, and falsification controls
 - Local JSON/JSONL research tooling
+- Practical protocol optimization and MIP-plus development
 
 ## Current active protocol-development files
 
-For work on REQUEST / READ testing, audio comparison, temporal mapping, target entropy, or the planned local research app, read these files before changing a protocol:
+For work on REQUEST / READ testing, audio comparison, temporal mapping, target entropy, practical optimization, or the planned local research app, read these files before changing a protocol:
 
+- `05_PRACTICAL_DEVELOPMENT_STRATEGY.md`
 - `protocols/REQUEST_ENCODING_V0.1.md`
 - `protocols/MATRIX_TEMPORAL_RESPONSE_AND_PERSISTENCE_V0.1.md`
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
