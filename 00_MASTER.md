@@ -4,13 +4,90 @@ Last updated: 2026-08-29
 
 ## Mission
 
-MIP — Mission Impossible — is a forensic reconstruction and experimental reverse-engineering program.
+MIP — Mission Impossible — is a long-horizon forensic reconstruction, technical reverse-engineering, physiology, phenomenology, and information-behavior research program.
 
-Primary objective: determine whether historically recoverable Gateway / Hemi-Sync / Bentov / CENTER LANE methods can be reconstructed into reproducible laboratory procedures for altered-state induction and rigorous testing of anomalous information behavior.
+Primary objective: determine what is actually occurring during the class of sessions historically associated with Gateway / Hemi-Sync / Bentov / CENTER LANE and during the project owner's own repeated sessions, then characterize it with the strongest reproducible evidence possible.
 
-The program does not assume that a nonlocal information substrate exists.
+The project does not assume in advance that a nonlocal information substrate exists, nor does it assume that all observed phenomena are internally generated. Mechanism remains open until evidence discriminates among competing explanations.
 
-For experimental shorthand only, a hypothesized external information substrate may be discussed as a test model, but all conclusions must remain mechanism-neutral until evidence justifies otherwise.
+The durable project charter is `01_PROJECT_CHARTER.md`.
+
+## Long-term objective
+
+MIP remains open while important answerable uncertainties remain.
+
+The project is not considered complete merely because:
+
+- a historical article has been written;
+- Gateway has been partially reconstructed;
+- a dramatic subjective session occurs;
+- one anomalous result is obtained;
+- one hypothesis fails;
+- or one archive search returns no result.
+
+Research priorities, session procedures, audio configurations, instrumentation, controls, and communication protocols must be revised whenever new evidence justifies revision.
+
+The final target is the strongest defensible characterization of:
+
+1. the state being entered;
+2. how it is induced and controlled;
+3. the real historical operational architecture;
+4. whether reproducible information behavior occurs;
+5. its directionality, bandwidth, latency, persistence, and error structure if it occurs;
+6. and which conventional or anomalous explanations survive falsification.
+
+`UNKNOWN` is a valid temporary state. No missing value may be invented to force completion.
+
+## Communication-session doctrine
+
+Owner-led sessions are operationally called **Communication Sessions** when they are intended to establish, explore, transmit, receive, query, or characterize an apparent interaction.
+
+This naming does **not** by itself establish an external agent, a nonlocal substrate, or successful information transfer.
+
+For every Communication Session preserve separately:
+
+- the observed/perceived interaction;
+- perceived source or agency;
+- exact information content, if any;
+- whether content was independently verifiable;
+- whether a hidden target was matched above chance;
+- and the current mechanism status.
+
+This policy is intentionally symmetric: MIP must neither dismiss repeated unexplained observations nor promote them into external communication claims before verification.
+
+Supported communication-session classes include:
+
+- `CS-EXPLORE`
+- `CS-READ`
+- `CS-WRITE`
+- `CS-TRANSFER`
+- `CS-STORE`
+- `CS-RETRIEVE`
+- `CS-QUERY`
+- `CS-HANDSHAKE`
+- `CS-CONTROL`
+- `CS-REPLICATION`
+
+Existing stable session IDs remain `S0001`, `S0002`, etc.
+
+## Advisor and safety doctrine
+
+The research coordinator must act as a rigorous advisor and risk monitor.
+
+Responsibilities include:
+
+- continuous source research across relevant domains;
+- methodological design and revision;
+- identification of confounds and alternative explanations;
+- session preparation and post-session interrogation;
+- audio and instrumentation analysis;
+- target-generation and blinding design;
+- statistical planning;
+- preservation of null and failed results;
+- archival reconstruction;
+- and explicit monitoring of stop conditions and adverse events.
+
+Exploration must not require deliberate escalation of loss of voluntary control, unsafe sound levels, sleep deprivation, dangerous breathing practices, drugs, electrical stimulation, or other avoidable hazards.
 
 ## Core experimental questions
 
@@ -93,7 +170,7 @@ Keep separate unless documentary evidence explicitly joins them:
 
 Two sessions have been described in the project conversation and must be preserved as retrospective records:
 
-- `S0001` — first reported 4 Hz / 396 Hz experiment; circulating protective-bubble phenomenology, color changes, rotational effects, spontaneous imagery, strong subjective time compression, interruption at session end.
+- `S0001` — first reported 4 Hz / 396 Hz session; circulating protective-bubble phenomenology, color changes, rotational effects, spontaneous imagery, strong subjective time compression, interruption at session end.
 - `S0002` — later unusual session; motor/boom-like auditory phenomena, ascending/circulating somatic sensation, spontaneous close overhead object perception, outbound affective-intention attempt, sensed observation, major involuntary laughing/crying episode, voluntary termination, prolonged high-intensity post-session affect.
 
 Both are `RECONSTRUCTED FROM MEMORY`, not contemporaneous laboratory records.
@@ -117,7 +194,7 @@ Do not retroactively classify 396 Hz as historical.
 8. Any deliberate encode → no receiver → delay → later retrieve architecture.
 9. Any blinded query → hidden challenge → response architecture.
 
-## Current experiment roadmap
+## Current experiment / communication roadmap
 
 ### EXP-001 — Phenomenology Replication
 Test whether reported phenomena recur under standardized sessions without hidden targets.
@@ -137,14 +214,17 @@ Sender encodes payload with no receiver present; delayed blinded retrieval by an
 ### EXP-006 — HANDSHAKE
 Query committed first; hidden challenge generated afterward; response locked before reveal.
 
+These laboratory designs remain experiments even when the underlying owner-led practice is operationally called a Communication Session.
+
 ## Current immediate next actions
 
 1. Complete source-level verification of the five Priority-0 archival claims V-01 through V-05.
 2. Populate source, anomaly, and unknown-parameter registers.
 3. Preserve S0001 and S0002 as retrospective session records.
 4. Finalize the standardized session questionnaire and raw-report protocol.
-5. Do not begin confirmatory target testing until raw-response locking, target generation, condition blinding, and scoring rules are defined.
+5. Do not begin confirmatory hidden-target claims until raw-response locking, target generation, condition blinding, and scoring rules are defined.
 6. After V-01 through V-05 verification, launch targeted recovery work on custom tapes, biomonitoring feedback, ten-week training records, and government-property trail.
+7. Continue cross-domain research whenever an unresolved mechanism, parameter, historical gap, or session phenomenon can be meaningfully narrowed.
 
 ## Evidence ladder
 
