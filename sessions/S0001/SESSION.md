@@ -12,21 +12,53 @@
 
 ## Known audio parameters
 
-Based on the user-provided generator screenshot and conversation:
+Based on the user-provided screenshot, the application is identified as TMSOFT's Binaural Beats Generator.
 
-- Base/carrier setting: approximately `396 Hz`
+Screenshot settings:
+
+- Base/center setting: approximately `396 Hz`
 - Binaural difference / target beat: `4 Hz`
 - Target band label shown by the generator: Theta
-- Exact left/right frequencies: `UNKNOWN`
-- Exact phase: `UNKNOWN`
-- Exact gain/volume: `UNKNOWN`
-- Exact waveform: `UNKNOWN`
-- Modulation beyond the generator settings: `UNKNOWN`
+- UI volume setting shown: `47%`
 
-Important historical status:
+TMSOFT's current developer documentation states that the app centers the binaural pair around the selected base frequency:
 
-- `4 Hz`: user experimental parameter; later Deep Research reported overlap with one 1984 CENTER LANE operational Hemi-Sync component. Primary-source verification is still required.
-- `396 Hz`: no historical Gateway/CENTER LANE support currently established. Do not label as recovered historical Gateway engineering.
+- left = base - beat/2
+- right = base + beat/2
+
+Under that documented synthesis rule, `396 Hz` center + `4 Hz` beat corresponds to:
+
+- Left: `394 Hz`
+- Right: `398 Hz`
+- Difference: `4 Hz`
+- Center: `396 Hz`
+
+### Forensic caution
+
+The historical S0001 audio is **not instrumentally verified** as exactly `394/398 Hz` because:
+
+- no WAV/audio capture from the actual session exists;
+- exact app version used in the session is not yet recorded;
+- the app's 2026 release notes mention a later frequency-calculation bug fix.
+
+Therefore:
+
+- `396 Hz / 4 Hz UI setting` = directly supported by screenshot;
+- `394/398 Hz exact channels` = `RECONSTRUCTED FROM CURRENT APP DOCUMENTATION`;
+- historical actual channel output = `NOT FORENSICALLY VERIFIED`.
+
+Other audio parameters:
+
+- Exact phase at session start: `UNKNOWN`
+- Exact acoustic SPL: `UNKNOWN`
+- Exact waveform implementation of the historical app version: `UNKNOWN`
+- Additional modulation: no additional modulation visible in the screenshot; exact internal implementation of the historical version remains `UNKNOWN`.
+
+Important historical/scientific status:
+
+- `4 Hz`: user experimental parameter; later research reported overlap with a 1984 CENTER LANE operational Hemi-Sync component, with exact source semantics still requiring completion of the V-04 verification task.
+- `396 Hz`: no original Gateway/CENTER LANE support currently established.
+- `396 Hz` is nevertheless close to the ~400 Hz carrier region frequently used in binaural-beat research, giving it an acoustically plausible test rationale independent of Solfeggio claims.
 
 ## Session intention
 
@@ -70,7 +102,7 @@ The participant's subjective estimate of elapsed time was less than approximatel
 ## Observation vs interpretation
 
 ### Observation
-The session produced vivid visual, somatic, vestibular, temporal, and spontaneous-imagery phenomena under a 396 Hz / 4 Hz user-experimental audio condition.
+The session produced vivid visual, somatic, vestibular, temporal, and spontaneous-imagery phenomena under the screenshot-recorded `396 Hz center / 4 Hz beat` user-experimental app setting.
 
 ### Candidate interpretations
 
@@ -92,14 +124,17 @@ This session is evidence that the participant experienced a strong altered subje
 - No contemporaneous timestamped raw report.
 - No sham/control condition.
 - No physiology recording.
-- No exact left/right audio export or hash.
+- No actual session audio file/hash.
+- Exact app version not yet known.
 - External interruption occurred.
 - No hidden target or objective scoring.
 
 ## Follow-up implications
 
-- Preserve 396 Hz + 4 Hz as an experimental condition, not a historical reconstruction.
+- Preserve `A-U396-4` as a high-priority personal baseline condition.
+- For new controlled audio, synthesize and hash exact channels rather than relying only on third-party app UI settings.
 - Test 4 Hz under matched carrier/sham conditions.
+- Compare 396-Hz-center against 400-Hz-center and exact Monroe engineering examples.
 - Record exact subjective duration before clock inspection in future sessions.
 - Silence/airplane-mode phone before future controlled sessions.
 - Separate intentional imagery from spontaneous percepts in future reports.
