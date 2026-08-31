@@ -209,6 +209,21 @@ Whenever possible, use:
 - calibration runs;
 - replication cohorts.
 
+## Audio provenance and render integrity
+
+Keep separate:
+
+- simple binaural/component-isolation conditions;
+- layered Hemi-Sync/patent-grounded reconstructions;
+- incomplete historical candidates;
+- primary-source-verified historical reconstructions.
+
+Do not conflate the Army/SRI Remote Perturbation machine-output protocol with the Monroe/Gateway/CENTER LANE audio lineage.
+
+For formal layered historical/reconstruction audio, follow `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`: render the complete deterministic stereo artifact before START eligibility, verify it, manifest it, hash it, freeze it into the session commitment, and play that exact artifact.
+
+Do not invent unrecovered historical channel, phase, level, modulation, noise, sequence, or timing parameters.
+
 ## Software implementation authority rule
 
 For new MIP application implementation, do not combine incompatible requirements from old prompt/protocol generations.
@@ -216,9 +231,11 @@ For new MIP application implementation, do not combine incompatible requirements
 Read and obey:
 
 - `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`
 
-Older Codex prompts remain historical.
+`V0.9` is additive to `V0.8`: every v0.8 requirement remains mandatory unless v0.9 explicitly changes or strengthens it.
+
+Older Codex prompts remain historical/implementation ancestry.
 
 If an unresolved implementation conflict remains, document it explicitly rather than silently choosing a convenient behavior.
 
