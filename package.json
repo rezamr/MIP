@@ -1,12 +1,58 @@
 {
   "name": "mip-local-research-engine",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "src/main/main.js",
   "scripts": {
-    "start": "node src/server.js",
-    "test": "node --test",
-    "dry-run": "node scripts/dry-run.js"
+    "start": "node scripts/rebuild-native.cjs electron && electron .",
+    "dev": "node scripts/rebuild-native.cjs electron && electron .",
+    "server:start": "node src/server.js",
+    "test": "node scripts/rebuild-native.cjs node && node --test",
+    "dry-run": "node scripts/dry-run.js",
+    "build": "electron-builder --dir",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "electron": "^36.3.1",
+    "electron-builder": "^26.0.12",
+    "png-to-ico": "^3.0.2"
+  },
+  "build": {
+    "appId": "com.mip.research",
+    "productName": "MIP",
+    "artifactName": "MIP-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "public/**/*",
+      "Logo.svg",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "name": "mip-local-research-engine"
+    },
+    "win": {"target": ["nsis"]},
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MIP",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "MIP-${version}-portable.${ext}"
+    },
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    }
   }
 }

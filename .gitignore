@@ -2,3 +2,6 @@ runtime/sessions/
 runtime/audio-artifacts/
 runtime/dry-run/
 *.tmp
+node_modules/
+dist/
+*.log

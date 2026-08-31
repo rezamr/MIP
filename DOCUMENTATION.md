@@ -1,6 +1,6 @@
-# MIP Local Research Application
+# MIP Desktop v1.2
 
-This build is a local-computer-only Node.js 22+ application. It uses plain HTML/CSS/JavaScript, a localhost HTTP server, and JSON/JSONL evidence bundles. No account, cloud service, database, phone controller, custom Bluetooth protocol, or runtime generative AI is used.
+MIP is a local-only Electron desktop application. Production uses no localhost server, browser tab, cloud account, phone controller, or runtime generative AI. The packaged Windows application is built with Electron 36.9.5 and electron-builder NSIS.
 
 ## Install and run
 
@@ -10,11 +10,11 @@ npm test
 npm start
 ```
 
-Open `http://127.0.0.1:3210`. Runtime evidence is stored under `runtime/`; set `MIP_DATA_ROOT` to choose another local root. The application never starts a real participant session automatically.
+`npm start` rebuilds the native SQLite driver for Electron before launching the desktop window. Runtime data is created below Electron's per-user `userData` path at `MIP/data/mip.sqlite3`; backups, exports, and logs are sibling directories. Uninstall preserves this data (`deleteAppDataOnUninstall=false`).
 
 ## Architecture
 
-`src/engine.js` contains versioned profile registries, outcome spaces, mappings, request encoding, timing plans, CSPRNG/deterministic providers, and deterministic stream analysis. `src/audio.js` implements exact simple presets plus layered multi-carrier, Septon, deterministic phased-pink/comb-sweep rendering, WAV manifests, and hashes. `public/live-synth.js` is the stateful browser PCM generator used for continuous Audio Lab playback, preserving phase/noise state across blocks with Web Audio output and pause/resume. `src/storage.js` allocates collision-safe MIP session IDs, writes append-only hash-chained events and lossless machine output, locks raw reports, and verifies bundles. `src/server.js` exposes safe localhost APIs with reveal gating and serves the English UI. `public/` contains the reusable design system and workflow screens.
+`src/main/main.js` owns Electron lifecycle and named IPC handlers. `src/preload/preload.cjs` exposes a minimal frozen `window.mip` bridge. `src/main/database/db.js` owns SQLite migrations, WAL/full-sync pragmas, immutable evidence triggers, profile seeding, ID allocation, event hash chains, integrity verification, and backups. `src/engine.js` and `src/audio.js` are shared deterministic domain/audio semantics. `public/mip-processor.js` is the AudioWorklet processor.
 
 ## Session lifecycle
 
@@ -22,7 +22,7 @@ The Start Research Session workflow selects a profile, records baseline/safety s
 
 ## Audio
 
-Audio Lab presets are `A-U396-4` (394/398 Hz), `A-P100-104` (100/104 Hz), and `A-SHAM-0` (396/396 Hz). Quick Generator derives centered channels from one number. Audio Lab and formal runtime playback use frozen recipe semantics plus stateful live synthesis; WAV rendering is optional export/QA. `PHASED_PINK_PATENT_5356368` is explicitly labeled a patent-grounded reconstruction; unresolved historical CENTER LANE parameters remain unknown rather than inferred.
+Audio Lab presets are `A-U396-4` (394/398 Hz), `A-P100-104` (100/104 Hz), and `A-SHAM-0` (396/396 Hz). Quick Generator derives centered channels from one number. Audio Lab and formal runtime playback use the same stateful AudioWorklet; no `ScriptProcessorNode`, finite WAV loop, or renderer sample-generation timer is used. `PHASED_PINK_PATENT_5356368` is explicitly labeled a patent-grounded reconstruction; unresolved historical CENTER LANE parameters remain unknown rather than inferred.
 
 ## Dry run
 
@@ -30,10 +30,10 @@ Audio Lab presets are `A-U396-4` (394/398 Hz), `A-P100-104` (100/104 Hz), and `A
 
 ## Verification status
 
-Implemented and tested: profile validation and configuration-only demonstrations; binary/four-outcome spaces; arbitrary/reversed mapping; immediate/relative/absolute timing plans; deterministic and OS RNG abstractions; 30-bit bounds; hands-free workflow; hidden-result reveal gate; append-only event chain and corruption detection; raw-report lock; deterministic stream analysis; exact audio presets; layered/Septon/phased-pink deterministic rendering; WAV manifests and hashes; local session browser; English responsive UI; report/timeline/integrity views.
+`npm test` runs 17 tests covering profile/audio semantics, deterministic synthesis, mapping, timing, analysis, event tamper detection, raw-report immutability, and Electron SQLite migration/trigger behavior. `npm run build` produces an unpacked Windows app. `npm run dist` produces `dist/MIP-1.2.0-win-x64.exe` (NSIS x64 installer).
 
-Implemented but requires owner manual verification: actual OS audio output and pause/resume behavior in a chosen browser; keyboard/narrow-window visual acceptance; headphone safety and formal playback hardware; long-duration scheduler behavior.
+Implemented but requires owner manual verification: actual OS audio output and pause/resume behavior; keyboard/narrow-window visual acceptance; headphone safety and formal playback hardware; long-duration scheduler behavior.
 
-Explicitly deferred by active scope: Android/iOS packaging, cloud sync, databases, custom Bluetooth protocols, sensors, phone control, unattended laboratory-grade scheduling, and automatic participant operation.
+Explicitly deferred by active scope: Android/iOS packaging, cloud sync, custom Bluetooth protocols, sensors, phone control, unattended laboratory-grade scheduling, and automatic participant operation.
 
-Known limitations: browser playback depends on Web Audio and the OS-selected output device; the local server must remain running for long relative/absolute delays; formal runtime digest logging is software-generated and cannot prove the acoustic waveform at the headphones; historical CENTER LANE channel semantics, levels, phase, modulation, noise, sequence, and timing remain unresolved in repository evidence.
+Known limitations: playback depends on Web Audio and the OS-selected output device; formal runtime digest logging is software-generated and cannot prove the acoustic waveform at the headphones; historical CENTER LANE channel semantics, levels, phase, modulation, noise, sequence, and timing remain unresolved in repository evidence.
