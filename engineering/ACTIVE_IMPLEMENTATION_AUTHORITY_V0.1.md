@@ -20,22 +20,23 @@ Use the precedence below. Preserve the older file unchanged as history unless a 
 
 From highest to lower authority:
 
-1. `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`
+1. `engineering/CODEX_PROMPT_REQUEST_APP_V1.0.md`
 2. this file: `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
 3. `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`
-4. `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
-5. `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
-6. `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
-7. `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
-8. `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
-9. `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
-10. `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
-11. `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md` where not superseded by the session-data v0.1 file above
-12. `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
-13. active protocol files listed below
-14. older engineering specifications and older Codex prompts for historical context only.
+4. `engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md`
+5. `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
+6. `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
+7. `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
+8. `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
+9. `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
+10. `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
+11. `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
+12. `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md` where not superseded by the session-data v0.1 file above
+13. `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
+14. active protocol files listed below
+15. older engineering specifications and older Codex prompts for historical context only.
 
-Scientific evidence rules in `04_EVIDENCE_STANDARD.md` always remain binding. Research conclusions cannot be upgraded by software implementation wording.
+Scientific evidence rules in `04_EVIDENCE_STANDARD.md` always remain binding. Research conclusions cannot be upgraded by software implementation wording or by visual presentation.
 
 ## Active first-operational protocol files
 
@@ -86,7 +87,17 @@ A visible software stop control may exist as an optional convenience, but succes
 
 Older UI wording that appears to require an `END SESSION` button during active trance is not a mandatory interaction.
 
-### 4. Audio Lab versus research-session audio
+### 4. Application language and UI quality
+
+The first application UI is English-only.
+
+All visible user-facing text, reports, chart labels, validation errors, configuration screens, Audio Lab screens, session workflow, and status messages must be English.
+
+The first build must implement `engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md` and must not be considered complete merely because the required routes and forms technically exist.
+
+UI/UX polish must never hide scientific warnings, exploratory status, protocol deviations, integrity failures, aborted sessions, or historical-provenance uncertainty.
+
+### 5. Audio Lab versus research-session audio
 
 Audio Lab can play indefinitely, pause, resume, stop, and use temporary custom parameters.
 
@@ -96,7 +107,7 @@ Formal session audio is frozen, versioned, manifested, and hashed.
 
 For layered Hemi-Sync/historical-reconstruction conditions, formal session audio must be rendered to a complete deterministic stereo file before START eligibility, verified, hashed, and then played as that exact frozen artifact. Live Audio Lab synthesis is not a substitute for a formal layered-session render.
 
-### 5. Audio preset semantics
+### 6. Audio preset semantics
 
 `A-U396-4` = MIP user baseline using the current documented centered calculation: L=394 Hz, R=398 Hz, center=396 Hz, beat=4 Hz.
 
@@ -106,7 +117,7 @@ For layered Hemi-Sync/historical-reconstruction conditions, formal session audio
 
 These simple pairs are component-isolation conditions. They must not be mislabeled as complete Army/CENTER LANE Hemi-Sync environments.
 
-### 6. Historical program provenance for audio versus machine perturbation
+### 7. Historical program provenance for audio versus machine perturbation
 
 Do not conflate the 1979–1980 Army/SRI Remote Perturbation experiment with the Monroe/Gateway/CENTER LANE Hemi-Sync audio program.
 
@@ -114,25 +125,25 @@ Remote Perturbation is a REQUEST/INFLUENCE precedent for machine-output testing.
 
 MIP may combine lessons from both, but provenance must remain explicit in code, configuration, reports, and documentation.
 
-### 7. Historical Hemi-Sync exactness gate
+### 8. Historical Hemi-Sync exactness gate
 
 The engine must implement the layered signal primitives and deterministic render path in `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`.
 
 Current reported CENTER LANE anchors `100 Hz base + 1.5 Hz binaural beat` and `200 Hz base + 4 Hz binaural beat` remain incomplete historical candidates until primary-source semantics are verified. The application must not infer opposite-ear frequency, centered-pair architecture, simultaneous use, relative level, phase, modulation, noise, sequencing, or timing when those values are not source-verified.
 
-### 8. Machine state versus participant representation
+### 9. Machine state versus participant representation
 
 Objective machine state, participant-facing label/mapping, internal request-encoding profile, and scoring endpoint are separate objects.
 
 Older binary examples do not authorize hardcoding literal digits into the engine.
 
-### 9. Session/trial hierarchy
+### 10. Session/trial hierarchy
 
 For the first baseline, one Communication Session contains one primary REQUEST trial. The software architecture must nevertheless preserve separate `session_id` and `trial_id` fields so later protocols can contain multiple trials without schema breakage.
 
 Blocks group multiple sessions/trials for balanced assignment, block-level reveal, and cross-session analysis.
 
-### 10. Session storage and historical repository records
+### 11. Session storage and historical repository records
 
 Top-level repository directory `sessions/` contains durable MIP project/session documentation.
 
@@ -140,7 +151,7 @@ Application runtime evidence is stored under the application runtime data root, 
 
 The application may generate an explicit export/import summary for later repository documentation, but must not automatically publish or push runtime session data.
 
-### 11. Logging authority
+### 12. Logging authority
 
 `events.jsonl` is the authoritative append-only session event chain.
 
@@ -148,7 +159,7 @@ Raw machine output may live in a separate lossless file for volume reasons, but 
 
 Mutable UI caches, indexes, or drafts are never primary evidence.
 
-### 12. Raw report lock
+### 13. Raw report lock
 
 A participant report may be autosaved as a clearly marked mutable draft before lock.
 
@@ -156,13 +167,13 @@ At lock, create an immutable `raw_report.json` snapshot, record its hash in the 
 
 Later additions are append-only `late_recollection` or `late_note` events.
 
-### 13. Reveal
+### 14. Reveal
 
 Reveal policy is enforced server-side, not merely by hiding a button.
 
 Before reveal eligibility, hidden outputs must not be returned by any participant-facing API, page, report preview, debug route, URL field, browser payload, or client-side state.
 
-### 14. Scheduling
+### 15. Scheduling
 
 Multi-minute/hour/day and absolute-time modes are configuration capabilities, not a claim that a normal desktop OS provides laboratory-grade unattended timing.
 
@@ -170,7 +181,7 @@ The application must log scheduled time, scheduler wake time, actual generation 
 
 If the application is stopped, the computer sleeps, or the target is missed beyond the profile tolerance, preserve the trial and mark the timing protocol deviation. Never silently generate a replacement outcome and pretend it occurred on time.
 
-### 15. First baseline endpoint
+### 16. First baseline endpoint
 
 The first operational immediate profile uses continuous hidden stream telemetry around the request as the main temporal characterization path.
 
@@ -180,9 +191,9 @@ Do not silently substitute the best post-hoc stream window for the declared prim
 
 ## Older Codex prompts
 
-`CODEX_PROMPT_REQUEST_APP_V0.1.md` through `V0.8.md` remain project history and implementation ancestry.
+`CODEX_PROMPT_REQUEST_APP_V0.1.md` through `V0.9.md` remain project history and implementation ancestry.
 
-For new implementation work, only `V0.9` is active.
+For new implementation work, only `V1.0` is active.
 
 ## Implementation ambiguity rule
 
