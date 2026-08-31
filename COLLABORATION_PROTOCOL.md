@@ -13,14 +13,19 @@ Before doing substantive work, read:
 3. `00_MASTER.md`
 4. `01_PROJECT_CHARTER.md`
 5. `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md`
-6. `10_CONVERSATION_ORCHESTRATION.md`
-7. the relevant topic files for the requested task
+6. `03_TEMPORAL_AND_ENTROPY_RESEARCH_PRIORITY.md`
+7. `04_EVIDENCE_STANDARD.md`
+8. `05_PRACTICAL_DEVELOPMENT_STRATEGY.md`
+9. `10_CONVERSATION_ORCHESTRATION.md`
+10. the relevant topic files for the requested task
 
 Do not ask the project owner to repeat information already preserved in the repository.
 
 The startup reader must treat `01_PROJECT_CHARTER.md` as the durable statement of MIP's long-term objective, communication-session terminology, advisor role, continuous-research policy, and safety doctrine.
 
 The startup reader must treat `02_CORE_OBJECTIVES_AND_PROTOCOL_AUDIT.md` as the durable statement that MIP's primary practical objective is communication/request-response, with READ/perception as a separate secondary comparison track. READ and REQUEST/INFLUENCE must never be silently merged.
+
+For software implementation work, the startup reader must additionally read `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md` before interpreting older engineering/protocol generations.
 
 ## Repository language
 
@@ -149,8 +154,10 @@ Do not invent a missing value to make a protocol look complete.
 8. For blinded target tests, the raw response must be locked before target reveal.
 9. Never retroactively adjust a raw response to fit a revealed target.
 10. Preserve exact audio settings, device settings, timestamps, and file hashes whenever available.
-11. Record the Communication Session class when known (`CS-EXPLORE`, `CS-READ`, `CS-WRITE`, `CS-TRANSFER`, `CS-STORE`, `CS-RETRIEVE`, `CS-QUERY`, `CS-HANDSHAKE`, `CS-CONTROL`, `CS-REPLICATION`, and future versioned request/influence classes).
+11. Record the Communication Session class when known (`CS-EXPLORE`, `CS-READ`, `CS-REQUEST`, `CS-INFLUENCE`, `CS-WRITE`, `CS-TRANSFER`, `CS-STORE`, `CS-RETRIEVE`, `CS-QUERY`, `CS-TARGETED-RETRIEVAL`, `CS-HANDSHAKE`, `CS-CONTROL`, `CS-REPLICATION`).
 12. Preserve unexpected, uncomfortable, null, and adverse observations with the same diligence as apparently successful events.
+13. Software-recorded formal sessions must follow `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`: append-only event chain, immutable raw-report lock, linked raw machine output, explicit protocol deviations, reveal gate, integrity manifest, and reviewable audit history.
+14. Logging, timing, audio, or application failures are protocol data. Do not delete or silently repair the session.
 
 ## Research integrity rules
 
@@ -201,6 +208,19 @@ Whenever possible, use:
 - sham/no-intention controls;
 - calibration runs;
 - replication cohorts.
+
+## Software implementation authority rule
+
+For new MIP application implementation, do not combine incompatible requirements from old prompt/protocol generations.
+
+Read and obey:
+
+- `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`
+
+Older Codex prompts remain historical.
+
+If an unresolved implementation conflict remains, document it explicitly rather than silently choosing a convenient behavior.
 
 ## Advisor and safety responsibility
 
