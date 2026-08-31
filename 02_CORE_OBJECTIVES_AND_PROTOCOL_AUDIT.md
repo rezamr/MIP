@@ -248,6 +248,19 @@ The application and protocol must keep separate:
 
 Later tests should compare literal digits, arbitrary labels, reversed mappings, semantic-only, visual/kinesthetic/goal variants, and physical state labels without hardcoding an assumption about what a hypothesized mechanism understands.
 
+## Audio provenance and historical reconstruction
+
+MIP must keep the historical machine-output and audio lineages distinct:
+
+- the 1979–1980 Army/SRI Remote Perturbation work is a REQUEST/INFLUENCE precedent;
+- Monroe/Gateway/CENTER LANE is the primary historical lineage for Hemi-Sync/state-induction audio reconstruction.
+
+Simple binaural pairs are valid component-isolation conditions but are not automatically complete historical Hemi-Sync environments.
+
+Formal layered Hemi-Sync/patent-grounded research audio must follow `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`: complete deterministic stereo render, verification, manifest, hashes, freeze before START, and exact-artifact playback.
+
+Unverified CENTER LANE parameters remain incomplete candidates. Do not infer missing channel, phase, level, modulation, noise, sequencing, or timing values.
+
 ## Evidence interpretation
 
 Possible outcomes must remain distinct:
@@ -282,6 +295,7 @@ Every MIP conversation that touches protocols must:
 - READ architecture: conceptually well defined; detailed historical/source audit remains ongoing.
 - REQUEST/INFLUENCE historical precedent: source-audited Army remote-perturbation anchor exists; PEAR/Schmidt/replication audit remains ongoing.
 - First operational MIP REQUEST design: `ACTIVE EXPLORATORY` under v0.2/v0.3 protocol generation.
-- Local research application specification: frozen for Codex implementation under `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`.
+- Local research application specification: frozen for Codex implementation under `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`, with every v0.8 requirement retained unless v0.9 explicitly strengthens/changes it.
+- Layered Hemi-Sync/patent-grounded render path: mandatory in the first build; incomplete historical candidates remain provenance-gated.
 - Reliable communication with an unknown external substrate: **NOT YET ESTABLISHED**.
 - MIP's task is to test the communication/request hypothesis as strongly as possible without presupposing the mechanism.
