@@ -15,7 +15,11 @@ Every important claim must be traceable to one or more of:
 
 ## Language policy
 
-All repository content is written in English. Conversation with the project owner may occur in Persian, but durable conclusions, protocols, reports, session records, and decisions must be written back to this repository in English.
+All repository content is written in English.
+
+The application UI for the first software build is also English-only, including navigation, forms, validation messages, session workflow, Audio Lab, reports, charts, configuration screens, integrity views, and user-visible errors.
+
+Conversation with the project owner may occur in Persian, but durable conclusions, protocols, reports, session records, software requirements, and decisions must be written back to this repository in English.
 
 ## Start here in every conversation
 
@@ -57,12 +61,14 @@ The repository is the durable project memory and the single source of truth for 
 - Formal layered Hemi-Sync/historical-reconstruction session audio must be deterministically rendered, verified, manifested, hashed, frozen before START, and then played as that exact artifact.
 - The 1979–1980 Army/SRI Remote Perturbation protocol and the Monroe/Gateway/CENTER LANE Hemi-Sync audio lineage are separate historical families and must not be conflated.
 - The first software implementation must remain deliberately small and easy to debug; mobile packaging is deferred until the research core is stable.
+- The first software interface must nevertheless be polished, highly usable, consistent, and suitable for repeated research use rather than a raw developer prototype.
 - Participant-facing absolute clock time is not required for the first REQUEST baseline; machine timing remains exact and authoritative.
 - The software research core must be configuration-driven: current experiment choices are profiles, not hardcoded engine limitations.
 - Immediate, relative-delay, and absolute-date-time request timing must coexist in the same stable engine and be selectable by validated configuration.
 - Previously used experiment profiles/configurations must never be silently mutated; each committed session keeps an immutable configuration snapshot.
 - Runtime session evidence must be append-only/tamper-evident, reviewable, and recoverable without relying on chat memory.
 - Hidden result data must be gated server-side and must not be sent to participant-facing routes before reveal eligibility.
+- UI polish must never hide protocol deviations, integrity failures, aborted sessions, exploratory status, or historical-provenance uncertainty.
 
 ## Current program areas
 
@@ -91,6 +97,8 @@ The repository is the durable project memory and the single source of truth for 
 - Local JSON/JSONL research tooling
 - Tamper-evident session/block logging and integrity review
 - Deterministic analytical session/block reporting
+- High-quality English-only local research UI/UX
+- Session-start workflow, raw-report workflow, session browser, charts, reporting, and export UX
 - Local-computer deployment with ordinary Bluetooth audio-output support where useful
 - Practical protocol optimization and MIP-plus development
 
@@ -111,6 +119,7 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
 - `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`
+- `engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md`
 - `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
@@ -118,7 +127,7 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
 - `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md`
 - `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V1.0.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
 `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.3.md` is the current full step-by-step execution guide. It aligns the hands-free session with the current immediate-request timing decision and continuous hidden stream.
@@ -131,9 +140,11 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 
 `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md` is the current session-evidence authority. It requires unambiguous IDs, an append-only hash-chained event log, lossless machine-output evidence linked by hashes, immutable raw-report locking, server-side reveal gating, failure/crash preservation, integrity verification, block records, and a complete Sessions/Reports audit interface.
 
+`engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md` is the active product/interface requirement. It requires an English-only, highly polished, consistent research UI; excellent session-start and reporting workflows; deliberate input/output design; progressive disclosure for complex configuration; a usable session-audit workspace; strong Audio Lab UX; clear formal audio-render verification; accessibility; and meaningful error/recovery states.
+
 `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md` is the active full-audio reconstruction requirement. It explicitly separates simple binaural component tests from layered Hemi-Sync reconstruction, requires deterministic full stereo render + verification + manifest + hashes before formal use, and forbids inventing unrecovered CENTER LANE waveform parameters.
 
-`engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md` is the active implementation prompt. It inherits all mandatory v0.8 application requirements and adds the final full Hemi-Sync render/verification gate. All earlier Codex prompt versions remain project history. The active build remains local-computer only; Android/mobile packaging, phone-control transport, cloud services, and databases are deferred.
+`engineering/CODEX_PROMPT_REQUEST_APP_V1.0.md` is the active implementation prompt. It inherits all mandatory v0.9/v0.8 scientific and engineering requirements and adds the final English-only UI/UX product-quality gate. All earlier Codex prompt versions remain project history. The active build remains local-computer only; Android/mobile packaging, phone-control transport, cloud services, and databases are deferred.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
