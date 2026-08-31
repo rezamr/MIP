@@ -12,37 +12,48 @@ Its purpose is to determine, with the strongest evidence that can practically be
 
 MIP is not committed in advance to a metaphysical, neurological, psychoacoustic, psychological, physiological, environmental, informational, or nonlocal explanation.
 
-For operational shorthand, MIP uses the term **MATRIX** for a hypothesized external or non-ordinary information source/substrate that could, in principle, participate in information exchange. The name is a test model, not a conclusion that such a substrate exists.
+For operational shorthand, MIP uses the term **MATRIX** for a hypothesized external or non-ordinary interaction/information source or substrate that could, in principle, participate in request/response or information exchange. The name is a test model, not a conclusion that such a substrate exists.
 
 ## Primary operational objective
 
 The central practical objective of MIP is:
 
-> **Determine whether a stable, reproducible communication channel can be established with the hypothesized MATRIX and, in the strongest case, whether the participant can deliberately request and obtain specific desired information from that channel with verifiable accuracy.**
+> **Determine whether a stable, reproducible communication/request-response interaction can be established in which a participant makes a specific precommitted request and an independently operating system later produces an objectively verifiable corresponding response above chance.**
 
-The project is therefore not satisfied by unusual sensations, vivid imagery, altered states, perceived presence, or one-way impressions alone.
+The strongest simple operational target is:
 
-The target progression is:
+`participant requests objective outcome X -> independent random system operates under a predefined timing/output policy -> test whether the resulting machine output corresponds to X`
+
+Example:
+
+`Request objective state 1 -> machine generates/logs output independently -> test whether the predeclared endpoint favors/matches objective state 1`
+
+This request-response target is the primary practical objective. Passive READ/perception is a separate secondary comparison track and must not be silently merged with REQUEST/INFLUENCE.
+
+The project is not satisfied by unusual sensations, vivid imagery, altered states, perceived presence, or one-way impressions alone.
+
+The broader target progression is:
 
 1. **CONTACT / INTERACTION DETECTION** — determine whether a repeatable interaction-like state can be entered under controlled conditions.
-2. **READ** — determine whether verifiable hidden information can be acquired.
-3. **QUERY → RESPONSE** — determine whether a deliberately formulated question changes or structures the returned information.
-4. **TARGETED RETRIEVAL** — determine whether the participant can request a specific category or item of information and receive the requested content rather than uncontrolled material.
-5. **WRITE / TRANSMIT** — determine whether deliberately selected information can be transmitted outward in a reproducible way.
-6. **STORE / RETRIEVE** — determine whether information can be intentionally encoded with no contemporaneous receiver and later recovered.
-7. **HANDSHAKE** — determine whether a bidirectional challenge-response exchange can occur under cryptographic target secrecy.
-8. **RELIABLE COMMUNICATION** — characterize accuracy, error rate, latency, bandwidth, persistence, state dependence, and failure conditions well enough that communication becomes intentionally usable rather than anecdotal.
+2. **REQUEST / RESPONSE** — determine whether a precommitted desired machine/system outcome corresponds with later independently generated output above chance.
+3. **READ** — independently determine whether verifiable hidden information can be acquired.
+4. **QUERY -> RESPONSE** — determine whether a deliberately formulated question changes or structures returned information.
+5. **TARGETED RETRIEVAL** — determine whether the participant can request a specific category or item of information and receive the requested content rather than uncontrolled material.
+6. **WRITE / TRANSMIT** — determine whether deliberately selected information can be transmitted outward in a reproducible way.
+7. **STORE / RETRIEVE** — determine whether information can be intentionally encoded with no contemporaneous receiver and later recovered.
+8. **HANDSHAKE** — only after READ and REQUEST are independently supported, determine whether a bidirectional challenge-response exchange can occur under strong target secrecy/commitment.
+9. **RELIABLE COMMUNICATION** — characterize accuracy, error rate, latency, bandwidth, persistence, state dependence, temporal specificity, target specificity, and failure conditions well enough that the interaction becomes intentionally usable rather than anecdotal.
 
-The strongest MIP success state would be the ability to formulate a specific request before or during a Communication Session and recover the requested information with objective verification at a rate that survives blinding, controls, preregistration, and independent replication.
+A later strong success state would include the ability to formulate a specific information request and recover objectively verifiable requested content. That long-term information-retrieval goal does not replace the current simpler machine-outcome request-response priority.
 
-If an apparent channel cannot survive those tests, MIP must report that result even if the subjective experience remains compelling.
+If an apparent channel cannot survive controls, MIP must report that result even if the subjective experience remains compelling.
 
 The project must remain capable of discovering any of the following:
 
 - a fully conventional mechanism;
 - a mixture of conventional mechanisms;
 - a reproducible altered-state effect without anomalous information transfer;
-- a reproducible information-transfer anomaly;
+- a reproducible information-transfer or request/output anomaly;
 - a previously undocumented historical/technical method;
 - a new interaction not adequately explained by current models;
 - or a null result after adequate controls.
@@ -88,7 +99,8 @@ The long-term objective is to reach the strongest defensible answer to all of th
    - personnel and technique migration;
    - classified, proprietary, lost, or undocumented components where evidence supports such categories.
 
-4. **Does reproducible information behavior occur?**
+4. **Does reproducible information/request behavior occur?**
+   - requested machine-outcome correspondence;
    - hidden-information acquisition;
    - sender-to-receiver transfer;
    - delayed retrieval;
@@ -97,16 +109,19 @@ The long-term objective is to reach the strongest defensible answer to all of th
    - intentional influence or perturbation;
    - persistence over time.
 
-5. **If reproducible information behavior occurs, what is its structure?**
+5. **If reproducible behavior occurs, what is its structure?**
    - directionality;
    - bandwidth;
    - error rate;
    - latency;
    - persistence;
+   - temporal response kernel;
    - state dependence;
    - audio dependence;
    - participant dependence;
    - target dependence;
+   - representation/mapping dependence;
+   - entropy capacity;
    - spatial dependence;
    - temporal dependence;
    - possible physical or informational correlates.
@@ -129,10 +144,12 @@ The long-term objective is to reach the strongest defensible answer to all of th
    - target-pool artifacts;
    - statistical chance;
    - ordinary inference;
+   - random-device bias;
+   - timing/selection effects;
    - physiological state changes;
    - sleep-transition phenomena;
    - environmental effects;
-   - anomalous information-transfer models.
+   - anomalous information-transfer/influence models.
 
 ---
 
@@ -159,7 +176,7 @@ All revisions must be documented with the reason, evidence, and expected consequ
 
 ## Communication-session terminology
 
-MIP will use **Communication Session** as the operational term for owner-led sessions intended to establish, explore, transmit, receive, query, or characterize an apparent interaction.
+MIP will use **Communication Session** as the operational term for owner-led sessions intended to establish, explore, request, influence, transmit, receive, query, or characterize an apparent interaction.
 
 This terminology is intentionally broader than `experiment` because many early sessions are exploratory and phenomenological rather than confirmatory laboratory tests.
 
@@ -170,9 +187,10 @@ Every Communication Session must preserve separately:
 1. **Observed interaction** — what was experienced or measured.
 2. **Perceived agency/source** — whether the participant experienced the event as self-generated, spontaneous, environmental, externally directed, observed, interactive, or unknown.
 3. **Information content** — what specific content, if any, appeared to be sent or received.
-4. **Requested content** — what information was deliberately sought, if any.
-5. **Verification status** — whether returned content was independently testable and whether it matched a hidden target or external fact.
-6. **Mechanism status** — conventional, anomalous, mixed, unresolved, or unknown.
+4. **Requested outcome/content** — what objective machine state or information was deliberately requested, if any.
+5. **Timing semantics** — immediate, next event, delay, absolute time/window, pre-generated, or other versioned timing.
+6. **Verification status** — whether returned content or machine outcome was independently testable and whether it matched the predeclared endpoint.
+7. **Mechanism status** — conventional, anomalous, mixed, unresolved, or unknown.
 
 This prevents both premature dismissal and premature external attribution.
 
@@ -184,6 +202,8 @@ Durable MIP records may use these classes:
 
 - `CS-EXPLORE` — exploratory communication/state session;
 - `CS-READ` — attempted hidden-information acquisition;
+- `CS-REQUEST` — deliberate request for a predeclared objective response/outcome;
+- `CS-INFLUENCE` — experimental intention/perturbation framing when specifically appropriate;
 - `CS-WRITE` — attempted intentional outbound transmission/encoding;
 - `CS-TRANSFER` — sender-to-receiver session;
 - `CS-STORE` — attempted encode-without-current-receiver session;
@@ -215,6 +235,7 @@ Responsibilities include:
 - improving audio and instrumentation design;
 - maintaining blinded/randomized procedures where applicable;
 - calculating statistical requirements;
+- preserving session/log integrity;
 - documenting failed hypotheses and null results;
 - and updating MIP whenever the project state changes.
 
@@ -231,11 +252,13 @@ Exploration must never depend on deliberately escalating loss of voluntary contr
 Each protocol must define:
 
 - stop conditions;
-- a simple termination command/procedure;
+- a simple physical termination procedure;
 - recovery period;
 - adverse-event logging;
 - interruption handling;
 - and any contraindications introduced by the specific equipment or method.
+
+The software must not require a participant in an altered state to operate a screen in order to terminate safely.
 
 Safety events are data and must not be hidden because a session otherwise appears successful.
 
@@ -264,5 +287,7 @@ A potential discovery of exceptional importance must be held to a correspondingl
 MIP must be able to continue from any future conversation without dependence on private chat memory.
 
 Therefore every substantive result, decision, session, protocol revision, source verification, safety event, unresolved question, and next action must be written into the repository.
+
+Formal software-recorded sessions must additionally preserve a complete auditable runtime evidence bundle according to `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`.
 
 Any future MIP conversation must begin by reading the repository startup sequence defined in `COLLABORATION_PROTOCOL.md` and `10_CONVERSATION_ORCHESTRATION.md`.
