@@ -77,11 +77,17 @@ The local JSON/JSONL MIP app must support:
 - request/target/time commitments and hashes;
 - block-level reveal;
 - temporal response export;
-- no automatic best-lag selection.
+- no automatic best-lag selection;
+- exact scheduled/wake/actual machine timing records;
+- timing-deviation preservation rather than backfilling missed events;
+- auditable session/block event logs and integrity verification.
 
-Engineering source of truth:
+Current engineering sources of truth:
 
-- `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
+- `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
+- `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
+- `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
+- `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`
 
 ## Historical research requirement
 
