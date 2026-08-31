@@ -50,6 +50,8 @@ The repository is the durable project memory and the single source of truth for 
 - Do not substitute a post-hoc best time window for a failed preregistered target time.
 - MIP follows a development-and-validation strategy: reproduce a useful prior effect family, characterize it, improve it, and then scale toward practical use.
 - Active altered-state sessions must be hands-free and must not require screen inspection after induction begins.
+- Machine-output trend timing and participant-state timing must be logged and interpreted separately.
+- Audio generated from patents or archival clues must retain exact provenance labels; unrecovered parameters may not be silently guessed.
 
 ## Current program areas
 
@@ -61,19 +63,23 @@ The repository is the durable project memory and the single source of truth for 
 - Session phenomenology
 - REQUEST encoding / communication protocol development
 - Audio component isolation
+- Phased-pink / masking-noise engineering reconstruction
 - READ / hidden-target tests
 - REQUEST / binary machine-outcome tests
+- Continuous output trend/onset analysis
 - Temporal response / latency / persistence mapping
 - High-entropy exact-target tests
 - Delayed store/retrieve tests
 - Challenge-response tests
 - Sham, blinding, leakage, and falsification controls
 - Local JSON/JSONL research tooling
+- Deterministic analytical session/block reporting
+- Desktop and Android local deployment
 - Practical protocol optimization and MIP-plus development
 
 ## Current active protocol-development files
 
-For work on REQUEST / READ testing, audio comparison, temporal mapping, target entropy, practical optimization, or the planned local research app, read these files before changing a protocol:
+For work on REQUEST / READ testing, audio comparison, temporal mapping, target entropy, practical optimization, reporting, or the planned local research app, read these files before changing a protocol:
 
 - `05_PRACTICAL_DEVELOPMENT_STRATEGY.md`
 - `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md`
@@ -82,10 +88,15 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
 - `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.3.md`
+- `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
+- `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md`
+- `engineering/MOBILE_LOCAL_INSTALL_REQUIREMENTS_V0.1.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.4.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
 `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md` is the current step-by-step execution guide for the first standardized MIP Communication Sessions. It supersedes v0.1 for active sessions because the requested value is now assigned and memorized before state induction and the session is hands-free after START.
+
+`engineering/CODEX_PROMPT_REQUEST_APP_V0.4.md` is the current implementation prompt. It supersedes earlier Codex prompts for new implementation work and adds layered audio/noise synthesis, continuous trend telemetry, deterministic analytical reporting, and Android local installation requirements.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
