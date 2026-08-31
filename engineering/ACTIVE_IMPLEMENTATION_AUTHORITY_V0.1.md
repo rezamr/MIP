@@ -20,19 +20,20 @@ Use the precedence below. Preserve the older file unchanged as history unless a 
 
 From highest to lower authority:
 
-1. `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`
+1. `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`
 2. this file: `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
 3. `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`
 4. `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
 5. `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
-6. `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
-7. `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
-8. `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
-9. `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
-10. `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md` where not superseded by the session-data v0.1 file above
-11. `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
-12. active protocol files listed below
-13. older engineering specifications and older Codex prompts for historical context only.
+6. `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
+7. `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
+8. `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
+9. `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
+10. `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
+11. `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md` where not superseded by the session-data v0.1 file above
+12. `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
+13. active protocol files listed below
+14. older engineering specifications and older Codex prompts for historical context only.
 
 Scientific evidence rules in `04_EVIDENCE_STANDARD.md` always remain binding. Research conclusions cannot be upgraded by software implementation wording.
 
@@ -93,6 +94,8 @@ A committed research session cannot use an unsaved temporary Audio Lab state and
 
 Formal session audio is frozen, versioned, manifested, and hashed.
 
+For layered Hemi-Sync/historical-reconstruction conditions, formal session audio must be rendered to a complete deterministic stereo file before START eligibility, verified, hashed, and then played as that exact frozen artifact. Live Audio Lab synthesis is not a substitute for a formal layered-session render.
+
 ### 5. Audio preset semantics
 
 `A-U396-4` = MIP user baseline using the current documented centered calculation: L=394 Hz, R=398 Hz, center=396 Hz, beat=4 Hz.
@@ -101,19 +104,35 @@ Formal session audio is frozen, versioned, manifested, and hashed.
 
 `A-SHAM-0` = first matched control L=396 Hz, R=396 Hz.
 
-### 6. Machine state versus participant representation
+These simple pairs are component-isolation conditions. They must not be mislabeled as complete Army/CENTER LANE Hemi-Sync environments.
+
+### 6. Historical program provenance for audio versus machine perturbation
+
+Do not conflate the 1979–1980 Army/SRI Remote Perturbation experiment with the Monroe/Gateway/CENTER LANE Hemi-Sync audio program.
+
+Remote Perturbation is a REQUEST/INFLUENCE precedent for machine-output testing. Hemi-Sync reconstruction comes from Monroe/Gateway/CENTER LANE audio evidence and later Monroe engineering sources.
+
+MIP may combine lessons from both, but provenance must remain explicit in code, configuration, reports, and documentation.
+
+### 7. Historical Hemi-Sync exactness gate
+
+The engine must implement the layered signal primitives and deterministic render path in `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`.
+
+Current reported CENTER LANE anchors `100 Hz base + 1.5 Hz binaural beat` and `200 Hz base + 4 Hz binaural beat` remain incomplete historical candidates until primary-source semantics are verified. The application must not infer opposite-ear frequency, centered-pair architecture, simultaneous use, relative level, phase, modulation, noise, sequencing, or timing when those values are not source-verified.
+
+### 8. Machine state versus participant representation
 
 Objective machine state, participant-facing label/mapping, internal request-encoding profile, and scoring endpoint are separate objects.
 
 Older binary examples do not authorize hardcoding literal digits into the engine.
 
-### 7. Session/trial hierarchy
+### 9. Session/trial hierarchy
 
 For the first baseline, one Communication Session contains one primary REQUEST trial. The software architecture must nevertheless preserve separate `session_id` and `trial_id` fields so later protocols can contain multiple trials without schema breakage.
 
 Blocks group multiple sessions/trials for balanced assignment, block-level reveal, and cross-session analysis.
 
-### 8. Session storage and historical repository records
+### 10. Session storage and historical repository records
 
 Top-level repository directory `sessions/` contains durable MIP project/session documentation.
 
@@ -121,7 +140,7 @@ Application runtime evidence is stored under the application runtime data root, 
 
 The application may generate an explicit export/import summary for later repository documentation, but must not automatically publish or push runtime session data.
 
-### 9. Logging authority
+### 11. Logging authority
 
 `events.jsonl` is the authoritative append-only session event chain.
 
@@ -129,7 +148,7 @@ Raw machine output may live in a separate lossless file for volume reasons, but 
 
 Mutable UI caches, indexes, or drafts are never primary evidence.
 
-### 10. Raw report lock
+### 12. Raw report lock
 
 A participant report may be autosaved as a clearly marked mutable draft before lock.
 
@@ -137,13 +156,13 @@ At lock, create an immutable `raw_report.json` snapshot, record its hash in the 
 
 Later additions are append-only `late_recollection` or `late_note` events.
 
-### 11. Reveal
+### 13. Reveal
 
 Reveal policy is enforced server-side, not merely by hiding a button.
 
 Before reveal eligibility, hidden outputs must not be returned by any participant-facing API, page, report preview, debug route, URL field, browser payload, or client-side state.
 
-### 12. Scheduling
+### 14. Scheduling
 
 Multi-minute/hour/day and absolute-time modes are configuration capabilities, not a claim that a normal desktop OS provides laboratory-grade unattended timing.
 
@@ -151,7 +170,7 @@ The application must log scheduled time, scheduler wake time, actual generation 
 
 If the application is stopped, the computer sleeps, or the target is missed beyond the profile tolerance, preserve the trial and mark the timing protocol deviation. Never silently generate a replacement outcome and pretend it occurred on time.
 
-### 13. First baseline endpoint
+### 15. First baseline endpoint
 
 The first operational immediate profile uses continuous hidden stream telemetry around the request as the main temporal characterization path.
 
@@ -161,9 +180,9 @@ Do not silently substitute the best post-hoc stream window for the declared prim
 
 ## Older Codex prompts
 
-`CODEX_PROMPT_REQUEST_APP_V0.1.md` through `V0.7.md` remain project history.
+`CODEX_PROMPT_REQUEST_APP_V0.1.md` through `V0.8.md` remain project history and implementation ancestry.
 
-For new implementation work, only `V0.8` is active.
+For new implementation work, only `V0.9` is active.
 
 ## Implementation ambiguity rule
 
