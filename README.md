@@ -58,7 +58,8 @@ The repository is the durable project memory and the single source of truth for 
 - Machine-output trend timing and participant-state timing must be logged and interpreted separately.
 - Audio generated from patents or archival clues must retain exact provenance labels; unrecovered parameters may not be silently guessed.
 - A simple binaural pair is a valid component test but is not automatically a complete historical Hemi-Sync environment.
-- Formal layered Hemi-Sync/historical-reconstruction session audio must be deterministically rendered, verified, manifested, hashed, frozen before START, and then played as that exact artifact.
+- The active audio runtime is live deterministic synthesis from a frozen versioned recipe/seed/state, not mandatory playback of a pre-rendered full-session file.
+- Formal audio reproducibility is preserved by frozen synthesis configuration plus deterministic runtime stream hashing/logging; optional WAV export remains available for QA, archival, regression, and external analysis.
 - The 1979–1980 Army/SRI Remote Perturbation protocol and the Monroe/Gateway/CENTER LANE Hemi-Sync audio lineage are separate historical families and must not be conflated.
 - The first software implementation must remain deliberately small and easy to debug; mobile packaging is deferred until the research core is stable.
 - The first software interface must nevertheless be polished, highly usable, consistent, and suitable for repeated research use rather than a raw developer prototype.
@@ -75,7 +76,8 @@ The repository is the durable project memory and the single source of truth for 
 - Historical and archival reconstruction
 - CENTER LANE / MIAS advanced training recovery
 - Hemi-Sync audio engineering reconstruction
-- Layered deterministic historical/patent-grounded audio rendering
+- Live deterministic layered Hemi-Sync synthesis
+- Optional deterministic audio rendering/export for QA and archival use
 - Monroe patent analysis
 - Bentov physiology reconstruction
 - Session phenomenology
@@ -123,28 +125,31 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
+- `engineering/LIVE_AUDIO_SYNTHESIS_RUNTIME_REQUIREMENTS_V0.1.md`
 - `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
 - `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
 - `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md`
 - `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V1.0.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V1.1.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
 `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.3.md` is the current full step-by-step execution guide. It aligns the hands-free session with the current immediate-request timing decision and continuous hidden stream.
 
-`protocols/REQUEST_ENCODING_V0.2.md` is the active first-use request-encoding protocol. It replaces the older fixed-clock participant wording with profile-driven timing semantics while preserving semantic/representation/affect/release as separable components.
+`protocols/REQUEST_ENCODING_V0.2.md` is the active first-use request-encoding protocol. It replaces older fixed-clock participant wording with profile-driven timing semantics while preserving semantic/representation/affect/release as separable components.
 
-`engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md` is the current conflict-resolution authority for software implementation. It prevents older protocol/prompt generations from being silently merged with active behavior.
+`engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md` is the current conflict-resolution authority for software implementation and revision work.
 
 `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md` is the current software architecture decision. It requires stable engine code, validated versioned configuration, separate objective state/mapping/encoding, block/session/trial hierarchy, immutable per-session configuration snapshots, and configuration-driven timing/output/audio/analysis/reveal behavior.
 
 `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md` is the current session-evidence authority. It requires unambiguous IDs, an append-only hash-chained event log, lossless machine-output evidence linked by hashes, immutable raw-report locking, server-side reveal gating, failure/crash preservation, integrity verification, block records, and a complete Sessions/Reports audit interface.
 
-`engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md` is the active product/interface requirement. It requires an English-only, highly polished, consistent research UI; excellent session-start and reporting workflows; deliberate input/output design; progressive disclosure for complex configuration; a usable session-audit workspace; strong Audio Lab UX; clear formal audio-render verification; accessibility; and meaningful error/recovery states.
+`engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md` is the active product/interface requirement. It requires an English-only, highly polished, consistent research UI; excellent session-start and reporting workflows; deliberate input/output design; progressive disclosure for complex configuration; a usable session-audit workspace; strong Audio Lab UX; accessibility; and meaningful error/recovery states.
 
-`engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md` is the active full-audio reconstruction requirement. It explicitly separates simple binaural component tests from layered Hemi-Sync reconstruction, requires deterministic full stereo render + verification + manifest + hashes before formal use, and forbids inventing unrecovered CENTER LANE waveform parameters.
+`engineering/LIVE_AUDIO_SYNTHESIS_RUNTIME_REQUIREMENTS_V0.1.md` is the active audio runtime authority. It requires one shared deterministic synthesis library, real live playback for Audio Lab and formal sessions, stateful continuous generation rather than file looping, frozen recipe/seed/state at commitment, runtime sample counting and stream hashing, and optional rather than mandatory audio-file export.
 
-`engineering/CODEX_PROMPT_REQUEST_APP_V1.0.md` is the active implementation prompt. It inherits all mandatory v0.9/v0.8 scientific and engineering requirements and adds the final English-only UI/UX product-quality gate. All earlier Codex prompt versions remain project history. The active build remains local-computer only; Android/mobile packaging, phone-control transport, cloud services, and databases are deferred.
+`engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md` remains relevant for layered synthesis primitives, provenance, historical exactness, and optional render/export verification, but its older mandatory full-session pre-render/playback requirement is superseded by the live-audio runtime authority.
+
+`engineering/CODEX_PROMPT_REQUEST_APP_V1.1.md` is the active implementation prompt. It inherits all valid v1.0 scientific, engineering, logging, UI/UX, and reporting requirements and changes the audio runtime to live deterministic synthesis. All earlier Codex prompt versions remain project history.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
