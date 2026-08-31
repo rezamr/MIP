@@ -53,6 +53,7 @@ The repository is the durable project memory and the single source of truth for 
 - Machine-output trend timing and participant-state timing must be logged and interpreted separately.
 - Audio generated from patents or archival clues must retain exact provenance labels; unrecovered parameters may not be silently guessed.
 - The first software implementation must remain deliberately small and easy to debug; mobile packaging is deferred until the research core is stable.
+- Participant-facing absolute clock time is not required for the first REQUEST baseline; machine timing remains exact and authoritative.
 
 ## Current program areas
 
@@ -63,6 +64,7 @@ The repository is the durable project memory and the single source of truth for 
 - Bentov physiology reconstruction
 - Session phenomenology
 - REQUEST encoding / communication protocol development
+- Immediate/relative request timing
 - Audio component isolation
 - Phased-pink / masking-noise engineering reconstruction
 - READ / hidden-target tests
@@ -85,6 +87,7 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `05_PRACTICAL_DEVELOPMENT_STRATEGY.md`
 - `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md`
 - `protocols/REQUEST_ENCODING_V0.1.md`
+- `protocols/IMMEDIATE_REQUEST_TIMING_V0.1.md`
 - `protocols/MATRIX_TEMPORAL_RESPONSE_AND_PERSISTENCE_V0.1.md`
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
@@ -95,9 +98,9 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `engineering/CODEX_PROMPT_REQUEST_APP_V0.5.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
-`protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md` is the current step-by-step execution guide for the first standardized MIP Communication Sessions. It supersedes v0.1 for active sessions because the requested value is now assigned and memorized before state induction and the session is hands-free after START.
+`protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md` remains the current full step-by-step execution guide, while `protocols/IMMEDIATE_REQUEST_TIMING_V0.1.md` introduces the pending timing correction for the next freeze: the participant requests an outcome `now` / at the next eligible event rather than reasoning about an absolute target clock time while altered. The computer still logs all exact times internally.
 
-`engineering/CODEX_PROMPT_REQUEST_APP_V0.5.md` is the current implementation prompt. It supersedes earlier Codex prompts for new implementation work. The active build is local-computer only; Android/mobile packaging and phone-control transport are deferred.
+`engineering/CODEX_PROMPT_REQUEST_APP_V0.5.md` is the current implementation prompt but should not be treated as final until the immediate-request timing decision is incorporated into the next frozen prompt. The active build remains local-computer only; Android/mobile packaging and phone-control transport are deferred.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
