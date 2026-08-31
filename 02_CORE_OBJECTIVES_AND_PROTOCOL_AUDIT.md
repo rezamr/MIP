@@ -10,15 +10,39 @@ The primary objective of MIP is **communication and request/response**, not pass
 
 Operationally, MIP seeks to determine whether a reproducible interaction can be established in which the participant can make a specific request and obtain a corresponding externally verifiable response.
 
-The strongest simple target architecture is:
+The strongest general target architecture is:
 
-`participant requests outcome X -> independent random system operates at a predefined time -> system output is tested for correspondence with X`
+`participant requests objective outcome X -> independent random system operates under a predefined timing/output policy -> system output is tested for correspondence with X`
 
-Example:
+One discrete example is:
 
 `Request: output 1 at time T -> isolated random system generates one value at time T -> test whether output = 1`
 
+That example is a protocol family, not the mandatory first-use timing profile.
+
 The term `MATRIX` remains an operational hypothesis for an unknown communication mechanism or substrate. A successful correspondence does not by itself establish what mechanism produced it.
+
+## Current first operational REQUEST profile
+
+The current first participant baseline uses:
+
+- randomized objective request `{0,1}`;
+- target memorized before induction;
+- hands-free operation after START;
+- participant-facing `IMMEDIATE_REQUEST` / now semantics;
+- a continuous hidden binary machine stream before, during, and after request encoding;
+- a predeclared request/immediate primary region;
+- exploratory neighboring windows for onset/latency/persistence;
+- raw-report lock before reveal.
+
+Active files:
+
+- `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.3.md`
+- `protocols/REQUEST_ENCODING_V0.2.md`
+- `protocols/IMMEDIATE_REQUEST_TIMING_V0.1.md`
+- `protocols/MIP_NUM_REQUEST_V0.2.md`
+
+Fixed relative-delay, absolute-date-time, next-eligible-output, and pre-generated-hidden REQUEST families remain mandatory software capabilities and later experimental comparisons. They are not the participant-facing timing semantics of the first immediate baseline.
 
 ## Secondary objective
 
@@ -38,7 +62,7 @@ Depending on target timing, this can test different architectures:
 
 ### Track B — REQUEST / INFLUENCE
 
-`participant precommits desired value -> independent random system generates value later -> test whether requested value occurs above chance`
+`participant precommits desired objective state -> independent random system generates/logs output -> test whether requested state corresponds above chance under the declared endpoint`
 
 This is not remote viewing. It is closer to historical intention / perturbation / PK / human-machine interaction protocols.
 
@@ -47,13 +71,14 @@ These two tracks must never be merged statistically or conceptually.
 ## Primary MIP success hierarchy
 
 1. Establish a repeatable communication-state protocol.
-2. Demonstrate that requests can be defined before the system outcome.
+2. Demonstrate that requests can be defined and committed before the scored machine output/region.
 3. Demonstrate above-chance correspondence between requested outcomes and independently generated outcomes.
 4. Demonstrate the effect under blinding, automation, no-contact conditions, and sham/control trials.
-5. Demonstrate temporal specificity: a request intended for time T should not merely correlate with arbitrary neighboring times.
-6. Demonstrate target specificity: requesting 1 should not merely increase generic anomaly; it should preferentially produce the requested value.
-7. Replicate with new random systems, new target mappings, and independent analysis.
-8. Only after these stages investigate mechanism and whether the operational `MATRIX` model is useful.
+5. Demonstrate temporal specificity under separately frozen timing profiles and windows.
+6. Demonstrate target specificity: requesting 1 should not merely increase generic anomaly; it should preferentially favor the trial-specific requested objective state.
+7. Demonstrate representation specificity/independence using arbitrary/reversed mappings and controlled encoding variants.
+8. Replicate with new random systems, new target mappings, and independent analysis.
+9. Only after these stages investigate mechanism and whether the operational `MATRIX` model is useful.
 
 ## Mandatory protocol families to audit
 
@@ -130,6 +155,12 @@ Every protocol change must be versioned and must record:
 - predicted consequence;
 - whether the change was made before or after outcome inspection.
 
+For software implementation, conflict resolution additionally follows:
+
+- `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
+
+Do not silently merge superseded protocol generations.
+
 ## Core number-selection tests
 
 ### MIP-NUM-READ
@@ -138,31 +169,33 @@ Question: Can the participant identify a number independently selected by the sy
 
 Minimal architecture:
 
-1. Define number set, initially small enough for statistical sensitivity, e.g. `{0,1}` or `{1,2,3,4}`.
-2. Define target-generation time before the session.
+1. Define a finite outcome space.
+2. Define target-generation timing before the session/trial.
 3. System generates target without participant access.
 4. Participant response is locked before reveal.
-5. Exact-match score is primary.
+5. Exact-match score is primary where appropriate.
 6. Repeat across enough preregistered trials.
 
 ### MIP-NUM-REQUEST
 
-Question: Can a participant's precommitted request correspond to a later independent random output above chance?
+Question: Can a participant's precommitted request correspond to independent random machine output above chance?
 
-Minimal architecture:
+General architecture:
 
-1. Experiment controller randomly assigns the requested value for each trial so the participant does not always request the same number.
-2. Participant receives the request target, e.g. `REQUEST 1`.
-3. Request target and target time are cryptographically committed before generation.
-4. Participant performs the communication/request protocol.
-5. At predefined time T, an isolated random device generates one value.
-6. Exact requested-value match is the primary endpoint.
-7. No-intention / sham / mismatched-time control trials are interleaved.
-8. Analyze only using the preregistered rule after the trial block is complete.
+1. Experiment controller assigns or otherwise freezes the requested objective state according to a declared assignment policy.
+2. Participant receives the participant-facing mapped target before active induction when required.
+3. Request/mapping/timing/output/analysis configuration is cryptographically committed before scored output generation.
+4. Participant performs the fixed communication/request protocol.
+5. Machine produces output according to the frozen timing/output policy.
+6. A predeclared objective scoring rule tests correspondence.
+7. No-intention/sham/timing/mapping controls are introduced only through predeclared profiles/blocks.
+8. Analyze only with the frozen primary rule; exploratory windows remain labeled exploratory.
+
+The current first-use implementation of this family is `MIP_NUM_REQUEST_V0.2`, using an immediate hidden continuous stream rather than requiring a participant-facing absolute target time.
 
 ### Why randomized requested values matter
 
-If the participant always requests `1`, a biased device could mimic success. Randomly alternating the requested value permits testing whether the machine follows the trial-specific request rather than merely drifting toward one output.
+If the participant always requests `1`, a biased device could mimic success. Randomizing/balancing the requested objective state permits testing whether the machine follows the trial-specific request rather than merely drifting toward one output.
 
 ## Random-source requirement
 
@@ -177,33 +210,55 @@ MIP must distinguish:
 
 For READ tests, an inaccessible CSPRNG may be sufficient for a strong hidden-target design.
 
-For REQUEST / INFLUENCE tests, a well-characterized physical or hardware random source is preferred because historical perturbation claims concern physical random processes and because deterministic algorithms introduce a different causal interpretation.
+For REQUEST / INFLUENCE tests, a well-characterized physical or hardware random source is preferred for stronger later replication because historical perturbation claims concern physical random processes and deterministic/software sources have different causal interpretations.
 
-All devices must be calibrated and baseline-tested independently of communication sessions.
+The first software implementation uses OS cryptographic randomness for tooling/baseline and a separately labeled deterministic provider for tests. All devices/providers must be calibrated and baseline-tested independently of Communication Sessions.
 
 ## Temporal-specificity controls
 
-For REQUEST tests, MIP must test whether any effect is specific to the intended time.
+REQUEST timing is itself an empirical question.
 
-Recommended design includes:
+Current first-use design preserves:
 
-- requested target time T;
-- pre-window T-1;
-- post-window T+1;
-- matched sham times;
-- randomized time offsets unknown to the participant where feasible.
+- pre-request baseline;
+- predeclared request/immediate primary region;
+- immediate-post region;
+- later exploratory post regions.
 
-A genuine time-specific request effect should preferentially appear at the preregistered target time rather than equally across neighboring windows.
+Later separately frozen designs should compare:
+
+- immediate;
+- next eligible;
+- relative delays;
+- absolute target time;
+- windows;
+- pre-generated hidden targets;
+- matched sham/mismatched times.
+
+A later favorable region may not be substituted post hoc for a failed preregistered primary region.
+
+## Representation / mapping controls
+
+The application and protocol must keep separate:
+
+- objective machine state;
+- participant-facing label;
+- internal request encoding;
+- scoring endpoint.
+
+Later tests should compare literal digits, arbitrary labels, reversed mappings, semantic-only, visual/kinesthetic/goal variants, and physical state labels without hardcoding an assumption about what a hypothesized mechanism understands.
 
 ## Evidence interpretation
 
 Possible outcomes must remain distinct:
 
 - READ success only -> anomalous acquisition hypothesis strengthened; no evidence of influence.
-- REQUEST success only -> intention/perturbation hypothesis strengthened; no evidence of perception.
+- REQUEST success only -> request/output correspondence or intention/perturbation hypothesis strengthened; no evidence of perception.
 - both succeed -> bidirectional architecture becomes a serious test target.
 - neither succeeds -> current protocol unsupported; revise only according to documented rules, not post-hoc target fitting.
 - subjective communication without objective correspondence -> phenomenological result only.
+
+No single outcome establishes MATRIX or a unique causal mechanism.
 
 ## Mandatory future-conversation responsibilities
 
@@ -216,13 +271,17 @@ Every MIP conversation that touches protocols must:
 5. identify weaknesses/confounds;
 6. propose justified modifications;
 7. update the protocol version and master state;
-8. preserve null/failed versions rather than deleting them;
+8. preserve null/failed/superseded versions rather than deleting them;
 9. keep READ and REQUEST/INFLUENCE results separate;
-10. keep safety and termination controls active.
+10. keep safety and termination controls active;
+11. preserve timing/entropy/mapping questions as empirical rather than assumed;
+12. for software-recorded sessions, preserve the complete auditable evidence bundle and integrity status.
 
 ## Current status
 
-- READ architecture: conceptually well defined; detailed historical/source audit still required.
-- REQUEST/INFLUENCE architecture: historical analogues exist in remote-perturbation and REG-intention research; exact source-level protocol audit remains required.
+- READ architecture: conceptually well defined; detailed historical/source audit remains ongoing.
+- REQUEST/INFLUENCE historical precedent: source-audited Army remote-perturbation anchor exists; PEAR/Schmidt/replication audit remains ongoing.
+- First operational MIP REQUEST design: `ACTIVE EXPLORATORY` under v0.2/v0.3 protocol generation.
+- Local research application specification: frozen for Codex implementation under `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`.
 - Reliable communication with an unknown external substrate: **NOT YET ESTABLISHED**.
 - MIP's task is to test the communication/request hypothesis as strongly as possible without presupposing the mechanism.
