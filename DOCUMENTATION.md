@@ -14,7 +14,7 @@ Open `http://127.0.0.1:3210`. Runtime evidence is stored under `runtime/`; set `
 
 ## Architecture
 
-`src/engine.js` contains versioned profile registries, outcome spaces, mappings, request encoding, timing plans, CSPRNG/deterministic providers, and deterministic stream analysis. `src/audio.js` implements exact simple presets plus layered multi-carrier, Septon, deterministic phased-pink/comb-sweep rendering, WAV manifests, and hashes. `src/storage.js` allocates collision-safe MIP session IDs, writes append-only hash-chained events and lossless machine output, locks raw reports, and verifies bundles. `src/server.js` exposes safe localhost APIs with reveal gating and serves the English UI. `public/` contains the reusable design system and workflow screens.
+`src/engine.js` contains versioned profile registries, outcome spaces, mappings, request encoding, timing plans, CSPRNG/deterministic providers, and deterministic stream analysis. `src/audio.js` implements exact simple presets plus layered multi-carrier, Septon, deterministic phased-pink/comb-sweep rendering, WAV manifests, and hashes. `public/live-synth.js` is the stateful browser PCM generator used for continuous Audio Lab playback, preserving phase/noise state across blocks with Web Audio output and pause/resume. `src/storage.js` allocates collision-safe MIP session IDs, writes append-only hash-chained events and lossless machine output, locks raw reports, and verifies bundles. `src/server.js` exposes safe localhost APIs with reveal gating and serves the English UI. `public/` contains the reusable design system and workflow screens.
 
 ## Session lifecycle
 
@@ -22,7 +22,7 @@ The Start Research Session workflow selects a profile, records baseline/safety s
 
 ## Audio
 
-Audio Lab presets are `A-U396-4` (394/398 Hz), `A-P100-104` (100/104 Hz), and `A-SHAM-0` (396/396 Hz). Quick Generator derives centered channels from one number. Formal layered recipes are rendered to a finite WAV, manifest, verification file, and SHA-256 hashes before use. `PHASED_PINK_PATENT_5356368` is explicitly labeled a patent-grounded reconstruction; unresolved historical CENTER LANE parameters remain unknown rather than inferred.
+Audio Lab presets are `A-U396-4` (394/398 Hz), `A-P100-104` (100/104 Hz), and `A-SHAM-0` (396/396 Hz). Quick Generator derives centered channels from one number. Audio Lab and formal runtime playback use frozen recipe semantics plus stateful live synthesis; WAV rendering is optional export/QA. `PHASED_PINK_PATENT_5356368` is explicitly labeled a patent-grounded reconstruction; unresolved historical CENTER LANE parameters remain unknown rather than inferred.
 
 ## Dry run
 
@@ -36,4 +36,4 @@ Implemented but requires owner manual verification: actual OS audio output and p
 
 Explicitly deferred by active scope: Android/iOS packaging, cloud sync, databases, custom Bluetooth protocols, sensors, phone control, unattended laboratory-grade scheduling, and automatic participant operation.
 
-Known limitations: browser Audio Lab preview uses a controlled UI status path rather than a native device-specific audio driver; the local server must remain running for long relative/absolute delays; historical CENTER LANE channel semantics, levels, phase, modulation, noise, sequence, and timing remain unresolved in repository evidence.
+Known limitations: browser playback depends on Web Audio and the OS-selected output device; the local server must remain running for long relative/absolute delays; formal runtime digest logging is software-generated and cannot prove the acoustic waveform at the headphones; historical CENTER LANE channel semantics, levels, phase, modulation, noise, sequence, and timing remain unresolved in repository evidence.
