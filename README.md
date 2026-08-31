@@ -149,3 +149,7 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
 See `00_MASTER.md` for current status and next actions.
+
+## Local application implementation
+
+The v1.0 local research application is implemented in `src/` with an English-only responsive interface in `public/`. Run `npm install`, `npm test`, and `npm start`, then open `http://127.0.0.1:3210`. See [`DOCUMENTATION.md`](DOCUMENTATION.md) for architecture, session lifecycle, audio rendering, dry-run artifacts, integrity verification, and explicit scope limitations.

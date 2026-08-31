@@ -1,0 +1,6 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
+import { Storage } from '../src/storage.js'; import { resolveProfile } from '../src/engine.js';
+test('session evidence is append-only and tamper evident', () => { const root=fs.mkdtempSync(path.join(os.tmpdir(),'mip-')); const s=new Storage(root), session=s.createSession({profile:resolveProfile('BASELINE_NOW_BINARY_V1')}); s.appendEvent(session.sessionId,'COMMITTED',{a:1}); s.appendEvent(session.sessionId,'STARTED'); assert.equal(s.verify(session.sessionId).valid,true); const f=path.join(session.dir,'events.jsonl'); fs.appendFileSync(f, JSON.stringify({seq:99,hash:'bad'})+'\n'); assert.equal(s.verify(session.sessionId).valid,false); });
+test('raw report lock gates reveal and is immutable', () => { const root=fs.mkdtempSync(path.join(os.tmpdir(),'mip-')); const s=new Storage(root), session=s.createSession({profile:resolveProfile('BASELINE_NOW_BINARY_V1')}); assert.equal(s.revealEligible(session.sessionId),false); const locked=s.lockRawReport(session.sessionId,{state:'ordinary'}); assert.equal(s.revealEligible(session.sessionId),true); assert.ok(locked.lockHash); });
