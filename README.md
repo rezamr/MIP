@@ -49,6 +49,7 @@ The repository is the durable project memory and the single source of truth for 
 - Timing, latency, persistence, execution semantics, and entropy capacity are empirical variables, not assumptions.
 - Do not substitute a post-hoc best time window for a failed preregistered target time.
 - MIP follows a development-and-validation strategy: reproduce a useful prior effect family, characterize it, improve it, and then scale toward practical use.
+- Active altered-state sessions must be hands-free and must not require screen inspection after induction begins.
 
 ## Current program areas
 
@@ -75,15 +76,16 @@ The repository is the durable project memory and the single source of truth for 
 For work on REQUEST / READ testing, audio comparison, temporal mapping, target entropy, practical optimization, or the planned local research app, read these files before changing a protocol:
 
 - `05_PRACTICAL_DEVELOPMENT_STRATEGY.md`
-- `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.1.md`
+- `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md`
 - `protocols/REQUEST_ENCODING_V0.1.md`
 - `protocols/MATRIX_TEMPORAL_RESPONSE_AND_PERSISTENCE_V0.1.md`
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.2.md`
+- `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.3.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
-`protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.1.md` is the current step-by-step execution guide for the first standardized MIP Communication Sessions.
+`protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md` is the current step-by-step execution guide for the first standardized MIP Communication Sessions. It supersedes v0.1 for active sessions because the requested value is now assigned and memorized before state induction and the session is hands-free after START.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
