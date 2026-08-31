@@ -2,13 +2,11 @@
 
 ## Status
 
-`ACTIVE — PRE-CODE IMPLEMENTATION AUTHORITY`
+`ACTIVE — IMPLEMENTATION AUTHORITY`
 
 ## Purpose
 
-This file exists to remove ambiguity before implementation. MIP has accumulated historical protocols, earlier engineering specifications, and multiple Codex prompts. Older documents remain valuable project history, but Codex must not merge mutually incompatible instructions from different generations.
-
-This file defines the active implementation authority for the first local MIP research application.
+This file exists to remove ambiguity before implementation and revision work. MIP has accumulated historical protocols, earlier engineering specifications, and multiple Codex prompts. Older documents remain valuable project history, but implementation agents must not merge mutually incompatible instructions from different generations.
 
 ## Core rule
 
@@ -20,21 +18,22 @@ Use the precedence below. Preserve the older file unchanged as history unless a 
 
 From highest to lower authority:
 
-1. `engineering/CODEX_PROMPT_REQUEST_APP_V1.0.md`
+1. `engineering/CODEX_PROMPT_REQUEST_APP_V1.1.md`
 2. this file: `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
-3. `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`
-4. `engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md`
-5. `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
-6. `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
-7. `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
+3. `engineering/LIVE_AUDIO_SYNTHESIS_RUNTIME_REQUIREMENTS_V0.1.md`
+4. `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md`
+5. `engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md`
+6. `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
+7. `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
 8. `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
 9. `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
 10. `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
-11. `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
-12. `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md` where not superseded by the session-data v0.1 file above
-13. `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
-14. active protocol files listed below
-15. older engineering specifications and older Codex prompts for historical context only.
+11. `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md` where not superseded by the live-audio runtime requirement
+12. `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
+13. `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md` where not superseded by the session-data requirement
+14. `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
+15. active protocol files listed below
+16. older engineering specifications and older Codex prompts for historical context only.
 
 Scientific evidence rules in `04_EVIDENCE_STANDARD.md` always remain binding. Research conclusions cannot be upgraded by software implementation wording or by visual presentation.
 
@@ -48,7 +47,7 @@ For the first participant-facing REQUEST baseline, use:
 - `protocols/MIP_NUM_REQUEST_V0.2.md`
 - `protocols/MATRIX_TEMPORAL_RESPONSE_AND_PERSISTENCE_V0.1.md`
 
-The following older versions remain historical and are **not** the current first-use participant protocol:
+The following older versions remain historical and are not the current first-use participant protocol:
 
 - `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.1.md`
 - `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md`
@@ -63,55 +62,53 @@ Current first participant baseline = `IMMEDIATE_REQUEST` with a continuous hidde
 
 Participant-facing wording must not require an absolute wall-clock target time.
 
-Older wording such as:
-
-`At the predefined target time, the system output is X.`
-
-is superseded for the first immediate profile by timing-neutral/immediate wording defined in `REQUEST_ENCODING_V0.2.md` and `IMMEDIATE_REQUEST_TIMING_V0.1.md`.
-
 Relative-delay and absolute-date-time modes remain implemented in the engine as separate selectable profiles.
 
 ### 2. State stabilization
 
 The first hands-free baseline is timer/cue driven after START. It does not require the participant to press a button to announce that the state is stable.
 
-Any older wording that says the participant must interact with the device during active induction is superseded for the first hands-free profile.
-
-The participant may later report that stabilization was poor; this is recorded as data/protocol quality, not corrected by mid-session screen interaction.
+Any older wording that requires interaction with the device during active induction is superseded for the first hands-free profile.
 
 ### 3. END SESSION control
 
 The participant must always be physically able to terminate by opening eyes/removing headphones/reorienting.
 
-A visible software stop control may exist as an optional convenience, but successful protocol completion and safe termination must not depend on operating it while altered.
-
-Older UI wording that appears to require an `END SESSION` button during active trance is not a mandatory interaction.
+A visible software stop control may exist as an optional convenience, but safe termination must not depend on operating it while altered.
 
 ### 4. Application language and UI quality
 
-The first application UI is English-only.
+The application UI is English-only.
 
 All visible user-facing text, reports, chart labels, validation errors, configuration screens, Audio Lab screens, session workflow, and status messages must be English.
 
-The first build must implement `engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md` and must not be considered complete merely because the required routes and forms technically exist.
+The build must implement `engineering/UI_UX_PRODUCT_REQUIREMENTS_V0.1.md` and is not complete merely because required routes/forms technically exist.
 
 UI/UX polish must never hide scientific warnings, exploratory status, protocol deviations, integrity failures, aborted sessions, or historical-provenance uncertainty.
 
-### 5. Audio Lab versus research-session audio
+### 5. Active audio runtime model
 
-Audio Lab can play indefinitely, pause, resume, stop, and use temporary custom parameters.
+The active audio model is live deterministic synthesis.
 
-A committed research session cannot use an unsaved temporary Audio Lab state and cannot change audio parameters after commitment.
+Audio Lab and formal research sessions use one shared stateful synthesis library that generates audio continuously from a versioned recipe.
 
-Formal session audio is frozen, versioned, manifested, and hashed.
+The required model is:
 
-For layered Hemi-Sync/historical-reconstruction conditions, formal session audio must be rendered to a complete deterministic stereo file before START eligibility, verified, hashed, and then played as that exact frozen artifact. Live Audio Lab synthesis is not a substitute for a formal layered-session render.
+`frozen deterministic recipe + frozen seed/state/version + live stateful synthesis + runtime stream digest/logging`
+
+A persistent WAV or other complete pre-rendered full-session file is optional and is not required for ordinary playback or formal START eligibility.
+
+Optional rendering/export remains valid for QA, spectral verification, regression fixtures, troubleshooting, external analysis, or explicit archival needs.
+
+Where `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md` mandates a pre-rendered full-session file as the formal playback mechanism, that requirement is superseded by `engineering/LIVE_AUDIO_SYNTHESIS_RUNTIME_REQUIREMENTS_V0.1.md`.
+
+All synthesis capability, provenance, historical-exactness, and unknown-parameter restrictions from the older file remain in force.
 
 ### 6. Audio preset semantics
 
 `A-U396-4` = MIP user baseline using the current documented centered calculation: L=394 Hz, R=398 Hz, center=396 Hz, beat=4 Hz.
 
-`A-P100-104` = explicit documented patent pair L=100 Hz, R=104 Hz. Its arithmetic center is 102 Hz. Do not reinterpret this preset through the centered-396 quick-template logic.
+`A-P100-104` = explicit documented patent pair L=100 Hz, R=104 Hz. Its arithmetic center is 102 Hz. Do not reinterpret this preset through centered-396 quick-template logic.
 
 `A-SHAM-0` = first matched control L=396 Hz, R=396 Hz.
 
@@ -123,13 +120,13 @@ Do not conflate the 1979–1980 Army/SRI Remote Perturbation experiment with the
 
 Remote Perturbation is a REQUEST/INFLUENCE precedent for machine-output testing. Hemi-Sync reconstruction comes from Monroe/Gateway/CENTER LANE audio evidence and later Monroe engineering sources.
 
-MIP may combine lessons from both, but provenance must remain explicit in code, configuration, reports, and documentation.
-
 ### 8. Historical Hemi-Sync exactness gate
 
-The engine must implement the layered signal primitives and deterministic render path in `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`.
+The engine must implement the layered signal primitives required by the active audio requirements.
 
-Current reported CENTER LANE anchors `100 Hz base + 1.5 Hz binaural beat` and `200 Hz base + 4 Hz binaural beat` remain incomplete historical candidates until primary-source semantics are verified. The application must not infer opposite-ear frequency, centered-pair architecture, simultaneous use, relative level, phase, modulation, noise, sequencing, or timing when those values are not source-verified.
+Current reported CENTER LANE anchors `100 Hz base + 1.5 Hz binaural beat` and `200 Hz base + 4 Hz binaural beat` remain incomplete historical candidates until primary-source semantics are verified.
+
+The application must not infer opposite-ear frequency, centered-pair architecture, simultaneous use, relative level, phase, modulation, noise, sequencing, or timing when those values are not source-verified.
 
 ### 9. Machine state versus participant representation
 
@@ -139,7 +136,7 @@ Older binary examples do not authorize hardcoding literal digits into the engine
 
 ### 10. Session/trial hierarchy
 
-For the first baseline, one Communication Session contains one primary REQUEST trial. The software architecture must nevertheless preserve separate `session_id` and `trial_id` fields so later protocols can contain multiple trials without schema breakage.
+For the first baseline, one Communication Session contains one primary REQUEST trial. The software architecture must preserve separate `session_id` and `trial_id` fields so later protocols can contain multiple trials without schema breakage.
 
 Blocks group multiple sessions/trials for balanced assignment, block-level reveal, and cross-session analysis.
 
@@ -148,8 +145,6 @@ Blocks group multiple sessions/trials for balanced assignment, block-level revea
 Top-level repository directory `sessions/` contains durable MIP project/session documentation.
 
 Application runtime evidence is stored under the application runtime data root, not silently written over top-level historical Markdown records.
-
-The application may generate an explicit export/import summary for later repository documentation, but must not automatically publish or push runtime session data.
 
 ### 12. Logging authority
 
@@ -179,7 +174,7 @@ Multi-minute/hour/day and absolute-time modes are configuration capabilities, no
 
 The application must log scheduled time, scheduler wake time, actual generation time, monotonic/wall-clock discontinuity, and lateness.
 
-If the application is stopped, the computer sleeps, or the target is missed beyond the profile tolerance, preserve the trial and mark the timing protocol deviation. Never silently generate a replacement outcome and pretend it occurred on time.
+If the application is stopped, the computer sleeps, or the target is missed beyond profile tolerance, preserve the trial and mark the timing protocol deviation. Never silently generate a replacement outcome and pretend it occurred on time.
 
 ### 16. First baseline endpoint
 
@@ -191,16 +186,16 @@ Do not silently substitute the best post-hoc stream window for the declared prim
 
 ## Older Codex prompts
 
-`CODEX_PROMPT_REQUEST_APP_V0.1.md` through `V0.9.md` remain project history and implementation ancestry.
+`CODEX_PROMPT_REQUEST_APP_V0.1.md` through `V1.0.md` remain project history and implementation ancestry.
 
-For new implementation work, only `V1.0` is active.
+For new implementation/revision work, only `V1.1` is active.
 
 ## Implementation ambiguity rule
 
-If a mandatory requirement remains genuinely ambiguous after applying this authority file, Codex must:
+If a mandatory requirement remains genuinely ambiguous after applying this authority file, the implementation agent must:
 
 1. identify the exact conflicting files/clauses;
 2. avoid silently choosing the most convenient interpretation;
 3. implement unaffected components;
 4. record the blocked decision in its completion report;
-5. make no scientific/protocol assumption that changes the meaning of the experiment without an explicit versioned decision.
+5. make no scientific/protocol assumption that changes experiment meaning without an explicit versioned decision.
