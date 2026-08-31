@@ -136,15 +136,16 @@ This file resolves conflicts between old and active generations. Do not silently
 - `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
+- `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
 - `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
 - `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md` where not superseded by the active integrity specification
 - `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
 
 ## Active Codex prompt
 
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`
 
-`V0.8` supersedes all older Codex prompts for new implementation work. Earlier prompt files remain historical records.
+`V0.9` is the active additive final implementation instruction. Every mandatory requirement from `V0.8` remains active unless `V0.9` explicitly changes or strengthens it. Earlier Codex prompt files remain historical implementation ancestry.
 
 ---
 
@@ -253,7 +254,16 @@ Aborted or incomplete sessions stay in the block record. A replacement-session r
 
 # Current audio engineering decision
 
-The Audio Lab is separate from formal research sessions.
+The first build must support **both** easy component-isolation playback and the full data-driven layered Hemi-Sync/patent-grounded reconstruction architecture.
+
+## Historical provenance separation
+
+Do not conflate:
+
+- the 1979–1980 Army/SRI Remote Perturbation work, which is a REQUEST/INFLUENCE precedent for the machine-output side;
+- the Monroe/Gateway/CENTER LANE lineage, which is the historical source family for Hemi-Sync/state-induction audio reconstruction.
+
+A modern MIP experiment may combine lessons from both, but software labels, manifests, reports, and documentation must keep provenance explicit.
 
 ## Easy first-use presets
 
@@ -283,6 +293,8 @@ Do not reinterpret this explicit pair through a different centered formula.
 - center = 396 Hz;
 - status = matched control.
 
+These are simple component-isolation conditions. They are not complete historical Hemi-Sync environments.
+
 ## One-number quick mode
 
 Default template:
@@ -302,13 +314,52 @@ The UI must show that the template supplies the 4-Hz assumption.
 - one-click presets;
 - one-number quick mode;
 - simple custom;
-- advanced custom.
+- advanced custom;
+- separate historical/layered reconstruction area.
 
 Preview playback can continue indefinitely until manual pause/stop.
 
-An unsaved Audio Lab state can never silently enter a formal research session. Formal session audio must be saved/versioned, referenced by the experiment profile, snapshotted, manifested, and hashed before commitment.
+An unsaved Audio Lab state can never silently enter a formal research session.
 
-Historical audio provenance labels remain strict. A reconstruction is not an exact historical Gateway/CENTER LANE waveform unless all material parameters are source-verified.
+## Formal layered Hemi-Sync render gate
+
+For a formal session using layered Hemi-Sync/patent-grounded reconstruction:
+
+1. resolve exact versioned recipe;
+2. resolve complete session audio duration/timeline;
+3. render complete finite stereo artifact before START eligibility;
+4. generate machine-readable manifest;
+5. verify rendered artifact automatically;
+6. compute SHA-256 for audio, manifest, and verification report;
+7. bind the hashes into the immutable session commitment/config snapshot;
+8. permit START only after verification passes;
+9. play that exact frozen artifact;
+10. log playback start/end/errors;
+11. never retune/regenerate after commitment.
+
+Required layered primitives include, where supported/documented:
+
+- multiple carriers;
+- binaural and monaural relationships;
+- per-component levels;
+- phase relationships;
+- envelopes;
+- AM/FM;
+- ordinary/deterministic pink-red noise;
+- patent-grounded phased/swept pink noise;
+- delay-line/comb-filter processing;
+- low-frequency sweep;
+- Septon/multi-carrier structures;
+- fades;
+- normalization/headroom;
+- cue-track support;
+- future voice-layer references.
+
+The recoverable `PHASED_PINK_PATENT_5356368` architecture is mandatory in the first engine build.
+
+Historical provenance labels remain strict. A reconstruction is not an exact historical Gateway/CENTER LANE waveform unless all material parameters are source-verified.
+
+Current reported CENTER LANE candidate anchors `100 Hz base + 1.5 Hz binaural beat` and `200 Hz base + 4 Hz binaural beat` remain incomplete pending primary-source semantics. Do not infer the opposite-ear frequency, centered synthesis, simultaneous use, level, phase, modulation, noise, sequencing, or timing.
 
 ---
 
@@ -399,8 +450,6 @@ Current high-priority historical unknowns remain:
 - biomonitoring hardware/tuning logic;
 - PEAR/Schmidt primary temporal protocols plus replications/nulls/critiques.
 
-Reported CENTER LANE candidate parameters `100 Hz base / 1.5 Hz beat` and `200 Hz base / 4 Hz beat` remain historical candidates pending exact source/channel semantics. Do not invent left/right values.
-
 ---
 
 # Current session record
@@ -421,8 +470,8 @@ Do not reuse these IDs.
 ### EXP-001 — Phenomenology Replication
 Standardized sessions without hidden target performance claims.
 
-### EXP-002 — Audio Component Isolation
-Blinded/sham comparison of experimental/historical/patent-derived audio conditions.
+### EXP-002 — Audio Component Isolation / Reconstruction
+Blinded/sham comparison of simple experimental conditions plus separately provenance-gated layered Hemi-Sync/patent-grounded reconstructions.
 
 ### EXP-003 — READ / NUMBER PERCEPTION
 Hidden machine target, locked participant response, reveal/scoring; kept separate from REQUEST.
@@ -462,19 +511,20 @@ No result may be described at a higher level than the evidence permits.
 
 # Immediate next action
 
-The software specification has been reviewed and versioned for implementation.
+The active software specification has been reviewed and versioned for implementation.
 
 Next action:
 
-> Give Codex `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`, require it to read the active repository authority/files in full, implement the local application, run every required automated test and dry-run artifact, and produce the mandatory completion report.
+> Give Codex `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`. Require Codex to read `V0.8` in full because `V0.9` is additive, then execute the complete active authority/specification chain, run every required automated test and dry-run artifact, and produce the mandatory completion report.
 
 Before any real participant REQUEST session:
 
 1. automated tests must pass or blockers must be explicit;
 2. RNG calibration bundle must exist;
 3. dry immediate/relative/absolute/mapping/block runs must be reviewed;
-4. required audio presets and Audio Lab must be verified;
-5. session integrity/tamper/reveal/logging-failure/missed-target behavior must be verified;
-6. one complete dry session must be manually audited from commitment through integrity report;
-7. known limitations must be documented;
-8. no real participant session is launched automatically by Codex.
+4. simple Audio Lab presets/quick/custom paths must be verified;
+5. layered Hemi-Sync/Septon/phased-pink deterministic render and verification gates must be demonstrated;
+6. session integrity/tamper/reveal/logging-failure/missed-target behavior must be verified;
+7. one complete dry session must be manually audited from commitment through integrity report;
+8. known limitations and all unresolved historical audio parameters must be documented;
+9. no real participant session is launched automatically by Codex.
