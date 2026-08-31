@@ -52,6 +52,7 @@ The repository is the durable project memory and the single source of truth for 
 - Active altered-state sessions must be hands-free and must not require screen inspection after induction begins.
 - Machine-output trend timing and participant-state timing must be logged and interpreted separately.
 - Audio generated from patents or archival clues must retain exact provenance labels; unrecovered parameters may not be silently guessed.
+- The first software implementation must remain deliberately small and easy to debug; mobile packaging is deferred until the research core is stable.
 
 ## Current program areas
 
@@ -74,7 +75,7 @@ The repository is the durable project memory and the single source of truth for 
 - Sham, blinding, leakage, and falsification controls
 - Local JSON/JSONL research tooling
 - Deterministic analytical session/block reporting
-- Desktop and Android local deployment
+- Local-computer deployment with ordinary Bluetooth audio-output support where useful
 - Practical protocol optimization and MIP-plus development
 
 ## Current active protocol-development files
@@ -90,13 +91,13 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
 - `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md`
-- `engineering/MOBILE_LOCAL_INSTALL_REQUIREMENTS_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.4.md`
+- `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.5.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
 `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.2.md` is the current step-by-step execution guide for the first standardized MIP Communication Sessions. It supersedes v0.1 for active sessions because the requested value is now assigned and memorized before state induction and the session is hands-free after START.
 
-`engineering/CODEX_PROMPT_REQUEST_APP_V0.4.md` is the current implementation prompt. It supersedes earlier Codex prompts for new implementation work and adds layered audio/noise synthesis, continuous trend telemetry, deterministic analytical reporting, and Android local installation requirements.
+`engineering/CODEX_PROMPT_REQUEST_APP_V0.5.md` is the current implementation prompt. It supersedes earlier Codex prompts for new implementation work. The active build is local-computer only; Android/mobile packaging and phone-control transport are deferred.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
