@@ -26,22 +26,25 @@ If future operation requires a phone as a controller, that must be designed as a
 The research core already contains several high-value components that require careful testing:
 
 - exact/configurable audio synthesis;
-- Audio Lab and quick playback;
+- Audio Lab and one-number quick playback;
 - hands-free session timing;
 - random-source behavior;
 - stream telemetry;
 - temporal analysis;
 - objective-state vs participant-representation mapping;
-- immutable logging;
-- lock/reveal behavior;
-- deterministic analytical reporting.
+- append-only/tamper-evident session evidence;
+- raw-report lock and server-side reveal behavior;
+- block/session/trial organization;
+- deterministic analytical reporting;
+- complete Sessions/Reports audit review.
 
 Adding Android packaging or a custom Bluetooth control channel now would increase implementation and debugging surface without improving the first scientific test.
 
-## Active implementation prompt
+## Active implementation authority
 
 Use:
 
-`engineering/CODEX_PROMPT_REQUEST_APP_V0.7.md`
+- `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`
 
 Earlier implementation prompts and mobile requirements remain preserved as project history but are not active requirements for the current implementation.
