@@ -1,3 +1,4 @@
 runtime/sessions/
 runtime/audio-artifacts/
+runtime/dry-run/
 *.tmp
