@@ -25,7 +25,8 @@ If future operation requires a phone as a controller, that must be designed as a
 
 The research core already contains several high-value components that require careful testing:
 
-- exact/configurable audio synthesis;
+- exact/configurable simple audio synthesis;
+- deterministic layered Hemi-Sync/patent-grounded rendering and verification;
 - Audio Lab and one-number quick playback;
 - hands-free session timing;
 - random-source behavior;
@@ -45,6 +46,8 @@ Adding Android packaging or a custom Bluetooth control channel now would increas
 Use:
 
 - `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`
 
-Earlier implementation prompts and mobile requirements remain preserved as project history but are not active requirements for the current implementation.
+`V0.9` inherits all mandatory requirements of `V0.8` unless it explicitly changes or strengthens them.
+
+Earlier implementation prompts and mobile requirements remain preserved as project history but are not active requirements for new implementation work.
