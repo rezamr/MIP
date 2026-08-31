@@ -25,11 +25,13 @@ If future operation requires a phone as a controller, that must be designed as a
 
 The research core already contains several high-value components that require careful testing:
 
-- exact audio synthesis;
+- exact/configurable audio synthesis;
+- Audio Lab and quick playback;
 - hands-free session timing;
 - random-source behavior;
 - stream telemetry;
 - temporal analysis;
+- objective-state vs participant-representation mapping;
 - immutable logging;
 - lock/reveal behavior;
 - deterministic analytical reporting.
@@ -40,6 +42,6 @@ Adding Android packaging or a custom Bluetooth control channel now would increas
 
 Use:
 
-`engineering/CODEX_PROMPT_REQUEST_APP_V0.5.md`
+`engineering/CODEX_PROMPT_REQUEST_APP_V0.7.md`
 
-Earlier mobile requirements and v0.4 remain preserved as project history but are not active requirements for the current implementation.
+Earlier implementation prompts and mobile requirements remain preserved as project history but are not active requirements for the current implementation.
