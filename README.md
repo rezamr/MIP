@@ -53,6 +53,9 @@ The repository is the durable project memory and the single source of truth for 
 - Active altered-state sessions must be hands-free and must not require screen inspection after induction begins.
 - Machine-output trend timing and participant-state timing must be logged and interpreted separately.
 - Audio generated from patents or archival clues must retain exact provenance labels; unrecovered parameters may not be silently guessed.
+- A simple binaural pair is a valid component test but is not automatically a complete historical Hemi-Sync environment.
+- Formal layered Hemi-Sync/historical-reconstruction session audio must be deterministically rendered, verified, manifested, hashed, frozen before START, and then played as that exact artifact.
+- The 1979–1980 Army/SRI Remote Perturbation protocol and the Monroe/Gateway/CENTER LANE Hemi-Sync audio lineage are separate historical families and must not be conflated.
 - The first software implementation must remain deliberately small and easy to debug; mobile packaging is deferred until the research core is stable.
 - Participant-facing absolute clock time is not required for the first REQUEST baseline; machine timing remains exact and authoritative.
 - The software research core must be configuration-driven: current experiment choices are profiles, not hardcoded engine limitations.
@@ -66,6 +69,7 @@ The repository is the durable project memory and the single source of truth for 
 - Historical and archival reconstruction
 - CENTER LANE / MIAS advanced training recovery
 - Hemi-Sync audio engineering reconstruction
+- Layered deterministic historical/patent-grounded audio rendering
 - Monroe patent analysis
 - Bentov physiology reconstruction
 - Session phenomenology
@@ -102,6 +106,7 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `protocols/MIP_NUM_REQUEST_V0.2.md`
 - `research/AUDIO_FREQUENCY_TEST_MATRIX_V0.1.md`
 - `research/ADDRESS_VS_PAYLOAD_ENCODING_HYPOTHESES_V0.1.md`
+- `research/SOURCE_VERIFICATION_QUEUE.md`
 - `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md`
 - `engineering/CONFIG_DRIVEN_EXPERIMENT_ENGINE_V0.2.md`
 - `engineering/REQUEST_TEST_APP_SPEC_V0.2.md`
@@ -109,10 +114,11 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `engineering/HANDS_FREE_SESSION_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md`
 - `engineering/AUDIO_LAB_AND_QUICK_PLAYER_REQUIREMENTS_V0.1.md`
+- `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
 - `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
 - `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md`
 - `engineering/DEPLOYMENT_SCOPE_DECISION_V0.1.md`
-- `engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md`
+- `engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md`
 - `research/RP_1979_1980_BINARY_PERTURBATION_FULL_AUDIT.md`
 
 `protocols/MIP_FIRST_OPERATIONAL_PLAYBOOK_V0.3.md` is the current full step-by-step execution guide. It aligns the hands-free session with the current immediate-request timing decision and continuous hidden stream.
@@ -125,7 +131,9 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 
 `engineering/SESSION_DATA_INTEGRITY_AND_REVIEW_REQUIREMENTS_V0.1.md` is the current session-evidence authority. It requires unambiguous IDs, an append-only hash-chained event log, lossless machine-output evidence linked by hashes, immutable raw-report locking, server-side reveal gating, failure/crash preservation, integrity verification, block records, and a complete Sessions/Reports audit interface.
 
-`engineering/CODEX_PROMPT_REQUEST_APP_V0.8.md` is the active implementation prompt. It supersedes all earlier Codex prompt versions for new implementation work. The active build remains local-computer only; Android/mobile packaging, phone-control transport, cloud services, and databases are deferred.
+`engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md` is the active full-audio reconstruction requirement. It explicitly separates simple binaural component tests from layered Hemi-Sync reconstruction, requires deterministic full stereo render + verification + manifest + hashes before formal use, and forbids inventing unrecovered CENTER LANE waveform parameters.
+
+`engineering/CODEX_PROMPT_REQUEST_APP_V0.9.md` is the active implementation prompt. It inherits all mandatory v0.8 application requirements and adds the final full Hemi-Sync render/verification gate. All earlier Codex prompt versions remain project history. The active build remains local-computer only; Android/mobile packaging, phone-control transport, cloud services, and databases are deferred.
 
 The initial user audio condition `A-U396-4` is preserved as a personal experimental baseline. Historical/patent/scientific comparator conditions are kept separately labeled and must not be conflated.
 
