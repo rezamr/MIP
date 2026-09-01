@@ -72,6 +72,7 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.equal(initial.ok, true, JSON.stringify(initial));
     assert.equal(initial.bridge, true);
     assert.equal(initial.rendererReady, true);
+    assert.deepEqual(initial.audioControlSmoke, { doublePlay: true, play: true, rerender: true, pause: true, resume: true, gain: true, stop: true });
     assert.ok(initial.settings.schemaVersion >= 12);
     assert.ok(initial.profiles.length > 0);
     assert.ok(initial.recipes.length >= 3);
@@ -84,8 +85,11 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.equal(initial.audioFinalized.type, "AUDIO_FINALIZED");
     assert.match(initial.audioFinalized.digest, /^[a-f0-9]{64}$/i);
     assert.ok(initial.audioFinalized.totalFrames > 0);
+    assert.equal(initial.finalizationReplayBlocked, true);
+    assert.equal(initial.returnFinalizationRouteBlocked, true);
     assert.ok(initial.eventTypes.includes("AUDIO_STOP_REQUESTED"));
     assert.ok(initial.eventTypes.includes("AUDIO_FINALIZED"));
+    assert.ok(initial.eventTypes.includes("AUDIO_FINALIZATION_REJECTED"));
     assert.ok(initial.audioHealth);
     assert.equal(initial.audioHealthVerification.valid, true, JSON.stringify(initial.audioHealthVerification));
     assert.equal(initial.audioHealth.integrityStatus, "VERIFIED");

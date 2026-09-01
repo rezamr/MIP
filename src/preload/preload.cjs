@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld(
     verifySession: (value) => call("sessions:verify", withId(value)),
     getOutput: (value) => call("sessions:output", withId(value)),
     createSession: (value) => call("sessions:create", value),
+    commitSession: (value) => call("sessions:commit", value),
     startSession: (value) => call("sessions:start", value),
     returnSession: (value) => call("sessions:return", withId(value)),
 
@@ -58,14 +59,17 @@ contextBridge.exposeInMainWorld(
     getLateAnnotations: (value) => call("annotations:list", withId(value)),
 
     backupNow: (value) => call("backup:create", value),
+    backupHistory: (value) => call("backup:history", value),
     verifyBackup: (value) => call("backup:verify", value),
     restoreBackup: (value) => call("backup:restore", value),
     getSettings: () => call("settings:get"),
     updateSettings: (value) => call("settings:update", value),
     exportSession: (value) => call("exports:session", withId(value)),
     importLegacy: (value) => call("legacy:import", value),
+    exportDiagnostics: (value) => call("diagnostics:export", value),
 
     audioHealth: (value) => call("audio:health", value),
+    prepareAudioHealth: (value) => call("audio:health:prepare", value),
     audioHealthHistory: (value) => call("audio:health-history", value),
     audioHealthDetail: (value) => call("audio:health-detail", withId(value)),
     verifyAudioHealth: (value) => call("audio:health-verify", withId(value)),
@@ -74,5 +78,24 @@ contextBridge.exposeInMainWorld(
     verifyCalibration: (value) => call("calibration:verify", withId(value)),
     saveCalibration: (value) => call("calibration:save", value),
     runCalibration: (value) => call("calibration:run", value),
+
+    onProtocolStage: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("mip:protocol-stage", listener);
+      return () => ipcRenderer.removeListener("mip:protocol-stage", listener);
+    },
+    onProtocolComplete: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("mip:protocol-complete", listener);
+      return () => ipcRenderer.removeListener("mip:protocol-complete", listener);
+    },
+    onProtocolReturnCue: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("mip:protocol-return-cue", listener);
+      return () => ipcRenderer.removeListener("mip:protocol-return-cue", listener);
+    },
   }),
 );

@@ -18,6 +18,9 @@ function dto(row) {
     contextStates: json(row.context_states_json, []),
     ownerResult: row.owner_result,
     ownerNote: row.owner_note,
+    checkMode: row.check_mode || "CUSTOM",
+    intendedDurationMs: row.intended_duration_ms === null || row.intended_duration_ms === undefined ? null : Number(row.intended_duration_ms),
+    verification: json(row.verification_json, null),
     resultHash: row.result_hash,
     integrityStatus: row.integrity_status,
     details: row.detail_hash ? {
@@ -67,6 +70,15 @@ export class AudioHealthRepository {
       ownerResult: input.ownerResult || "Uncertain",
       ownerNote: input.ownerNote || "",
       integrityStatus: input.integrityStatus || "UNVERIFIED",
+      checkMode: input.checkMode || "CUSTOM",
+      intendedDurationMs: input.intendedDurationMs === undefined || input.intendedDurationMs === null ? null : Number(input.intendedDurationMs),
+      verification: input.verification || {
+        telemetryStructurallyValid: input.integrityStatus === "VERIFIED",
+        processorIdentityVerified: false,
+        digestVerified: Boolean(input.digest),
+        continuityValid: input.continuity?.ok !== false,
+        ownerAudibleResult: input.ownerResult || "Uncertain",
+      },
     };
     result.resultHash = input.resultHash || sha256(canonical(result));
     const details = {
@@ -79,7 +91,7 @@ export class AudioHealthRepository {
       createdUtc: result.startedUtc,
     };
     const tx = this.db.transaction(() => {
-      this.db.prepare("INSERT INTO audio_health(diagnostic_id,recipe_id,recipe_version,started_utc,ended_utc,duration_ms,sample_rate,base_latency,output_latency,generated_frames,continuity_json,clipping,context_states_json,owner_result,owner_note,result_hash,integrity_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(result.diagnosticId, result.recipeId, result.recipeVersion, result.startedUtc, result.endedUtc, result.durationMs, result.sampleRate, result.baseLatency, result.outputLatency, result.generatedFrames, JSON.stringify(result.continuity), result.clipping ? 1 : 0, JSON.stringify(result.contextStates), result.ownerResult, result.ownerNote, result.resultHash, result.integrityStatus);
+      this.db.prepare("INSERT INTO audio_health(diagnostic_id,recipe_id,recipe_version,started_utc,ended_utc,duration_ms,sample_rate,base_latency,output_latency,generated_frames,continuity_json,clipping,context_states_json,owner_result,owner_note,result_hash,integrity_status,check_mode,intended_duration_ms,verification_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(result.diagnosticId, result.recipeId, result.recipeVersion, result.startedUtc, result.endedUtc, result.durationMs, result.sampleRate, result.baseLatency, result.outputLatency, result.generatedFrames, JSON.stringify(result.continuity), result.clipping ? 1 : 0, JSON.stringify(result.contextStates), result.ownerResult, result.ownerNote, result.resultHash, result.integrityStatus, result.checkMode, result.intendedDurationMs, JSON.stringify(result.verification));
       this.db.prepare("INSERT INTO audio_health_details(diagnostic_id,telemetry_json,device_json,environment_json,digest,format_json,detail_hash,created_utc) VALUES(?,?,?,?,?,?,?,?)").run(result.diagnosticId, JSON.stringify(details.telemetry), JSON.stringify(details.device), JSON.stringify(details.environment), details.digest, JSON.stringify(details.format), sha256(canonical(details)), details.createdUtc);
       for (const observation of input.observations || []) this.addObservation(result.diagnosticId, observation);
     });
@@ -108,8 +120,13 @@ export class AudioHealthRepository {
     const value = dto(row);
     delete value.details;
     delete value.resultHash;
+    const legacyValue = { ...value };
+    delete legacyValue.checkMode;
+    delete legacyValue.intendedDurationMs;
+    delete legacyValue.verification;
     const errors = [];
-    if (sha256(canonical(value)) !== row.result_hash) errors.push("Audio health result hash mismatch");
+    const currentValue = { ...value };
+    if (sha256(canonical(currentValue)) !== row.result_hash && sha256(canonical(legacyValue)) !== row.result_hash) errors.push("Audio health result hash mismatch");
     for (const observation of this.observations(id)) {
       const copy = { diagnosticId: observation.diagnosticId, observedUtc: observation.observedUtc, monotonicNs: observation.monotonicNs, contextState: observation.contextState, observationType: observation.observationType, suspended: observation.suspended, resumed: observation.resumed, frames: observation.frames, details: observation.details };
       if (sha256(canonical(copy)) !== observation.observationHash) errors.push(`Audio health observation hash mismatch: ${observation.observationId}`);

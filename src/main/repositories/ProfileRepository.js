@@ -145,7 +145,8 @@ export class ProfileRepository {
     const row = this.db.prepare("SELECT v.config_json,m.validation_json FROM profile_versions v LEFT JOIN profile_version_metadata m ON m.profile_id=v.profile_id AND m.version=v.version WHERE v.profile_id=? AND v.version=?").get(id, value);
     if (!row) throw new Error(`Profile version not found: ${id} v${version}`);
     const validation = json(row.validation_json, null);
-    if (validation && validation.valid === false) throw new Error(`Cannot activate invalid profile: ${id} v${version}`);
+    const currentValidation = validateProfile(json(row.config_json, {}));
+    if (!currentValidation.valid || validation?.valid === false) throw new Error(`Cannot activate invalid profile: ${id} v${version}`);
     const tx = this.db.transaction(() => {
       this.db.prepare("UPDATE profile_version_metadata SET is_active=0,status=CASE WHEN is_draft=1 THEN 'DRAFT' ELSE 'INACTIVE' END WHERE profile_id=?").run(id);
       this.db.prepare("UPDATE profile_version_metadata SET is_active=1,is_draft=0,status='ACTIVE' WHERE profile_id=? AND version=?").run(id, value);

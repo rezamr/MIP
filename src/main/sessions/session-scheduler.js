@@ -419,6 +419,7 @@ export class SessionScheduler {
     this.onEvidence = merged.onEvidence || this.evidence.onEvidence || this.evidence.record || this.evidence.append;
     this.onOutput = merged.onOutput || merged.onOutputRecord || this.evidence.onOutput || this.evidence.recordOutput;
     this.onComplete = merged.onComplete || merged.onCompletion || this.evidence.onComplete || this.evidence.onCompletion;
+    this.onFailure = merged.onFailure || merged.onOutputFailure || this.evidence.onFailure || this.evidence.onOutputFailure;
     this.onTimingDeviation = merged.onTimingDeviation || this.evidence.onTimingDeviation;
     this.onClockDiscontinuity = merged.onClockDiscontinuity || this.evidence.onClockDiscontinuity;
     this.onInterrupted = merged.onInterrupted || this.evidence.onInterrupted;
@@ -702,7 +703,11 @@ export class SessionScheduler {
   }
 
   _fail(error) {
-    this._emitEvidence("OUTPUT_FAILED", { error: String(error?.message || error) });
+    const failure = { error: String(error?.message || error), status: "LOGGING_FAILURE", sessionId: this.sessionId, trialId: this.trialId };
+    try { this._emitEvidence("OUTPUT_FAILED", failure); } catch { /* preserve the original failure classification */ }
+    if (typeof this.onFailure === "function") {
+      try { Promise.resolve(this.onFailure(failure)).catch(() => {}); } catch { /* fail closed below */ }
+    }
     this._finish("ABORTED");
     return this.status;
   }

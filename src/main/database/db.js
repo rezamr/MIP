@@ -16,7 +16,7 @@ import { LegacyImporter } from "../import/LegacyImporter.js";
 import { SessionExporter } from "../export/SessionExporter.js";
 import { SessionController } from "../sessions/session-controller.js";
 
-export const CURRENT_SCHEMA_VERSION = 12;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -486,6 +486,71 @@ function ensureV12Tables(db) {
   `);
 }
 
+function ensureV13Tables(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_id_sequence(
+      sequence_id INTEGER PRIMARY KEY CHECK(sequence_id=1),
+      next_value INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS protocol_stage_events(
+      session_id TEXT NOT NULL REFERENCES sessions(session_id),
+      trial_id TEXT REFERENCES trials(trial_id),
+      stage_seq INTEGER NOT NULL,
+      stage_type TEXT NOT NULL,
+      planned_utc TEXT,
+      planned_monotonic_ns TEXT,
+      actual_utc TEXT NOT NULL,
+      actual_monotonic_ns TEXT NOT NULL,
+      status TEXT NOT NULL,
+      cue_id TEXT,
+      payload_json TEXT NOT NULL,
+      stage_hash TEXT NOT NULL,
+      PRIMARY KEY(session_id, stage_seq)
+    );
+    INSERT OR IGNORE INTO session_id_sequence(sequence_id,next_value)
+      VALUES(1, 3);
+  `);
+}
+
+function ensureV13Columns(db) {
+  const columns = {
+    session_details: [
+      ["audio_session_nonce", "TEXT"],
+      ["audio_processor_version", "TEXT"],
+      ["audio_digest_version", "TEXT"],
+      ["audio_pcm_format", "TEXT"],
+      ["audio_last_processor_sequence", "INTEGER"],
+      ["memory_confirmed_utc", "TEXT"],
+      ["baseline_json", "TEXT"],
+      ["environment_json", "TEXT"],
+      ["safety_json", "TEXT"],
+      ["protocol_anchor_json", "TEXT"],
+    ],
+    audio_health: [
+      ["check_mode", "TEXT"],
+      ["intended_duration_ms", "INTEGER"],
+      ["verification_json", "TEXT"],
+    ],
+  };
+  for (const [table, fields] of Object.entries(columns)) {
+    if (!tableExists(db, table)) continue;
+    for (const [column, definition] of fields) addColumn(db, table, column, definition);
+  }
+}
+
+function backfillSessionIdSequence(db) {
+  if (!tableExists(db, "session_id_sequence")) return;
+  const rows = db.prepare("SELECT session_id FROM sessions WHERE session_id GLOB 'S[0-9]*'").all();
+  let maximum = 2; // S0001 and S0002 are reserved historical identifiers.
+  for (const row of rows) {
+    const value = Number(String(row.session_id).slice(1));
+    if (Number.isSafeInteger(value)) maximum = Math.max(maximum, value);
+  }
+  const next = db.prepare("SELECT next_value FROM session_id_sequence WHERE sequence_id=1").get()?.next_value;
+  if (!Number.isSafeInteger(Number(next)) || Number(next) < maximum + 1)
+    db.prepare("INSERT INTO session_id_sequence(sequence_id,next_value) VALUES(1,?) ON CONFLICT(sequence_id) DO UPDATE SET next_value=excluded.next_value").run(maximum + 1);
+}
+
 function ensureAudioHealthTable(db) {
   db.exec("CREATE TABLE IF NOT EXISTS audio_health(diagnostic_id TEXT PRIMARY KEY,recipe_id TEXT,recipe_version INTEGER,started_utc TEXT,ended_utc TEXT,duration_ms INTEGER,sample_rate INTEGER,base_latency REAL,output_latency REAL,generated_frames INTEGER,continuity_json TEXT,clipping INTEGER,context_states_json TEXT,owner_result TEXT,owner_note TEXT,result_hash TEXT,integrity_status TEXT)");
 }
@@ -599,6 +664,11 @@ function ensureIndexes(db) {
   `);
 }
 
+function ensureV13Indexes(db) {
+  if (tableExists(db, "protocol_stage_events"))
+    db.exec("CREATE INDEX IF NOT EXISTS idx_protocol_stage_session ON protocol_stage_events(session_id, stage_seq)");
+}
+
 function ensureTriggers(db) {
   const immutable = [
     ["immutable_events_update", "evidence_events", "UPDATE", "evidence_events are immutable"],
@@ -658,8 +728,10 @@ function ensureTriggers(db) {
     ["immutable_legacy_reports_delete", "legacy_reports", "DELETE", "legacy source reports are immutable"],
     ["immutable_legacy_analyses_update", "legacy_analyses", "UPDATE", "legacy source analyses are immutable"],
     ["immutable_legacy_analyses_delete", "legacy_analyses", "DELETE", "legacy source analyses are immutable"],
-    ["immutable_analysis_versions_update", "analysis_versions", "UPDATE", "analysis versions are immutable"],
-    ["immutable_analysis_versions_delete", "analysis_versions", "DELETE", "analysis versions are immutable"],
+      ["immutable_analysis_versions_update", "analysis_versions", "UPDATE", "analysis versions are immutable"],
+      ["immutable_analysis_versions_delete", "analysis_versions", "DELETE", "analysis versions are immutable"],
+      ["immutable_protocol_stage_events_update", "protocol_stage_events", "UPDATE", "protocol stage events are immutable"],
+      ["immutable_protocol_stage_events_delete", "protocol_stage_events", "DELETE", "protocol stage events are immutable"],
   ];
   for (const [name, table, action, message] of immutable) {
     if (tableExists(db, table)) immutableTrigger(db, name, table, action, message);
@@ -725,10 +797,22 @@ export function migrateConnection(db) {
     ensureIndexes(db);
     allowAnalysisBackfill(db);
   });
+  apply(13, () => {
+    ensureV12Tables(db);
+    ensureV12Columns(db);
+    ensureV13Tables(db);
+    ensureV13Columns(db);
+    ensureIndexes(db);
+    ensureV13Indexes(db);
+  });
 
   // A failed process can leave objects created just before a migration marker.
   ensureV12Tables(db);
   ensureV12Columns(db);
+  ensureV13Tables(db);
+  ensureV13Columns(db);
+  ensureV13Indexes(db);
+  backfillSessionIdSequence(db);
   backfillSessionDetails(db);
   backfillVersionMetadata(db);
   allowAnalysisBackfill(db);
@@ -901,13 +985,17 @@ export class MipDatabase {
     return { state: to, from, event, projection };
   }
   nextSessionId() {
-    const rows = this.db.prepare("SELECT session_id FROM sessions WHERE session_id GLOB 'S[0-9]*'").all();
-    let max = 0;
-    for (const row of rows) {
-      const value = Number(String(row.session_id).slice(1));
-      if (Number.isSafeInteger(value)) max = Math.max(max, value);
-    }
-    return `S${String(max + 1).padStart(4, "0")}`;
+    const sequence = this.db.prepare("SELECT next_value FROM session_id_sequence WHERE sequence_id=1").get();
+    if (sequence && Number.isSafeInteger(Number(sequence.next_value)))
+      return `S${String(Math.max(3, Number(sequence.next_value))).padStart(4, "0")}`;
+    return "S0003";
+  }
+
+  _allocateSessionId() {
+    const row = this.db.prepare("UPDATE session_id_sequence SET next_value=next_value+1 WHERE sequence_id=1 RETURNING next_value-1 AS allocated").get();
+    const allocated = Number(row?.allocated);
+    if (!Number.isSafeInteger(allocated) || allocated < 3) throw new Error("Session ID allocator is unavailable.");
+    return `S${String(allocated).padStart(4, "0")}`;
   }
 
   beginSession(profile, participant = "Local participant", recordType = "dry", material = {}) {
@@ -920,27 +1008,66 @@ export class MipDatabase {
     const persistedProfile = json(profileRow.config_json, null);
     if (!persistedProfile) throw new Error(`Persisted profile is invalid: ${profile.id}`);
     profile = persistedProfile;
-    const id = this.nextSessionId();
-    const trial = `${id}-T001`;
+    const deferredCommit = material.deferCommit === true;
     const created = now();
     const snapshot = { ...clone(profile), material: clone(material) };
     const config = JSON.stringify(snapshot);
     const configHash = sha256(canonical(snapshot));
-    const objective = material.objective === undefined ? null : String(material.objective);
+    const objective = material.objective === undefined ? null : JSON.stringify(material.objective);
     const target = material.participantTarget === undefined ? null : String(material.participantTarget);
     const timing = material.timing || profile.timing || null;
     const scheduledUtc = material.scheduledUtc ?? timing?.scheduledUtc ?? null;
     const scheduledMonotonicNs = material.scheduledMonotonicNs ?? timing?.scheduledMonotonicNs ?? null;
+    let id = null;
+    let trial = null;
     const tx = this.db.transaction(() => {
-      this.db.prepare("INSERT INTO sessions(session_id,created_utc,participant_label,record_type,profile_id,profile_version,status,reveal_policy,recovery_state,manifest_json,hidden_objective,participant_target) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(id, created, participant, recordType, profile.id, profile.version ?? null, "COMMITTED", profile.reveal?.policy || null, null, config, objective, target);
-      this.db.prepare("INSERT INTO trials(trial_id,session_id,trial_seq,trial_type,config_json,state) VALUES(?,?,?,?,?,?)").run(trial, id, 1, "REQUEST_IMMEDIATE_STREAM", JSON.stringify(profile.output || {}), "COMMITTED");
-      this.db.prepare("INSERT INTO session_commitments(session_id,canonical_config,config_hash,committed_utc) VALUES(?,?,?,?)").run(id, config, configHash, created);
+      // Allocation and insertion happen in the same SQLite transaction.  If a
+      // historical database already contains the candidate, advance and retry
+      // without ever reusing a reserved identifier.
+      for (let attempt = 0; attempt < 32; attempt += 1) {
+        id = this._allocateSessionId();
+        trial = `${id}-T001`;
+        try {
+          this.db.prepare("INSERT INTO sessions(session_id,created_utc,participant_label,record_type,profile_id,profile_version,status,reveal_policy,recovery_state,manifest_json,hidden_objective,participant_target) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(id, created, participant, recordType, profile.id, profile.version ?? null, deferredCommit ? "DRAFT" : "COMMITTED", profile.reveal?.policy || null, null, config, objective, target);
+          break;
+        } catch (error) {
+          if (!/UNIQUE|PRIMARY KEY|constraint/i.test(String(error?.message || error)) || attempt === 31) throw error;
+        }
+      }
+      this.db.prepare("INSERT INTO trials(trial_id,session_id,trial_seq,trial_type,config_json,state) VALUES(?,?,?,?,?,?)").run(trial, id, 1, "REQUEST_IMMEDIATE_STREAM", JSON.stringify(profile.output || {}), deferredCommit ? "DRAFT" : "COMMITTED");
       this.db.prepare("INSERT INTO session_details(session_id,session_snapshot_json,session_snapshot_hash,timing_json,scheduled_monotonic_ns,scheduled_utc,app_version,engine_version,audio_version,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?)").run(id, config, configHash, timing ? JSON.stringify(timing) : null, scheduledMonotonicNs, scheduledUtc, material.appVersion || APP_VERSION, material.engineVersion || ENGINE_VERSION, material.audio?.audioVersion || AUDIO_VERSION, created);
-      if (material.audio) this.commitAudioConfig(id, material.audio, { withinTransaction: true });
-      this.appendEvent(id, trial, "COMMITTED", { configHash, profileId: profile.id, profileVersion: profile.version, rng: material.rng, recipe: material.audio, timing });
+      this.db.prepare("UPDATE session_details SET audio_session_nonce=?,protocol_anchor_json=? WHERE session_id=?")
+        .run(material.audioNonce || null, material.protocolAnchor ? JSON.stringify(material.protocolAnchor) : null, id);
+      if (!deferredCommit) {
+        this.db.prepare("INSERT INTO session_commitments(session_id,canonical_config,config_hash,committed_utc) VALUES(?,?,?,?)").run(id, config, configHash, created);
+        if (material.audio) this.commitAudioConfig(id, material.audio, { withinTransaction: true });
+        this.appendEvent(id, trial, "COMMITTED", { configHash, profileId: profile.id, profileVersion: profile.version, rng: material.rng, recipe: material.audio, timing });
+      } else {
+        this.appendEvent(id, trial, "DRAFT_CREATED", { profileId: profile.id, profileVersion: profile.version });
+      }
     });
     tx();
-    return { id, sessionId: id, trial, trialId: trial, configHash };
+    return { id, sessionId: id, trial, trialId: trial, configHash, status: deferredCommit ? "DRAFT" : "COMMITTED", deferredCommit };
+  }
+
+  commitDraftSession(sessionId, details = {}) {
+    const row = this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(sessionId);
+    if (!row) throw new Error(`Session not found: ${sessionId}`);
+    if (!["DRAFT", "TARGET_ASSIGNED"].includes(row.status)) throw new Error(`Session ${sessionId} is not a draft or target-assigned draft.`);
+    const sessionDetails = this.db.prepare("SELECT * FROM session_details WHERE session_id=?").get(sessionId);
+    const snapshot = json(sessionDetails?.session_snapshot_json, null);
+    if (!snapshot) throw new Error(`Session ${sessionId} has no immutable draft snapshot.`);
+    const committedUtc = now();
+    const configHash = sha256(canonical(snapshot));
+    const audio = snapshot.material?.audio || null;
+    const tx = this.db.transaction(() => {
+      this.db.prepare("INSERT INTO session_commitments(session_id,canonical_config,config_hash,committed_utc) VALUES(?,?,?,?)").run(sessionId, JSON.stringify(snapshot), configHash, committedUtc);
+      if (audio) this.commitAudioConfig(sessionId, audio, { withinTransaction: true });
+      this.db.prepare("UPDATE session_details SET memory_confirmed_utc=?,baseline_json=?,environment_json=?,safety_json=? WHERE session_id=?")
+        .run(details.memoryConfirmedUtc || committedUtc, details.baseline === undefined ? null : JSON.stringify(details.baseline), details.environment === undefined ? null : JSON.stringify(details.environment), details.safety === undefined ? null : JSON.stringify(details.safety), sessionId);
+    });
+    tx();
+    return { sessionId, configHash, committedUtc, status: "COMMITTED" };
   }
 
   saveReportDraft(sessionId, report = {}) {
@@ -954,8 +1081,10 @@ export class MipDatabase {
     const lockedUtc = now();
     const payloadJson = JSON.stringify(clone(report));
     const lockHash = sha256(payloadJson);
-    const current = this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId);
+    const current = this.db.prepare("SELECT status,reveal_policy FROM sessions WHERE session_id=?").get(sessionId);
     if (!current) throw new Error(`Session not found: ${sessionId}`);
+    if (current.reveal_policy && current.reveal_policy !== "AFTER_RAW_REPORT_LOCK")
+      throw new Error(`Reveal policy ${current.reveal_policy} is not implemented by the report-lock gate.`);
     // The historical synchronous database facade was used by v1 fixtures to
     // lock a report immediately after writing output, without driving the
     // Electron audio lifecycle. Preserve that import/test compatibility path
@@ -988,6 +1117,66 @@ export class MipDatabase {
       payload: { rawReportLocked: true },
     }, { evidence: { gate: "RAW_REPORT_LOCKED" } });
     return { sessionId, lockedUtc, lockHash, schemaVersion };
+  }
+
+  /**
+   * Strict Electron report-lock transaction.  Report insertion, draft
+   * deletion, both lifecycle projections, and their evidence events commit as
+   * one SQLite unit.  A retry after a completed lock is idempotent and never
+   * replaces the immutable payload.
+   */
+  lockRawReportAtomic(sessionId, report = {}, schemaVersion = "1.0") {
+    const session = this.db.prepare("SELECT status,reveal_policy FROM sessions WHERE session_id=?").get(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    if (session.reveal_policy && session.reveal_policy !== "AFTER_RAW_REPORT_LOCK")
+      throw new Error(`Reveal policy ${session.reveal_policy} is not implemented by the report-lock gate.`);
+    const existing = this.db.prepare("SELECT locked_utc,lock_hash,schema_version FROM raw_reports_locked WHERE session_id=?").get(sessionId);
+    if (existing) {
+      const eligible = ["REVEAL_ELIGIBLE", "REVEALED", "COMPLETE"].includes(session.status);
+      // A process can commit the immutable report row and lose power before
+      // the projection/event edge is written. Retrying the same lock request
+      // repairs only that missing lifecycle edge; it never replaces the
+      // locked payload or hash.
+      if (!eligible && ["RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED"].includes(session.status)) {
+        const trialId = this.sessions.trials(sessionId)[0]?.trialId || null;
+        const appendEdge = (from, to, eventType, payload, evidence) => {
+          const event = this.evidence.appendEvent(sessionId, trialId, eventType, payload);
+          const projection = this.evidence.projectTransition(sessionId, trialId, from, to, { eventId: event.eventId, occurredUtc: event.occurredUtc, monotonicNs: event.monotonicNs });
+          this.sessions.setStatus(sessionId, to);
+          if (trialId) this.db.prepare("UPDATE trials SET state=? WHERE trial_id=?").run(to, trialId);
+          this.evidence.addTransitionEvidence(sessionId, { trialId, projectionId: projection.projectionId, evidenceEventId: event.eventId, evidenceType: to, evidence });
+        };
+        this.db.transaction(() => {
+          this.db.prepare("DELETE FROM raw_report_drafts WHERE session_id=?").run(sessionId);
+          if (["RETURNED", "RAW_REPORT_DRAFT"].includes(session.status))
+            appendEdge(session.status, "RAW_REPORT_LOCKED", "RAW_REPORT_LOCKED", { lockHash: existing.lock_hash, schemaVersion: existing.schema_version }, { lockHash: existing.lock_hash, repaired: true });
+          appendEdge("RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEAL_ELIGIBLE", { rawReportLocked: true }, { gate: "RAW_REPORT_LOCKED", repaired: true });
+        })();
+        return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: true, repaired: true };
+      }
+      return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: eligible };
+    }
+    if (!["RETURNED", "RAW_REPORT_DRAFT"].includes(session.status))
+      throw new Error("A report cannot be locked before formal return.");
+    const payloadJson = JSON.stringify(clone(report));
+    const lockHash = sha256(payloadJson);
+    const lockedUtc = now();
+    const trialId = this.sessions.trials(sessionId)[0]?.trialId || null;
+    const appendEdge = (from, to, eventType, payload, evidence) => {
+      const event = this.evidence.appendEvent(sessionId, trialId, eventType, payload);
+      const projection = this.evidence.projectTransition(sessionId, trialId, from, to, { eventId: event.eventId, occurredUtc: event.occurredUtc, monotonicNs: event.monotonicNs });
+      this.sessions.setStatus(sessionId, to);
+      if (trialId) this.db.prepare("UPDATE trials SET state=? WHERE trial_id=?").run(to, trialId);
+      this.evidence.addTransitionEvidence(sessionId, { trialId, projectionId: projection.projectionId, evidenceEventId: event.eventId, evidenceType: to, evidence });
+      return { event, projection };
+    };
+    this.db.transaction(() => {
+      this.db.prepare("INSERT INTO raw_reports_locked(session_id,locked_utc,payload_json,lock_hash,schema_version) VALUES(?,?,?,?,?)").run(sessionId, lockedUtc, payloadJson, lockHash, schemaVersion);
+      this.db.prepare("DELETE FROM raw_report_drafts WHERE session_id=?").run(sessionId);
+      appendEdge(session.status, "RAW_REPORT_LOCKED", "RAW_REPORT_LOCKED", { lockHash, schemaVersion }, { lockHash });
+      appendEdge("RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEAL_ELIGIBLE", { rawReportLocked: true }, { gate: "RAW_REPORT_LOCKED" });
+    })();
+    return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: true, alreadyLocked: false };
   }
 
   getReport(sessionId, options = {}) {

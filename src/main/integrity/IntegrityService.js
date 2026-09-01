@@ -19,6 +19,31 @@ export class IntegrityService {
 
   _outputs(sessionId) { return this.db.prepare("SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(sessionId); }
 
+  _verifyProtocolStages(sessionId, errors) {
+    const rows = this.db.prepare("SELECT * FROM protocol_stage_events WHERE session_id=? ORDER BY stage_seq").all(sessionId);
+    const invalid = [];
+    for (const row of rows) {
+      const payload = safeJson(row.payload_json, undefined);
+      const core = {
+        sessionId: row.session_id,
+        trialId: row.trial_id || null,
+        stageSeq: row.stage_seq,
+        stageType: row.stage_type,
+        plannedUtc: row.planned_utc || null,
+        plannedMonotonicNs: row.planned_monotonic_ns || null,
+        actualUtc: row.actual_utc,
+        actualMonotonicNs: row.actual_monotonic_ns,
+        status: row.status,
+        cueId: row.cue_id || null,
+        payload,
+      };
+      if (payload === undefined || sha256(canonical(core)) !== row.stage_hash)
+        invalid.push(`Protocol stage ${row.stage_seq} hash mismatch`);
+    }
+    if (invalid.length) errors.push(...invalid);
+    return component(invalid.length === 0, { count: rows.length, stageTypes: rows.map((row) => row.stage_type) }, invalid);
+  }
+
   _verifyEvents(sessionId, session, errors) {
     const rows = this._events(sessionId);
     const eventErrors = [];
@@ -34,14 +59,19 @@ export class IntegrityService {
       const payload = safeJson(row.payload_json, undefined);
       const base = {
         sessionId: row.session_id,
+        trialId: row.trial_id || null,
         seq: row.seq,
+        eventId: row.event_id,
         eventType: row.event_type,
         occurredUtc: row.occurred_utc,
         monotonicNs: row.monotonic_ns,
         payload,
         previousHash: row.previous_hash,
       };
-      const hashValid = payload !== undefined && sha256(canonical(base)) === row.event_hash;
+      const legacyBase = { ...base };
+      delete legacyBase.trialId;
+      delete legacyBase.eventId;
+      const hashValid = payload !== undefined && [sha256(canonical(base)), sha256(canonical(legacyBase))].includes(row.event_hash);
       if (row.previous_hash !== previousHash || !hashValid) eventErrors.push(`Event ${row.seq} hash mismatch`);
       previousHash = row.event_hash;
     }
@@ -62,10 +92,26 @@ export class IntegrityService {
     const hashErrors = [];
     for (const row of rows) {
       const value = safeJson(row.value_json, undefined);
-      const accepted = value !== undefined && [
+      const core = {
+        sessionId,
+        trialId: row.trial_id || null,
+        outputSeq: row.output_seq,
+        generatedUtc: row.generated_utc,
+        monotonicNs: row.monotonic_ns,
+        value,
+        region: row.region || null,
+        scheduledUtc: row.scheduled_utc || null,
+        scheduledMonotonicNs: row.scheduled_monotonic_ns || null,
+        actualUtc: row.actual_utc || row.generated_utc,
+        actualMonotonicNs: row.actual_monotonic_ns || row.monotonic_ns,
+        latenessMs: row.lateness_ms ?? null,
+        timingStatus: row.timing_status || null,
+      };
+      const legacyHashes = [
         sha256(canonical({ id: sessionId, i: row.output_seq, value })),
         sha256(canonical({ sessionId, outputSeq: row.output_seq, value })),
-      ].includes(row.record_hash);
+      ];
+      const accepted = value !== undefined && [sha256(canonical(core)), ...legacyHashes].includes(row.record_hash);
       if (!accepted) hashErrors.push(`Machine output ${row.output_seq} record hash mismatch`);
     }
     const finalization = this.db.prepare("SELECT * FROM output_finalizations WHERE session_id=?").get(sessionId);
@@ -174,6 +220,7 @@ export class IntegrityService {
     if (rawErrors.length) errors.push(...rawErrors);
     const annotations = this._verifyAnnotations(sessionId, errors);
     const transitions = this._verifyTransitions(sessionId, errors);
+    const protocolStages = this._verifyProtocolStages(sessionId, errors);
     const analysis = this.db.prepare("SELECT * FROM analyses WHERE session_id=?").get(sessionId);
     const analysisPayload = safeJson(analysis?.payload_json, undefined);
     const analysisInput = safeJson(analysis?.input_json, undefined);
@@ -232,6 +279,7 @@ export class IntegrityService {
       rawReport: component(rawValid, { present: Boolean(locked), lockHash: locked?.lock_hash || null }, rawErrors),
       lateAnnotations: annotations,
       transitionProjectionsEvidence: transitions,
+      protocolStages,
       analysisInput: component(analysisValid, {
         present: Boolean(analysis),
         inputHash: analysis?.input_hash || null,
@@ -277,7 +325,22 @@ export class IntegrityService {
     const session = this._session(sessionId);
     if (!session) return { valid: false, sessionId, redacted: true, errors: [`Session not found: ${sessionId}`] };
     const result = this.verifySession(sessionId, { persist: false });
-    return { valid: result.valid, sessionId, redacted: true, schemaVersion: result.schemaVersion, eventCount: result.eventCount, machineOutputCount: result.machineOutputCount, configFingerprint: result.configFingerprint, machineOutputFingerprint: result.machineOutputFingerprint, components: Object.fromEntries(Object.entries(result.components).map(([key, value]) => [key, { valid: value.valid, errors: value.errors, present: value.present, count: value.count }])), errors: result.errors };
+    return {
+      valid: result.valid,
+      sessionId,
+      redacted: true,
+      schemaVersion: result.schemaVersion,
+      eventCount: result.eventCount,
+      machineOutputCount: result.machineOutputCount,
+      components: Object.fromEntries(Object.entries(result.components).map(([key, value]) => [key, {
+        valid: value.valid,
+        errors: value.errors,
+        present: value.present,
+        count: value.count,
+        stageTypes: key === "protocolStages" ? value.stageTypes : undefined,
+      }])) ,
+      errors: result.errors,
+    };
   }
 
   verifyDatabase(options = {}) {

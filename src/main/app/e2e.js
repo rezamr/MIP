@@ -23,7 +23,7 @@ export async function runElectronE2E(mainWindow, options = {}) {
     const result = await mainWindow.webContents.executeJavaScript(`(async () => {
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const jsonSafe = (value) => JSON.parse(JSON.stringify(value, (_key, child) => typeof child === "bigint" ? child.toString() : child));
-      const forbidden = new Set(["objective", "hiddenObjective", "hidden_objective", "actualObjective", "actualObjectiveState", "participantTarget", "participant_target", "target", "requested", "value", "value_json", "recordHash", "record_hash", "streamDigest", "finalStreamDigest", "analysisHash", "inputHash"]);
+      const forbidden = new Set(["objective", "hiddenObjective", "hidden_objective", "actualObjective", "actualObjectiveState", "participantTarget", "participant_target", "target", "requested", "value", "value_json", "recordHash", "record_hash", "streamDigest", "finalStreamDigest", "analysisHash", "inputHash", "configFingerprint", "finalFingerprint", "machineOutputFingerprint"]);
       const containsForbidden = (value) => {
         if (Array.isArray(value)) return value.some(containsForbidden);
         if (!value || typeof value !== "object") return false;
@@ -37,6 +37,53 @@ export async function runElectronE2E(mainWindow, options = {}) {
       output.recipes = await window.mip.getAudioPresets();
       output.rendererReady = document.readyState === "complete" && Boolean(document.querySelector("#app"));
       if (!output.rendererReady) throw new Error("renderer did not initialize");
+
+      // Exercise the actual Audio Lab buttons through the renderer instead of
+      // only testing AudioController directly.  This catches stale-controller
+      // references and UI lifecycle races where audio continues after Stop.
+      document.querySelector('[data-page="audio"]')?.click();
+      await sleep(100);
+      const audioControlSmoke = {};
+      const playerText = () => document.querySelector("#playerState")?.innerText || "";
+      const waitForPlayerState = async (state) => {
+        for (let attempt = 0; attempt < 150; attempt += 1) {
+          if (new RegExp("\\\\b" + state + "\\\\b", "i").test(playerText())) return true;
+          await sleep(20);
+        }
+        return false;
+      };
+      document.querySelector("#livePlay")?.click();
+      // A second click while the first prepare is still pending must be
+      // serialized by the renderer; only the latest controller may remain
+      // connected and audible.
+      document.querySelector("#livePlay")?.click();
+      audioControlSmoke.doublePlay = await waitForPlayerState("playing");
+      audioControlSmoke.play = await waitForPlayerState("playing");
+      // Re-open the same page while audio is live.  The controls are rebuilt
+      // by the renderer, so this catches a UI-only reset that could otherwise
+      // leave an active Worklet with a disabled Stop button.
+      document.querySelector('[data-page="audio"]')?.click();
+      await sleep(100);
+      audioControlSmoke.rerender = !document.querySelector("#liveStop")?.disabled;
+      document.querySelector("#livePause")?.click();
+      audioControlSmoke.pause = await waitForPlayerState("paused");
+      document.querySelector("#liveResume")?.click();
+      audioControlSmoke.resume = await waitForPlayerState("playing");
+      const gainInput = document.querySelector("#liveGain");
+      const gainValue = document.querySelector("#liveGainValue");
+      if (gainInput && gainValue) {
+        gainInput.value = "0.60";
+        gainInput.dispatchEvent(new Event("input", { bubbles: true }));
+        document.querySelector("#liveGainApply")?.click();
+        audioControlSmoke.gain = gainValue.textContent === "0.60";
+        await sleep(100);
+      } else {
+        audioControlSmoke.gain = false;
+      }
+      document.querySelector("#liveStop")?.click();
+      audioControlSmoke.stop = await waitForPlayerState("stopped");
+      output.audioControlSmoke = audioControlSmoke;
+      if (!Object.values(audioControlSmoke).every(Boolean)) throw new Error("Audio Lab control smoke failed: " + JSON.stringify(audioControlSmoke));
 
       if (${JSON.stringify(phase)} === "restart") {
         const expected = ${JSON.stringify(options.expectedSessionId || null)};
@@ -96,7 +143,7 @@ export async function runElectronE2E(mainWindow, options = {}) {
       output.preparedRecipe = prepared.audio;
       const { default: AudioController } = await import(new URL("./audio-controller.js", location.href).href);
       const controller = new AudioController({ timeoutMs: 5000 });
-      const ready = await controller.prepare(prepared.audio, { timeoutMs: 5000 });
+      const ready = await controller.prepare(prepared.audio, { timeoutMs: 5000, handshake: prepared.handshake });
       output.processorReady = {
         processorVersion: ready.processorVersion,
         recipeId: ready.recipeId,
@@ -121,8 +168,20 @@ export async function runElectronE2E(mainWindow, options = {}) {
       };
       await window.mip.audioFinalized({ id: session.sessionId, finalization: jsonSafe(finalization) });
       output.returned = await window.mip.returnSession({ id: session.sessionId });
+      try {
+        await window.mip.audioFinalized({ id: session.sessionId, finalization: jsonSafe(finalization) });
+        output.finalizationReplayBlocked = false;
+      } catch {
+        output.finalizationReplayBlocked = true;
+      }
+      try {
+        await window.mip.returnSession({ id: session.sessionId, finalization: jsonSafe(finalization) });
+        output.returnFinalizationRouteBlocked = false;
+      } catch {
+        output.returnFinalizationRouteBlocked = true;
+      }
 
-      const rawDraft = { subjectiveTime: "Unknown", intensity: "0", modality: "unknown", notes: "Electron automated dry-run fixture" };
+      const rawDraft = { subjectiveTime: "Unknown", intensity: "0", modality: "unknown", certainty: "100", notes: "Electron automated dry-run fixture" };
       await window.mip.saveDraft({ id: session.sessionId, report: rawDraft });
       await window.mip.lockReport({ id: session.sessionId, report: rawDraft });
       output.lockedReport = await window.mip.getRawReport({ id: session.sessionId });
@@ -136,7 +195,9 @@ export async function runElectronE2E(mainWindow, options = {}) {
       output.integrity = await window.mip.verifySession({ id: session.sessionId });
       output.exported = await window.mip.exportSession({ id: session.sessionId });
       const healthController = new AudioController({ timeoutMs: 5000 });
-      await healthController.prepare(prepared.audio, { timeoutMs: 5000 });
+      const healthRecipe = await window.mip.getRecipe({ id: prepared.audio.recipeId, version: prepared.audio.version });
+      const healthChallenge = await window.mip.prepareAudioHealth({ recipeId: healthRecipe.recipeId, recipeVersion: healthRecipe.version, sampleRate: healthRecipe.sampleRate, channels: healthRecipe.channels });
+      await healthController.prepare(healthRecipe, { timeoutMs: 5000, handshake: healthChallenge.handshake });
       await healthController.start({ timeoutMs: 5000 });
       await sleep(120);
       const healthFinalization = await healthController.stop({ timeoutMs: 5000 });
@@ -151,7 +212,14 @@ export async function runElectronE2E(mainWindow, options = {}) {
         digest: healthFinalization.digest,
         continuity: healthFinalization.continuity,
         clipping: healthFinalization.clipping,
-        configFingerprint: prepared.audio.configFingerprint,
+        configFingerprint: healthRecipe.configFingerprint,
+        processorVersion: healthFinalization.processorVersion,
+        digestVersion: healthFinalization.digestVersion,
+        pcmFormat: healthFinalization.pcmFormat,
+        channels: healthFinalization.channels,
+        sessionId: healthFinalization.sessionId,
+        trialId: healthFinalization.trialId,
+        audioNonce: healthFinalization.audioNonce,
       };
       output.audioHealth = await window.mip.audioHealth({
         diagnosticId: "HEALTH-E2E-" + Date.now(),
@@ -169,9 +237,11 @@ export async function runElectronE2E(mainWindow, options = {}) {
         ownerResult: "Uncertain",
         ownerNote: "Automated AudioWorklet health fixture; physical acoustics not assessed.",
         telemetry: healthTelemetry,
+        challengeId: healthChallenge.challengeId,
         digest: healthFinalization.digest,
         format: { digestVersion: healthFinalization.digestVersion || "MIP_PCM_SHA256_V1", sampleRate: healthFinalization.sampleRate, channels: 2, sampleFormat: "PCM16LE_INTERLEAVED_LR" },
         observations: healthDiagnostics.contextStateChanges.map((change) => ({ contextState: change.state, observationType: "CONTEXT_STATE" })),
+        checkMode: "CUSTOM",
       });
       output.audioHealthVerification = await window.mip.verifyAudioHealth({ id: output.audioHealth.diagnosticId });
       output.backup = await window.mip.backupNow({});

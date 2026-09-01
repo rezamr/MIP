@@ -223,6 +223,16 @@ class FakeAudioContext {
   }
 }
 
+let releaseDelayedModule;
+class DelayedAudioContext extends FakeAudioContext {
+  constructor(options = {}) {
+    super(options);
+    this.audioWorklet = {
+      addModule: () => new Promise((resolve) => { releaseDelayedModule = resolve; }),
+    };
+  }
+}
+
 class FakeControllerNode {
   static mutateReady = null;
   static ignore = false;
@@ -269,8 +279,11 @@ test("AudioController exposes promise lifecycle, verifies readiness, and records
   await controller.pause();
   await controller.resume();
   assert.equal((await controller.setMasterGain(0.35)).gain, 0.35);
-  const finalized = await controller.stop();
+  const firstStop = controller.stop();
+  const secondStop = controller.stop();
+  const [finalized, repeatedFinalization] = await Promise.all([firstStop, secondStop]);
   assert.equal(finalized.digest, "a".repeat(64));
+  assert.deepEqual(repeatedFinalization, finalized);
   const diagnostics = controller.diagnostics();
   assert.equal(diagnostics.state, "stopped");
   assert.equal(diagnostics.sampleRate, SAMPLE_RATE);
@@ -300,4 +313,19 @@ test("AudioController timeout rejects and closes resources", async () => {
   assert.equal(controller.node, null);
   assert.ok(controller.latencies.some((entry) => entry.timeout === true));
   FakeControllerNode.ignore = false;
+});
+
+test("AudioController stop cancels preparation before node creation", async () => {
+  releaseDelayedModule = null;
+  const controller = new AudioController({ AudioContextClass: DelayedAudioContext, AudioWorkletNodeClass: FakeControllerNode, timeoutMs: 100 });
+  const preparing = controller.prepare(BUILTIN_RECIPES["A-U396-4"]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(controller._preparing, true);
+  const stopping = controller.stop();
+  await stopping;
+  releaseDelayedModule?.();
+  await assert.rejects(preparing, /cancelled|cleaned up/i);
+  assert.equal(controller.context, null);
+  assert.equal(controller.node, null);
+  assert.equal(controller.state, "idle");
 });

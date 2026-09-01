@@ -5,6 +5,7 @@ export const REPORT_TABS = Object.freeze([
   ["raw", "Raw Report"],
   ["analysis", "Analysis"],
   ["audio", "Audio & Configuration"],
+  ["export", "Files / Export"],
   ["integrity", "Integrity"],
 ]);
 

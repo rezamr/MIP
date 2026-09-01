@@ -108,7 +108,10 @@ export class AudioRecipeRepository {
     const value = Number(version);
     const row = this.db.prepare("SELECT v.config_json,m.validation_json,m.incomplete FROM audio_recipe_versions v LEFT JOIN audio_recipe_version_metadata m ON m.recipe_id=v.recipe_id AND m.version=v.version WHERE v.recipe_id=? AND v.version=?").get(id, value);
     if (!row) throw new Error(`Audio recipe version not found: ${id} v${version}`);
-    if (row.incomplete || json(row.validation_json, {})?.valid === false) throw new Error(`Cannot activate incomplete audio recipe: ${id} v${version}`);
+    const config = json(row.config_json, {});
+    const validation = validateRecipe(config);
+    if (row.incomplete || !validation.valid || json(row.validation_json, {})?.valid === false)
+      throw new Error(`Cannot activate incomplete audio recipe: ${id} v${version}`);
     const tx = this.db.transaction(() => {
       this.db.prepare("UPDATE audio_recipe_version_metadata SET is_active=0,status=CASE WHEN is_draft=1 THEN 'DRAFT' ELSE 'INACTIVE' END WHERE recipe_id=?").run(id);
       this.db.prepare("UPDATE audio_recipe_version_metadata SET is_active=1,is_draft=0,status='ACTIVE' WHERE recipe_id=? AND version=?").run(id, value);

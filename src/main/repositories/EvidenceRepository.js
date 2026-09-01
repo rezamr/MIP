@@ -8,6 +8,20 @@ function asValue(record) {
   return record.payload ?? null;
 }
 
+const SAFE_PRE_REVEAL_PAYLOAD_KEYS = new Set([
+  "reason", "error", "status", "stage", "stageType", "classification",
+  "deviation", "recoveryRequired", "recoveryReason", "source", "saved",
+  "gate", "ownerAuthorizedReveal", "ownerConfirmedMemory", "timingDeviation",
+  "audioFailed", "interrupted", "aborted", "reportDraft", "rawReportLocked",
+]);
+
+function safePreRevealPayload(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => SAFE_PRE_REVEAL_PAYLOAD_KEYS.has(key))
+    .map(([key, child]) => [key, child && typeof child === "object" && !Array.isArray(child) ? safePreRevealPayload(child) : child]));
+}
+
 export class EvidenceRepository {
   constructor(owner) {
     this.owner = owner;
@@ -20,9 +34,9 @@ export class EvidenceRepository {
     const seq = (last?.seq || 0) + 1;
     const occurredUtc = now();
     const monotonicNs = process.hrtime.bigint().toString();
-    const base = { sessionId, seq, eventType: type, occurredUtc, monotonicNs, payload: cleanPayload, previousHash: last?.event_hash || "GENESIS" };
-    const eventHash = sha256(canonical(base));
     const eventId = `${sessionId}-E${String(seq).padStart(5, "0")}`;
+    const base = { sessionId, trialId: trialId || null, seq, eventId, eventType: type, occurredUtc, monotonicNs, payload: cleanPayload, previousHash: last?.event_hash || "GENESIS" };
+    const eventHash = sha256(canonical(base));
     this.db.prepare("INSERT INTO evidence_events(session_id,seq,event_id,event_type,occurred_utc,monotonic_ns,payload_json,previous_hash,event_hash,trial_id) VALUES(?,?,?,?,?,?,?,?,?,?)").run(sessionId, seq, eventId, type, occurredUtc, monotonicNs, JSON.stringify(cleanPayload), base.previousHash, eventHash, trialId || null);
     // Transactional SessionController transitions project the state through
     // their adapter after the evidence row has been appended.  Do not create a
@@ -35,16 +49,23 @@ export class EvidenceRepository {
       const toState = cleanPayload.toState ?? cleanPayload.to ?? cleanPayload.state;
       if (toState) this.projectTransition(sessionId, trialId, fromState, toState, { eventId, occurredUtc, monotonicNs });
     }
-    return { ...base, trialId: trialId || null, eventId, eventHash, hash: eventHash };
+    return { ...base, eventHash, hash: eventHash };
   }
 
   listFull(sessionId) {
-    return this.db.prepare("SELECT seq,event_id AS eventId,event_type AS type,occurred_utc AS occurredUtc,monotonic_ns AS monotonicNs,payload_json AS payload,previous_hash AS previousHash,event_hash AS hash,trial_id AS trialId FROM evidence_events WHERE session_id=? ORDER BY seq").all(sessionId).map((row) => ({ ...row, payload: json(row.payload, {}) }));
+    return this.db.prepare("SELECT session_id AS sessionId,seq,event_id AS eventId,event_type AS type,occurred_utc AS occurredUtc,monotonic_ns AS monotonicNs,payload_json AS payload,previous_hash AS previousHash,event_hash AS hash,trial_id AS trialId FROM evidence_events WHERE session_id=? ORDER BY seq").all(sessionId).map((row) => ({ ...row, payload: json(row.payload, {}) }));
   }
 
   listRedacted(sessionId) {
     const revealed = ["REVEALED", "COMPLETE"].includes(this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status);
-    return this.listFull(sessionId).map((event) => revealed ? event : { ...event, payload: redact(event.payload) });
+    return this.listFull(sessionId).map((event) => revealed ? event : {
+      sessionId: event.sessionId,
+      seq: event.seq,
+      eventId: event.eventId,
+      type: event.type,
+      occurredUtc: event.occurredUtc,
+      payload: safePreRevealPayload(event.payload),
+    });
   }
 
   list(sessionId, options = {}) { return options.full ? this.listFull(sessionId) : this.listRedacted(sessionId); }
@@ -56,23 +77,48 @@ export class EvidenceRepository {
     const value = asValue(record);
     const generatedUtc = record.generatedUtc || record.actualUtc || now();
     const monotonicNs = String(record.monotonicNs ?? process.hrtime.bigint());
-    const core = { sessionId, outputSeq, value };
-    const recordHash = record.recordHash || record.record_hash || sha256(canonical(core));
+    const trialId = record.trialId || record.trial_id || null;
+    const region = record.region || record.block || null;
+    const scheduledUtc = record.scheduledUtc || record.scheduled_utc || null;
+    const scheduledMonotonicNs = record.scheduledMonotonicNs || record.scheduled_monotonic_ns || null;
+    const actualUtc = record.actualUtc || record.actual_utc || generatedUtc;
+    const actualMonotonicNs = record.actualMonotonicNs || record.actual_monotonic_ns || monotonicNs;
+    const latenessMs = record.latenessMs ?? record.lateness_ms ?? null;
+    const timingStatus = record.timingStatus || record.timing_status || null;
+    const core = { sessionId, trialId, outputSeq, generatedUtc, monotonicNs, value, region, scheduledUtc, scheduledMonotonicNs, actualUtc, actualMonotonicNs, latenessMs, timingStatus };
+    const calculatedRecordHash = sha256(canonical(core));
+    const suppliedRecordHash = record.recordHash || record.record_hash;
+    if (suppliedRecordHash !== undefined && suppliedRecordHash !== null && suppliedRecordHash !== calculatedRecordHash)
+      throw new Error("recordHash does not match the canonical machine-output record.");
+    const recordHash = calculatedRecordHash;
     const write = this.db.transaction(() => {
-      this.db.prepare("INSERT INTO machine_outputs(session_id,trial_id,output_seq,generated_utc,monotonic_ns,value_json,region,record_hash,scheduled_utc,scheduled_monotonic_ns,actual_utc,actual_monotonic_ns,lateness_ms,timing_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(sessionId, record.trialId || record.trial_id || null, outputSeq, generatedUtc, monotonicNs, JSON.stringify(value), record.region || record.block || null, recordHash, record.scheduledUtc || record.scheduled_utc || null, record.scheduledMonotonicNs || record.scheduled_monotonic_ns || null, record.actualUtc || record.actual_utc || generatedUtc, record.actualMonotonicNs || record.actual_monotonic_ns || monotonicNs, record.latenessMs ?? record.lateness_ms ?? null, record.timingStatus || record.timing_status || null);
+      this.db.prepare("INSERT INTO machine_outputs(session_id,trial_id,output_seq,generated_utc,monotonic_ns,value_json,region,record_hash,scheduled_utc,scheduled_monotonic_ns,actual_utc,actual_monotonic_ns,lateness_ms,timing_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(sessionId, trialId, outputSeq, generatedUtc, monotonicNs, JSON.stringify(value), region, recordHash, scheduledUtc, scheduledMonotonicNs, actualUtc, actualMonotonicNs, latenessMs, timingStatus);
       if (record.scheduledUtc || record.scheduledMonotonicNs || record.actualUtc || record.actualMonotonicNs) this.recordTiming(sessionId, { ...record, outputSeq });
-      this.appendEvent(sessionId, record.trialId || record.trial_id || null, "MACHINE_OUTPUT_RECORDED", { outputSeq, recordHash });
+      this.appendEvent(sessionId, trialId, "MACHINE_OUTPUT_RECORDED", { outputSeq, recordHash });
     });
     write();
-    return { ...record, sessionId, outputSeq, value, generatedUtc, monotonicNs, recordHash };
+    return { ...record, sessionId, trialId, outputSeq, value, generatedUtc, monotonicNs, region, scheduledUtc, scheduledMonotonicNs, actualUtc, actualMonotonicNs, latenessMs, timingStatus, recordHash };
   }
 
   outputs(sessionId, options = {}) {
     const revealed = ["REVEALED", "COMPLETE"].includes(this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status);
-    return this.db.prepare("SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(sessionId).map((row) => ({
+    const limit = options.limit === undefined ? null : Math.min(5_000, Math.max(1, Number(options.limit)));
+    const offset = options.offset === undefined ? 0 : Math.max(0, Number(options.offset));
+    const query = limit === null
+      ? "SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq"
+      : "SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq LIMIT ? OFFSET ?";
+    const rows = limit === null ? this.db.prepare(query).all(sessionId) : this.db.prepare(query).all(sessionId, limit, offset);
+    const records = rows.map((row) => ({
       sessionId: row.session_id, trialId: row.trial_id, outputSeq: row.output_seq, generatedUtc: row.generated_utc, monotonicNs: row.monotonic_ns, region: row.region, recordHash: row.record_hash, scheduledUtc: row.scheduled_utc, scheduledMonotonicNs: row.scheduled_monotonic_ns, actualUtc: row.actual_utc, actualMonotonicNs: row.actual_monotonic_ns, latenessMs: row.lateness_ms, timingStatus: row.timing_status,
       ...(options.full && revealed ? { value: json(row.value_json, null) } : {}),
     }));
+    return options.paginated ? {
+      sessionId,
+      offset,
+      limit: limit ?? records.length,
+      total: Number(this.db.prepare("SELECT COUNT(*) AS count FROM machine_outputs WHERE session_id=?").get(sessionId).count),
+      records,
+    } : records;
   }
 
   recordTiming(sessionId, record = {}) {
@@ -82,6 +128,47 @@ export class EvidenceRepository {
     this.db.prepare("INSERT INTO timing_observations(observation_id,session_id,trial_id,output_seq,scheduled_monotonic_ns,scheduled_utc,actual_monotonic_ns,actual_utc,lateness_ms,timing_status,observation_hash,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(observationId, sessionId, observation.trialId, observation.outputSeq, observation.scheduledMonotonicNs, observation.scheduledUtc, observation.actualMonotonicNs, observation.actualUtc, observation.latenessMs, observation.timingStatus, observationHash, now());
     this.db.prepare("UPDATE session_details SET scheduled_monotonic_ns=COALESCE(scheduled_monotonic_ns,?),scheduled_utc=COALESCE(scheduled_utc,?),actual_start_monotonic_ns=COALESCE(actual_start_monotonic_ns,?),actual_start_utc=COALESCE(actual_start_utc,?) WHERE session_id=?").run(observation.scheduledMonotonicNs, observation.scheduledUtc, observation.actualMonotonicNs, observation.actualUtc, sessionId);
     return { observationId, ...observation, observationHash };
+  }
+
+  recordProtocolStage(sessionId, stage = {}) {
+    const stageType = String(stage.stageType || stage.type || "UNKNOWN");
+    const next = Number(this.db.prepare("SELECT COALESCE(MAX(stage_seq),0)+1 AS seq FROM protocol_stage_events WHERE session_id=?").get(sessionId).seq);
+    const actualUtc = stage.actualUtc || now();
+    const actualMonotonicNs = String(stage.actualMonotonicNs ?? process.hrtime.bigint());
+    const payload = JSON.parse(JSON.stringify(stage.payload || {}));
+    const core = {
+      sessionId,
+      trialId: stage.trialId || null,
+      stageSeq: next,
+      stageType,
+      plannedUtc: stage.plannedUtc || null,
+      plannedMonotonicNs: stage.plannedMonotonicNs === undefined || stage.plannedMonotonicNs === null ? null : String(stage.plannedMonotonicNs),
+      actualUtc,
+      actualMonotonicNs,
+      status: stage.status || "OBSERVED",
+      cueId: stage.cueId || null,
+      payload,
+    };
+    const stageHash = sha256(canonical(core));
+    this.db.prepare("INSERT INTO protocol_stage_events(session_id,trial_id,stage_seq,stage_type,planned_utc,planned_monotonic_ns,actual_utc,actual_monotonic_ns,status,cue_id,payload_json,stage_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(sessionId, core.trialId, next, stageType, core.plannedUtc, core.plannedMonotonicNs, actualUtc, actualMonotonicNs, core.status, core.cueId, JSON.stringify(payload), stageHash);
+    return { ...core, stageHash };
+  }
+
+  protocolStages(sessionId) {
+    return this.db.prepare("SELECT * FROM protocol_stage_events WHERE session_id=? ORDER BY stage_seq").all(sessionId).map((row) => ({
+      sessionId: row.session_id,
+      trialId: row.trial_id,
+      stageSeq: row.stage_seq,
+      stageType: row.stage_type,
+      plannedUtc: row.planned_utc,
+      plannedMonotonicNs: row.planned_monotonic_ns,
+      actualUtc: row.actual_utc,
+      actualMonotonicNs: row.actual_monotonic_ns,
+      status: row.status,
+      cueId: row.cue_id,
+      payload: json(row.payload_json, {}),
+      stageHash: row.stage_hash,
+    }));
   }
 
   projectTransition(sessionId, trialId, fromState, toState, evidence = {}) {

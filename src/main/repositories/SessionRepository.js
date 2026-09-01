@@ -1,5 +1,10 @@
 import { json } from "../database/db.js";
 
+function parseStoredValue(value) {
+  if (value === null || value === undefined) return null;
+  try { return JSON.parse(value); } catch { return value; }
+}
+
 const HIDDEN_KEYS = new Set([
   "objective",
   "hiddenObjective",
@@ -45,6 +50,7 @@ export class SessionRepository {
                 d.actual_start_monotonic_ns,d.actual_start_utc,
                 d.actual_end_monotonic_ns,d.actual_end_utc,
                 d.app_version,d.engine_version,d.audio_version,
+                (SELECT COUNT(*) FROM evidence_events ee WHERE ee.session_id=s.session_id) AS event_count,
                 CASE WHEN r.session_id IS NULL THEN 0 ELSE 1 END AS raw_report_locked
            FROM sessions s
            LEFT JOIN session_commitments c ON c.session_id=s.session_id
@@ -62,42 +68,50 @@ export class SessionRepository {
     const revealEligible = row.status === "REVEAL_ELIGIBLE";
     const snapshot = json(row.manifest_json, null);
     const timing = json(row.timing_json, null);
+    // Pre-reveal DTOs are an explicit allowlist.  Do not add a field here
+    // merely because it is convenient for a report; hidden-derived hashes,
+    // timing anchors, participant labels and projection snapshots stay out of
+    // renderer memory until the owner authorizes reveal.
     const dto = {
       sessionId: row.session_id,
       createdUtc: row.created_utc,
-      participantLabel: row.participant_label,
-      recordType: row.record_type,
       profileId: row.profile_id,
       profileVersion: row.profile_version,
       status: row.status,
       revealPolicy: row.reveal_policy,
       recoveryState: row.recovery_state,
-      configFingerprint: row.config_hash || row.session_snapshot_hash || null,
       rawReportLocked,
       revealEligible,
       revealed,
       // A locked raw report only satisfies the gate.  `hasReveal` means the
       // owner actually completed the separate REVEALED transition.
       hasReveal: revealed,
-      timing,
-      scheduledMonotonicNs: row.scheduled_monotonic_ns || null,
-      scheduledUtc: row.scheduled_utc || null,
-      actualStartMonotonicNs: row.actual_start_monotonic_ns || null,
-      actualStartUtc: row.actual_start_utc || null,
-      actualEndMonotonicNs: row.actual_end_monotonic_ns || null,
-      actualEndUtc: row.actual_end_utc || null,
-      outputHash: row.output_hash || null,
-      finalFingerprint: row.final_fingerprint || null,
-      finalStreamDigest: row.final_stream_digest || null,
-      appVersion: row.app_version || null,
-      engineVersion: row.engine_version || null,
-      audioVersion: row.audio_version || null,
+      eventCount: Number(row.event_count || 0),
     };
+    // Legacy imports carry no hidden active experiment state; retaining their
+    // provenance classification is safe and keeps migration tooling able to
+    // distinguish imported records from local runs.
+    if (row.status === "LEGACY_IMPORTED") dto.recordType = row.record_type;
     if (full && revealed) {
+      dto.participantLabel = row.participant_label;
+      dto.recordType = row.record_type;
+      dto.configFingerprint = row.config_hash || row.session_snapshot_hash || null;
+      dto.timing = timing;
+      dto.scheduledMonotonicNs = row.scheduled_monotonic_ns || null;
+      dto.scheduledUtc = row.scheduled_utc || null;
+      dto.actualStartMonotonicNs = row.actual_start_monotonic_ns || null;
+      dto.actualStartUtc = row.actual_start_utc || null;
+      dto.actualEndMonotonicNs = row.actual_end_monotonic_ns || null;
+      dto.actualEndUtc = row.actual_end_utc || null;
+      dto.outputHash = row.output_hash || null;
+      dto.finalFingerprint = row.final_fingerprint || null;
+      dto.finalStreamDigest = row.final_stream_digest || null;
+      dto.appVersion = row.app_version || null;
+      dto.engineVersion = row.engine_version || null;
+      dto.audioVersion = row.audio_version || null;
       dto.manifest = snapshot;
       dto.configSnapshot = snapshot;
-      const objective = row.hidden_objective === null ? null : Number(row.hidden_objective);
-      dto.hiddenObjective = Number.isNaN(objective) ? row.hidden_objective : objective;
+      dto.hiddenObjective = row.hidden_objective === null ? null : parseStoredValue(row.hidden_objective);
       dto.participantTarget = row.participant_target;
     }
     return dto;

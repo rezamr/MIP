@@ -31,7 +31,8 @@ export function bridgeCapabilities() {
 export async function api(url, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const body = bodyValue(options);
-  const parts = url.split("/").filter(Boolean);
+  const [path] = url.split("?");
+  const parts = path.split("/").filter(Boolean);
   const id = parts[2] ? decodeURIComponent(parts[2]) : undefined;
 
   if (bridge()) {
@@ -61,7 +62,10 @@ export async function api(url, options = {}) {
     if (parts[1] === "audio" && parts[2] === "duplicate") return bridge().duplicateRecipe(body);
     if (parts[1] === "sessions" && parts[3] === "events") return bridge().getEvents(id);
     if (parts[1] === "sessions" && parts[3] === "verify") return bridge().verifySession(id);
-    if (parts[1] === "sessions" && parts[3] === "output") return bridge().getOutput(id);
+    if (parts[1] === "sessions" && parts[3] === "output") {
+      const query = url.includes("?") ? Object.fromEntries(new URLSearchParams(url.split("?")[1])) : {};
+      return bridge().getOutput({ id, ...query, ...(query.paginated !== undefined ? { paginated: query.paginated === "true" } : {}) });
+    }
     if (parts[1] === "sessions" && parts[3] === "start") return bridge().startSession({ ...body, id });
     if (parts[1] === "sessions" && parts[3] === "draft") return bridge().saveDraft({ ...body, id });
     if (parts[1] === "sessions" && parts[3] === "lock-report") return bridge().lockReport({ ...body, id });

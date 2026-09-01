@@ -1,4 +1,6 @@
 import {
+  PCM_CANONICAL_FORMAT,
+  PCM_DIGEST_VERSION,
   PROCESSOR_VERSION,
   normalizeRecipe,
   validateEffectiveRecipe,
@@ -35,7 +37,11 @@ export class AudioController {
     this.latencies = [];
     this.processorErrors = [];
     this.contextMetrics = { sampleRate: null, baseLatency: null, outputLatency: null };
+    this.handshake = null;
     this._pending = new Map();
+    this._stopInFlight = null;
+    this._preparing = false;
+    this._cancelRequested = false;
   }
 
   _recordContextState() {
@@ -104,11 +110,14 @@ export class AudioController {
   }
 
   async prepare(recipe, options = {}) {
-    await this._cleanup();
-    if (!this.AudioContextClass || !this.AudioWorkletNodeClass) throw new Error("AudioWorklet is unavailable in this environment");
-    const desiredRate = recipe?.sampleRate === undefined ? undefined : Number(recipe.sampleRate);
-    const contextOptions = desiredRate ? { sampleRate: desiredRate } : undefined;
+    this._preparing = true;
+    this._cancelRequested = false;
     try {
+      await this._cleanup();
+      if (this._cancelRequested) throw new Error("Audio preparation was cancelled");
+      if (!this.AudioContextClass || !this.AudioWorkletNodeClass) throw new Error("AudioWorklet is unavailable in this environment");
+      const desiredRate = recipe?.sampleRate === undefined ? undefined : Number(recipe.sampleRate);
+      const contextOptions = desiredRate ? { sampleRate: desiredRate } : undefined;
       this.context = options.context ?? new this.AudioContextClass(contextOptions);
       this.contextMetrics = {
         sampleRate: this.context.sampleRate,
@@ -123,7 +132,21 @@ export class AudioController {
       if (effective.sampleRate !== this.context.sampleRate)
         throw new Error(`AudioContext sample rate ${this.context.sampleRate} does not match committed rate ${effective.sampleRate}`);
       this.recipe = effective;
+      const requestedHandshake = options.handshake && typeof options.handshake === "object"
+        ? options.handshake
+        : null;
+      this.handshake = requestedHandshake
+        ? {
+          sessionId: requestedHandshake.sessionId,
+          trialId: requestedHandshake.trialId,
+          audioNonce: requestedHandshake.audioNonce,
+          digestVersion: requestedHandshake.digestVersion ?? PCM_DIGEST_VERSION,
+          pcmFormat: requestedHandshake.pcmFormat ?? PCM_CANONICAL_FORMAT.body,
+          channels: requestedHandshake.channels ?? effective.channels,
+        }
+        : null;
       await this.context.audioWorklet.addModule(this.moduleUrl);
+      if (this._cancelRequested) throw new Error("Audio preparation was cancelled");
       this.node = new this.AudioWorkletNodeClass(this.context, this.processorName, {
         numberOfInputs: 0,
         numberOfOutputs: 1,
@@ -138,7 +161,10 @@ export class AudioController {
       };
       this.node.connect(this.context.destination);
       if (this.context.state !== "running") await this.context.resume();
-      const acknowledgement = await this._wait("CONFIGURE", "PROCESSOR_READY", { recipe: effective }, options.timeoutMs);
+      const configurePayload = { recipe: effective };
+      if (this.handshake) Object.assign(configurePayload, this.handshake);
+      const acknowledgement = await this._wait("CONFIGURE", "PROCESSOR_READY", configurePayload, options.timeoutMs);
+      if (this._cancelRequested) throw new Error("Audio preparation was cancelled");
       const expected = {
         processorVersion: PROCESSOR_VERSION,
         recipeId: effective.recipeId,
@@ -150,11 +176,21 @@ export class AudioController {
         if (acknowledgement[field] !== value)
           throw new Error(`PROCESSOR_READY ${field} mismatch: expected ${String(value)}, received ${String(acknowledgement[field])}`);
       }
+      if (this.handshake) {
+        for (const [field, value] of Object.entries(this.handshake)) {
+          if (acknowledgement[field] !== value)
+            throw new Error(`PROCESSOR_READY ${field} mismatch: expected ${String(value)}, received ${String(acknowledgement[field])}`);
+        }
+      }
+      if (this.handshake && acknowledgement.digestVersion !== PCM_DIGEST_VERSION)
+        throw new Error(`PROCESSOR_READY digestVersion mismatch: expected ${PCM_DIGEST_VERSION}, received ${String(acknowledgement.digestVersion)}`);
       this.state = "ready";
       return { ...acknowledgement, contextState: this.context.state, ...this.contextMetrics, latencyRecords: this.latencies.slice() };
     } catch (error) {
       await this._cleanup();
       throw error;
+    } finally {
+      this._preparing = false;
     }
   }
 
@@ -186,7 +222,27 @@ export class AudioController {
   }
 
   async stop(options = {}) {
-    if (!this.node) return this.finalization;
+    if (this._stopInFlight) return this._stopInFlight;
+    const operation = this._stopInternal(options);
+    this._stopInFlight = operation;
+    try {
+      return await operation;
+    } finally {
+      if (this._stopInFlight === operation) this._stopInFlight = null;
+    }
+  }
+
+  async _stopInternal(options = {}) {
+    if (this._preparing) {
+      this._cancelRequested = true;
+      await this._cleanup();
+      return this.finalization;
+    }
+    if (!this.node) {
+      const finalized = this.finalization;
+      await this._cleanup({ preserveState: Boolean(finalized) });
+      return finalized;
+    }
     if (this.finalization) {
       const finalized = this.finalization;
       await this._cleanup({ preserveState: true });
@@ -244,6 +300,7 @@ export class AudioController {
     if (!options.preserveState) {
       this.state = "idle";
       this.recipe = null;
+      this.handshake = null;
     }
   }
 }
