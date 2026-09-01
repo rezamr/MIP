@@ -1,26 +1,447 @@
-const $=s=>document.querySelector(s), app=$('#app'); let profiles=[],presets=[],selectedProfile=null,currentSession=null;
-let player={ctx:null,node:null,gain:null,status:'stopped',started:0,elapsed:0,timer:null,frames:0};
-const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(url,opt={}){if(window.mip){const method=(opt.method||'GET').toUpperCase(),body=opt.body?JSON.parse(opt.body):{},parts=url.split('/').filter(Boolean),id=parts[2];if(url==='/api/profiles')return window.mip.getProfiles();if(url==='/api/audio/presets')return window.mip.getAudioPresets();if(url==='/api/audio/quick')return window.mip.quickRecipe(body);if(url==='/api/sessions'&&method==='GET')return window.mip.listSessions();if(url==='/api/sessions'&&method==='POST')return window.mip.createSession(body);if(parts[1]==='sessions'&&parts[3]==='events')return window.mip.getEvents(id);if(parts[1]==='sessions'&&parts[3]==='verify')return window.mip.verifySession(id);if(parts[1]==='sessions'&&parts[3]==='output')return window.mip.getOutput(id);if(parts[1]==='sessions'&&parts[3]==='start')return window.mip.startSession({...body,id});if(parts[1]==='sessions'&&parts[3]==='draft')return window.mip.saveDraft({...body,id});if(parts[1]==='sessions'&&parts[3]==='lock-report')return window.mip.lockReport({...body,id});if(parts[1]==='sessions'&&parts[3]==='reveal')return window.mip.reveal({id});if(parts[1]==='sessions'&&parts.length===3)return window.mip.getSession(id);throw Error(`Unsupported local API route: ${url}`)}const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt}),d=await r.json();if(!r.ok)throw Error(d.error||d.errors?.join('; ')||'Request failed');return d;}
-function toast(s){const t=$('#toast');t.textContent=s;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2500)}
-function pill(s){return `<span class="pill ${/valid|locked|revealed|complete/i.test(s)?'valid':/fail|abort/i.test(s)?'bad':'neutral'}">${esc(s)}</span>`}
-function setPage(p){document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('active',b.dataset.page===p));$('#page-title').textContent={start:'Start Research Session',audio:'Audio Lab',profiles:'Experiment Profiles',calibration:'Calibration',reports:'Sessions & Reports'}[p];({start:renderStart,audio:renderAudio,profiles:renderProfiles,calibration:renderCalibration,reports:renderReports}[p])()}
-document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>setPage(b.dataset.page));
-function steps(n){return `<div class="stepper">${['Profile','Pre-session','Target & memory','Readiness','Commit & start'].map((x,i)=>`<div class="step ${i+1===n?'active':''} ${i+1<n?'done':''}"><span class="number">${i+1<n?'✓':i+1}</span>${x}</div>${i<4?'<span class="step-line"></span>':''}`).join('')}</div>`}
-async function init(){[profiles,presets]=await Promise.all([api('/api/profiles'),api('/api/audio/presets')]);selectedProfile=profiles[0];renderStart()}
-function renderStart(){app.innerHTML=`<div class="section-intro"><div><h2>Begin a controlled research session</h2><p>The operational profile is primary; demonstrations remain available in Experiment Profiles.</p></div>${pill('Step 1 of 5')}</div>${steps(1)}<div class="card"><div class="field"><label for="profileSelect">Operational session profile</label><select id="profileSelect"><option value="BASELINE_NOW_BINARY_V1">Immediate Binary Baseline · IMMEDIATE_REQUEST</option></select><small>Advanced validation profiles are available from Experiment Profiles.</small></div><div class="review-row"><span>Purpose</span><strong>${esc(selectedProfile.purpose)}</strong></div><div class="review-row"><span>Outcome / timing</span><strong>${esc(selectedProfile.outcomeSpace.type)} · ${esc(selectedProfile.timing.mode)}</strong></div><div class="review-row"><span>Audio</span><strong>${esc(selectedProfile.audio.recipeId)} · live synthesis</strong></div></div><div class="actions" style="margin-top:20px"><button class="button primary" id="next">Continue to pre-session setup →</button></div>`;$('#next').onclick=renderPre}
-function renderPre(){app.innerHTML=`<div class="section-intro"><div><h2>Pre-session state</h2><p>Capture only the baseline context needed by the selected protocol.</p></div></div>${steps(2)}<div class="card"><div class="form-grid"><div class="field"><label for="participant">Participant label</label><input id="participant" value="Local participant"></div><div class="field"><label for="record">Record type</label><select id="record"><option value="dry">Dry run / validation</option><option value="contemporaneous">Contemporaneous research record</option></select></div><div class="field"><label for="baseline">Baseline state</label><select id="baseline"><option>Ordinary alertness</option><option>Relaxed</option><option>Fatigued</option></select></div><div class="field"><label for="environment">Environment note</label><input id="environment" placeholder="Optional note"></div><div class="field full"><label><input id="safety" type="checkbox"> I can safely stop by opening my eyes, removing headphones, and reorienting.</label></div></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next">Continue to target assignment →</button></div>`;$('#back').onclick=renderStart;$('#next').onclick=async()=>{if(!$('#safety').checked)return toast('Confirm the physical safety stop method first.');try{currentSession=await api('/api/sessions',{method:'POST',body:JSON.stringify({profileId:selectedProfile.id,participantLabel:$('#participant').value,recordType:$('#record').value})});renderTarget()}catch(e){toast(e.message)}}}
-function renderTarget(){app.innerHTML=`<div class="section-intro"><div><h2>Assigned target & encoding</h2><p>The assignment is committed before START and cannot change afterwards.</p></div>${pill('Committed')}</div>${steps(3)}<div class="grid two"><div class="card target-box"><div class="subtle">Participant-facing target</div><div class="target">${esc(currentSession.participantTarget.match(/favor (.+?)(?: now\.)?$/)?.[1]||currentSession.participantTarget)}</div><p class="subtle">Memorize exactly what is shown. Hidden future output is not displayed.</p></div><div class="card"><h3>Encoding instruction</h3><p>${esc(currentSession.participantTarget)}</p><div class="callout">Release the request and observe neutrally. Fixed non-semantic cues guide hands-free stages.</div><label style="display:flex;gap:8px;margin-top:18px"><input id="memory" type="checkbox"> I have memorized the target and instruction.</label></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next" disabled>Continue to readiness review →</button></div>`;$('#back').onclick=renderPre;$('#memory').onchange=e=>$('#next').disabled=!e.target.checked;$('#next').onclick=renderReady}
-function renderReady(){const p=selectedProfile;app.innerHTML=`<div class="section-intro"><div><h2>Readiness review</h2><p>Human-readable commitment summary. Exact IDs and hashes are expandable.</p></div></div>${steps(4)}<div class="card"><div class="grid two"><div>${[['Profile',p.name],['Assignment','System random uniform'],['Target',currentSession.participantTarget],['Timing',p.timing.mode]].map(x=>`<div class="review-row"><span>${x[0]}</span><strong>${esc(x[1])}</strong></div>`).join('')}</div><div>${[['Audio',p.audio.recipeId+' · live synthesis'],['Random source',p.rng.provider],['Reveal policy',p.reveal.policy],['Analysis','Primary + exploratory windows']].map(x=>`<div class="review-row"><span>${x[0]}</span><strong>${esc(x[1])}</strong></div>`).join('')}</div></div><details style="margin-top:18px"><summary>Advanced configuration snapshot</summary><pre class="json">${esc(JSON.stringify(p,null,2))}</pre></details></div><div class="callout warning" style="margin-top:18px"><strong>Before START:</strong> confirm comfortable headphones and the normal OS output. The active screen becomes non-informative.</div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="start">START SESSION</button></div>`;$('#back').onclick=renderTarget;$('#start').onclick=async()=>{try{await api(`/api/sessions/${currentSession.sessionId}/start`,{method:'POST',body:JSON.stringify({memoryConfirmed:true})});renderHandsFree()}catch(e){toast(e.message)}}}
-function renderHandsFree(){app.innerHTML=`<div class="hands-free"><span class="eyebrow">SESSION ACTIVE · HANDS-FREE</span><div class="breath"></div><h2>Remain comfortable</h2><p>Audio, cues, telemetry, and hidden output are running automatically.<br>No screen interaction is required.</p><div class="progress"><span style="width:68%"></span></div><small>Stage in progress · hidden output protected</small><button class="button" id="returned">I have returned</button></div>`;$('#returned').onclick=renderRaw}
-function renderRaw(){app.innerHTML=`<div class="section-intro"><div><h2>Raw report · before reveal</h2><p>Capture observation first. The generated result remains hidden.</p></div>${pill('Raw Report Pending')}</div><div class="callout warning">Record subjective time before actual duration is shown. Unknown / Not experienced are valid responses.</div><div class="card" style="margin-top:18px"><div class="form-grid"><div class="field"><label for="subjectiveTime">Subjective total duration</label><input id="subjectiveTime" placeholder="e.g. 20 minutes"></div><div class="field"><label for="intensity">Overall state intensity (0–10)</label><input id="intensity" type="number" min="0" max="10"></div><div class="field"><label for="modality">Actual encoding modality</label><input id="modality" placeholder="semantic, visual, kinesthetic, combined"></div><div class="field"><label for="certainty">Pre-reveal belief (%)</label><input id="certainty" type="number" min="0" max="100"></div><div class="field full"><label for="timeline">Subjective timeline</label><textarea id="timeline" placeholder="Approximate sequence and moments"></textarea></div><div class="field full"><label for="notes">Free raw notes</label><textarea id="notes" placeholder="Observation only"></textarea></div></div><div class="actions" style="margin-top:18px"><button class="button" id="save">Save draft</button><button class="button primary" id="lock">LOCK RAW REPORT</button></div></div>`;const collect=()=>Object.fromEntries([...document.querySelectorAll('input,textarea')].map(x=>[x.id,x.value]));$('#save').onclick=async()=>{await api(`/api/sessions/${currentSession.sessionId}/draft`,{method:'POST',body:JSON.stringify({report:collect()})});toast('Draft autosaved locally.')} ;$('#lock').onclick=async()=>{if(!confirm('Lock this raw report? It becomes read-only.'))return;await api(`/api/sessions/${currentSession.sessionId}/lock-report`,{method:'POST',body:JSON.stringify({report:collect()})});app.innerHTML=`<div class="card"><div class="lock-box">✓ Raw report locked · reveal gate satisfied</div><p class="subtle">The original report is immutable. Later recollections are append-only.</p><button class="button primary" id="reveal">Reveal result</button></div>`;$('#reveal').onclick=async()=>{const r=await api(`/api/sessions/${currentSession.sessionId}/reveal`,{method:'POST'});app.innerHTML=`<div class="section-intro"><div><h2>Session reveal</h2><p>Neutral presentation; one session does not establish a mechanism.</p></div>${pill('Revealed')}</div><div class="grid three"><div class="card"><div class="metric">${esc(r.objective)}</div><div class="metric-label">Objective state</div></div><div class="card"><div class="metric">${esc(r.participantTarget)}</div><div class="metric-label">Participant target</div></div><div class="card"><div class="metric">${r.primary?.match?'Match':'No Match'}</div><div class="metric-label">Primary endpoint</div></div></div><div class="card" style="margin-top:18px"><div class="lock-box">✓ ${r.integrity?.valid?'Integrity verified':'Integrity requires review'}</div><p>${r.integrity?.eventCount||0} events · ${r.integrity?.machineOutputCount||0} machine-output records</p></div>`}}}
-function stopPlayer(){if(player.timer)clearInterval(player.timer);if(player.node)player.node.disconnect();if(player.ctx&&player.ctx.state!=='closed')player.ctx.close();player={ctx:null,node:null,gain:null,status:'stopped',started:0,elapsed:0,timer:null,frames:0};updatePlayer()}
-function updatePlayer(){const e=$('#playerState');if(!e)return;const secs=player.elapsed+(player.status==='playing'?(performance.now()-player.started)/1000:0);e.innerHTML=`<div class="review-row"><span>Status</span><strong>${player.status}</strong></div><div class="review-row"><span>Elapsed</span><strong>${secs.toFixed(1)} s</strong></div><div class="review-row"><span>Generated frames</span><strong>${player.frames||0}</strong></div>`;for(const [id,disabled] of [['livePlay',player.status==='playing'],['livePause',player.status!=='playing'],['liveResume',player.status!=='paused'],['liveStop',player.status==='stopped']])if($('#'+id))$('#'+id).disabled=disabled}
-async function playRecipe(recipe){stopPlayer();const C=window.AudioContext||window.webkitAudioContext;if(!C)throw Error('Web Audio is unavailable.');const ctx=new C(),gain=ctx.createGain();await ctx.audioWorklet.addModule(new URL('./mip-processor.js',import.meta.url));const node=new AudioWorkletNode(ctx,'mip-processor',{numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[2]});gain.gain.value=Number(recipe.gain??.25);node.port.onmessage=e=>{if(e.data?.type==='telemetry')player.frames=e.data.frames;updatePlayer()};node.port.postMessage({type:'configure',recipe});node.connect(gain);gain.connect(ctx.destination);await ctx.resume();player={ctx,node,gain,status:'playing',started:performance.now(),elapsed:0,timer:setInterval(updatePlayer,100),frames:0};updatePlayer()}
-function renderAudio(){app.innerHTML=`<div class="section-intro"><div><h2>Audio Lab</h2><p>Live stateful synthesis goes directly to the OS-selected output; no finite WAV loop is used.</p></div>${pill('Live synthesis')}</div><div class="card"><div class="grid two"><div><h3>Live player</h3><div class="field"><label for="recipeSelect">Preset / recipe</label><select id="recipeSelect">${presets.map(a=>`<option value="${a.id}">${a.id} · ${a.leftHz}/${a.rightHz} Hz</option>`).join('')}</select></div><div class="actions" style="margin-top:14px"><button class="button primary" id="livePlay">Play</button><button class="button" id="livePause" disabled>Pause</button><button class="button" id="liveResume" disabled>Resume</button><button class="button danger" id="liveStop" disabled>Stop</button></div></div><div id="playerState"><div class="review-row"><span>Status</span><strong>stopped</strong></div><div class="review-row"><span>Elapsed</span><strong>0.0 s</strong></div><div class="review-row"><span>Generated frames</span><strong>0</strong></div></div></div></div><div class="grid two" style="margin-top:18px"><div class="card"><h3>Quick Generator</h3><p class="subtle">One center value derives the centered 4 Hz pair.</p><div class="field"><label for="center">Center frequency (Hz)</label><input id="center" type="number" value="396" min="1"></div><div class="review-row"><span>Derived channels</span><strong id="derived">394 / 398 Hz</strong></div><button class="button primary" id="quick">Use in live player</button></div><div class="card"><h3>Simple Custom</h3><div class="form-grid"><div class="field"><label for="customCenter">Center (Hz)</label><input id="customCenter" type="number" value="396"></div><div class="field"><label for="customBeat">Difference (Hz)</label><input id="customBeat" type="number" value="4" min="0"></div><div class="field"><label for="customGain">Output gain</label><input id="customGain" type="number" value="0.25" min=".01" max="1" step=".01"></div></div><button class="button" id="custom" style="margin-top:14px">Validate and use</button></div></div><div class="card" style="margin-top:18px"><h3>Advanced / layered Hemi-Sync</h3><p class="subtle">Live multi-carrier, Septon, deterministic phased-pink, delay/comb, envelopes, AM/FM, cues, and future voice references use the same synthesis semantics.</p><div class="callout warning"><strong>Historical provenance:</strong> incomplete CENTER LANE parameters remain unknown and are never inferred.</div><button class="button" id="layered">Play live layered demo</button></div>`;const sel=$('#recipeSelect'),get=()=>presets.find(x=>x.id===sel.value)||presets[0];$('#livePlay').onclick=()=>playRecipe(get()).catch(e=>toast(e.message));$('#livePause').onclick=()=>{if(player.status==='playing'){player.elapsed+=(performance.now()-player.started)/1000;player.status='paused';player.ctx.suspend();updatePlayer()}};$('#liveResume').onclick=()=>{if(player.status==='paused'){player.started=performance.now();player.status='playing';player.ctx.resume();updatePlayer()}};$('#liveStop').onclick=stopPlayer;$('#center').oninput=()=>{const c=Number($('#center').value);$('#derived').textContent=`${c-2} / ${c+2} Hz`};$('#quick').onclick=async()=>{try{const r=await api('/api/audio/quick',{method:'POST',body:JSON.stringify({centerHz:$('#center').value})});await playRecipe(r.recipe);toast('Quick recipe is playing through the OS audio output.')}catch(e){toast(e.message)}};$('#custom').onclick=async()=>{try{const r=await api('/api/audio/quick',{method:'POST',body:JSON.stringify({centerHz:$('#customCenter').value,beatHz:$('#customBeat').value})});r.recipe.gain=Number($('#customGain').value);await playRecipe(r.recipe);toast(`Playing ${r.recipe.leftHz}/${r.recipe.rightHz} Hz`)}catch(e){toast(e.message)}};$('#layered').onclick=()=>playRecipe({...get(),id:'LAYERED_LIVE',mode:'PHASED_PINK_PATENT_5356368',carriers:[{leftHz:394,rightHz:398,gain:.18},{leftHz:200,rightHz:204,gain:.06}],septon:[{leftHz:100,rightHz:101.5,gain:.03}],noise:{algorithm:'PHASED_PINK_PATENT_5356368',seed:5356368,gain:.025,sweepHz:.125}}).catch(e=>toast(e.message))}
-function renderProfiles(){app.innerHTML=`<div class="section-intro"><div><h2>Experiment Profiles</h2><p>Versioned configuration workspace with immutable committed snapshots.</p></div><button class="button primary" id="duplicate">Duplicate profile</button></div><div class="grid two">${profiles.map(p=>`<article class="card"><div style="display:flex;justify-content:space-between"><h3>${esc(p.name)}</h3>${pill(p.status)}</div><p class="subtle">${esc(p.purpose)}</p><div class="review-row"><span>Timing</span><strong>${esc(p.timing.mode)}</strong></div><div class="review-row"><span>Outcome / mapping</span><strong>${esc(p.outcomeSpace.type)} · ${esc(p.mapping.id)}</strong></div><details><summary>Effective JSON</summary><pre class="json">${esc(JSON.stringify(p,null,2))}</pre></details></article>`).join('')}</div>`;$('#duplicate').onclick=()=>toast('Duplicate profile requires saving a new immutable version; committed versions stay frozen.')}
-function renderCalibration(){const history=JSON.parse(localStorage.getItem('mip-calibration-history')||'[]');app.innerHTML=`<div class="section-intro"><div><h2>Calibration</h2><p>Provider health and distribution summaries are separate from participant sessions.</p></div>${pill('No participant session')}</div><div class="card"><div class="form-grid"><div class="field"><label for="calRng">Random source</label><select id="calRng"><option>OS_CSPRNG</option><option>DETERMINISTIC_PRNG_TEST</option></select></div><div class="field"><label for="calN">Sample count</label><input id="calN" type="number" value="256" min="2"></div></div><button class="button primary" id="runCal" style="margin-top:16px">Run calibration</button></div><div id="calResult" style="margin-top:18px">${history.length?`<div class="card"><h3>Prior runs</h3>${history.map(h=>`<div class="review-row"><span>${new Date(h.utc).toLocaleString()}</span><strong>${h.provider} · ${h.samples} samples · ${h.zero}/${h.one}</strong></div>`).join('')}</div>`:''}</div>`;$('#runCal').onclick=()=>{const n=Number($('#calN').value),zero=Math.floor(n/2),h={utc:new Date().toISOString(),provider:$('#calRng').value,samples:n,zero,one:n-zero,hash:cryptoHash(`${n}:${zero}:${Date.now()}`)};history.unshift(h);localStorage.setItem('mip-calibration-history',JSON.stringify(history.slice(0,20)));renderCalibration()}}
-function cryptoHash(s){let h=2166136261;for(const c of s)h=Math.imul(h^c.charCodeAt(0),16777619);return(h>>>0).toString(16)}
-async function renderReports(){const list=await api('/api/sessions');app.innerHTML=`<div class="section-intro"><div><h2>Sessions & Reports</h2><p>Review every complete, incomplete, aborted, and integrity-failed bundle.</p></div><input id="filter" class="button" placeholder="Filter by ID or profile" aria-label="Filter sessions"></div><div class="card"><div class="table-wrap"><table class="data-table"><thead><tr><th>Session</th><th>Date</th><th>Profile</th><th>Status</th><th>Timing</th><th>Reveal</th></tr></thead><tbody id="rows">${list.map(m=>`<tr data-q="${esc((m.sessionId+' '+m.profileId).toLowerCase())}"><td><button class="button" data-id="${m.sessionId}">${m.sessionId}</button></td><td>${new Date(m.createdUtc).toLocaleString()}</td><td>${esc(m.profileId)}</td><td>${pill(m.status)}</td><td>${esc(m.timing?.mode||'—')}</td><td>${m.hasReveal?'Available':'Gated'}</td></tr>`).join('')||'<tr><td colspan="6"><div class="empty">No sessions yet.</div></td></tr>'}</tbody></table></div></div>`;$('#filter').oninput=e=>document.querySelectorAll('#rows tr').forEach(r=>r.style.display=r.dataset.q?.includes(e.target.value.toLowerCase())?'':'none');document.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>renderSession(b.dataset.id))}
-async function renderSession(id){const [m,e,v]=await Promise.all([api(`/api/sessions/${id}`),api(`/api/sessions/${id}/events`),api(`/api/sessions/${id}/verify`)]);app.innerHTML=`<div class="section-intro"><div><h2>${esc(id)} · Audit workspace</h2><p>${esc(m.profileId)} · ${new Date(m.createdUtc).toLocaleString()}</p></div>${pill(m.status)}</div><div class="card"><div class="tabs"><button data-tab="overview" class="active">Overview</button><button data-tab="timeline">Timeline</button><button data-tab="machine">Machine Output</button><button data-tab="raw">Raw Report</button><button data-tab="analysis">Analysis</button><button data-tab="audio">Audio & Configuration</button><button data-tab="integrity">Integrity</button></div><div id="tabContent"></div></div><button class="button" id="back">← Back to sessions</button>`;const content=$('#tabContent');const show=t=>{document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));if(t==='overview')content.innerHTML=`<div class="grid two"><div class="review-row"><span>Status</span><strong>${esc(m.status)}</strong></div><div class="review-row"><span>Reveal policy</span><strong>${esc(m.revealPolicy)}</strong></div><div class="review-row"><span>Participant</span><strong>${esc(m.participantLabel)}</strong></div><div class="review-row"><span>Config fingerprint</span><strong class="mono">${esc(m.configFingerprint)}</strong></div></div>`;if(t==='timeline')content.innerHTML=`<div class="timeline">${e.events.map(x=>`<div class="timeline-item"><div class="timeline-time">${new Date(x.occurredUtc).toLocaleTimeString()}</div><div class="timeline-node"></div><div class="timeline-event">${esc(x.type)}<small>Event ${x.seq} · ${x.hash.slice(0,16)}…</small></div></div>`).join('')}</div>`;if(t==='machine'||t==='analysis')content.innerHTML=m.revealEligible?`<div class="callout success">${t==='machine'?'Machine output is available after reveal.':'Deterministic analysis with primary/exploratory windows.'}</div><pre class="json">${esc(JSON.stringify(m.analysis||{},null,2))}</pre>`:'<div class="callout warning">Machine output remains gated until raw-report lock and reveal.</div>';if(t==='raw')content.innerHTML=`<div class="lock-box">${m.revealEligible?'✓ Locked raw report available':'Raw report pending lock'}</div>`;if(t==='audio')content.innerHTML=`<pre class="json">${esc(JSON.stringify(m.audioArtifact||m.configSnapshot?.audio||{},null,2))}</pre>`;if(t==='integrity')content.innerHTML=`<div class="lock-box">${v.valid?'✓ Integrity verified':'✕ Integrity failed'}</div><pre class="json">${esc(JSON.stringify(v,null,2))}</pre>`};document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>show(b.dataset.tab));$('#back').onclick=()=>setPage('reports');show('overview')}
-init().catch(e=>app.innerHTML=`<div class="card"><h2>Application unavailable</h2><p>${esc(e.message)}</p><p>Start with <code>npm start</code> and reload.</p></div>`);
+const $ = (s) => document.querySelector(s),
+  app = $("#app");
+let profiles = [],
+  presets = [],
+  selectedProfile = null,
+  currentSession = null;
+let player = {
+  ctx: null,
+  node: null,
+  gain: null,
+  status: "stopped",
+  started: 0,
+  elapsed: 0,
+  timer: null,
+  frames: 0,
+};
+const esc = (x) =>
+  String(x ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+async function api(url, opt = {}) {
+  if (window.mip) {
+    const method = (opt.method || "GET").toUpperCase(),
+      body = opt.body ? JSON.parse(opt.body) : {},
+      parts = url.split("/").filter(Boolean),
+      id = parts[2];
+    if (url === "/api/profiles") return window.mip.getProfiles();
+    if (url === "/api/audio/presets") return window.mip.getAudioPresets();
+    if (url === "/api/audio/quick") return window.mip.quickRecipe(body);
+    if (url === "/api/sessions" && method === "GET")
+      return window.mip.listSessions();
+    if (url === "/api/sessions" && method === "POST")
+      return window.mip.createSession(body);
+    if (parts[1] === "sessions" && parts[3] === "events")
+      return window.mip.getEvents(id);
+    if (parts[1] === "sessions" && parts[3] === "verify")
+      return window.mip.verifySession(id);
+    if (parts[1] === "sessions" && parts[3] === "output")
+      return window.mip.getOutput(id);
+    if (parts[1] === "sessions" && parts[3] === "start")
+      return window.mip.startSession({ ...body, id });
+    if (parts[1] === "sessions" && parts[3] === "draft")
+      return window.mip.saveDraft({ ...body, id });
+    if (parts[1] === "sessions" && parts[3] === "lock-report")
+      return window.mip.lockReport({ ...body, id });
+    if (parts[1] === "sessions" && parts[3] === "reveal")
+      return window.mip.reveal({ id });
+    if (parts[1] === "sessions" && parts.length === 3)
+      return window.mip.getSession(id);
+    throw Error(`Unsupported local API route: ${url}`);
+  }
+  const r = await fetch(url, {
+      headers: { "Content-Type": "application/json" },
+      ...opt,
+    }),
+    d = await r.json();
+  if (!r.ok) throw Error(d.error || d.errors?.join("; ") || "Request failed");
+  return d;
+}
+function toast(s) {
+  const t = $("#toast");
+  t.textContent = s;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2500);
+}
+function pill(s) {
+  return `<span class="pill ${/valid|locked|revealed|complete/i.test(s) ? "valid" : /fail|abort/i.test(s) ? "bad" : "neutral"}">${esc(s)}</span>`;
+}
+function setPage(p) {
+  document
+    .querySelectorAll("#nav button")
+    .forEach((b) => b.classList.toggle("active", b.dataset.page === p));
+  $("#page-title").textContent = {
+    start: "Start Research Session",
+    audio: "Audio Lab",
+    profiles: "Experiment Profiles",
+    calibration: "Calibration",
+    reports: "Sessions & Reports",
+  }[p];
+  ({
+    start: renderStart,
+    audio: renderAudio,
+    profiles: renderProfiles,
+    calibration: renderCalibration,
+    reports: renderReports,
+  })[p]();
+}
+document
+  .querySelectorAll("#nav button")
+  .forEach((b) => (b.onclick = () => setPage(b.dataset.page)));
+function steps(n) {
+  return `<div class="stepper">${["Profile", "Pre-session", "Target & memory", "Readiness", "Commit & start"].map((x, i) => `<div class="step ${i + 1 === n ? "active" : ""} ${i + 1 < n ? "done" : ""}"><span class="number">${i + 1 < n ? "✓" : i + 1}</span>${x}</div>${i < 4 ? '<span class="step-line"></span>' : ""}`).join("")}</div>`;
+}
+async function init() {
+  [profiles, presets] = await Promise.all([
+    api("/api/profiles"),
+    api("/api/audio/presets"),
+  ]);
+  selectedProfile = profiles[0];
+  renderStart();
+}
+function renderStart() {
+  app.innerHTML = `<div class="section-intro"><div><h2>Begin a controlled research session</h2><p>The operational profile is primary; demonstrations remain available in Experiment Profiles.</p></div>${pill("Step 1 of 5")}</div>${steps(1)}<div class="card"><div class="field"><label for="profileSelect">Operational session profile</label><select id="profileSelect"><option value="BASELINE_NOW_BINARY_V1">Immediate Binary Baseline · IMMEDIATE_REQUEST</option></select><small>Advanced validation profiles are available from Experiment Profiles.</small></div><div class="review-row"><span>Purpose</span><strong>${esc(selectedProfile.purpose)}</strong></div><div class="review-row"><span>Outcome / timing</span><strong>${esc(selectedProfile.outcomeSpace.type)} · ${esc(selectedProfile.timing.mode)}</strong></div><div class="review-row"><span>Audio</span><strong>${esc(selectedProfile.audio.recipeId)} · live synthesis</strong></div></div><div class="actions" style="margin-top:20px"><button class="button primary" id="next">Continue to pre-session setup →</button></div>`;
+  $("#next").onclick = renderPre;
+}
+function renderPre() {
+  app.innerHTML = `<div class="section-intro"><div><h2>Pre-session state</h2><p>Capture only the baseline context needed by the selected protocol.</p></div></div>${steps(2)}<div class="card"><div class="form-grid"><div class="field"><label for="participant">Participant label</label><input id="participant" value="Local participant"></div><div class="field"><label for="record">Record type</label><select id="record"><option value="dry">Dry run / validation</option><option value="contemporaneous">Contemporaneous research record</option></select></div><div class="field"><label for="baseline">Baseline state</label><select id="baseline"><option>Ordinary alertness</option><option>Relaxed</option><option>Fatigued</option></select></div><div class="field"><label for="environment">Environment note</label><input id="environment" placeholder="Optional note"></div><div class="field full"><label><input id="safety" type="checkbox"> I can safely stop by opening my eyes, removing headphones, and reorienting.</label></div></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next">Continue to target assignment →</button></div>`;
+  $("#back").onclick = renderStart;
+  $("#next").onclick = async () => {
+    if (!$("#safety").checked)
+      return toast("Confirm the physical safety stop method first.");
+    try {
+      currentSession = await api("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          profileId: selectedProfile.id,
+          participantLabel: $("#participant").value,
+          recordType: $("#record").value,
+        }),
+      });
+      renderTarget();
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+}
+function renderTarget() {
+  app.innerHTML = `<div class="section-intro"><div><h2>Assigned target & encoding</h2><p>The assignment is committed before START and cannot change afterwards.</p></div>${pill("Committed")}</div>${steps(3)}<div class="grid two"><div class="card target-box"><div class="subtle">Participant-facing target</div><div class="target">${esc(currentSession.participantTarget.match(/favor (.+?)(?: now\.)?$/)?.[1] || currentSession.participantTarget)}</div><p class="subtle">Memorize exactly what is shown. Hidden future output is not displayed.</p></div><div class="card"><h3>Encoding instruction</h3><p>${esc(currentSession.participantTarget)}</p><div class="callout">Release the request and observe neutrally. Fixed non-semantic cues guide hands-free stages.</div><label style="display:flex;gap:8px;margin-top:18px"><input id="memory" type="checkbox"> I have memorized the target and instruction.</label></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next" disabled>Continue to readiness review →</button></div>`;
+  $("#back").onclick = renderPre;
+  $("#memory").onchange = (e) => ($("#next").disabled = !e.target.checked);
+  $("#next").onclick = renderReady;
+}
+function renderReady() {
+  const p = selectedProfile;
+  app.innerHTML = `<div class="section-intro"><div><h2>Readiness review</h2><p>Human-readable commitment summary. Exact IDs and hashes are expandable.</p></div></div>${steps(4)}<div class="card"><div class="grid two"><div>${[
+    ["Profile", p.name],
+    ["Assignment", "System random uniform"],
+    ["Target", currentSession.participantTarget],
+    ["Timing", p.timing.mode],
+  ]
+    .map(
+      (x) =>
+        `<div class="review-row"><span>${x[0]}</span><strong>${esc(x[1])}</strong></div>`,
+    )
+    .join("")}</div><div>${[
+    ["Audio", p.audio.recipeId + " · live synthesis"],
+    ["Random source", p.rng.provider],
+    ["Reveal policy", p.reveal.policy],
+    ["Analysis", "Primary + exploratory windows"],
+  ]
+    .map(
+      (x) =>
+        `<div class="review-row"><span>${x[0]}</span><strong>${esc(x[1])}</strong></div>`,
+    )
+    .join(
+      "",
+    )}</div></div><details style="margin-top:18px"><summary>Advanced configuration snapshot</summary><pre class="json">${esc(JSON.stringify(p, null, 2))}</pre></details></div><div class="callout warning" style="margin-top:18px"><strong>Before START:</strong> confirm comfortable headphones and the normal OS output. The active screen becomes non-informative.</div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="start">START SESSION</button></div>`;
+  $("#back").onclick = renderTarget;
+  $("#start").onclick = async () => {
+    try {
+      if (window.mip) {
+        await window.mip.prepareAudio(currentSession.sessionId);
+        await playRecipe(p.audio);
+        await window.mip.audioReady(currentSession.sessionId);
+      }
+      await api(`/api/sessions/${currentSession.sessionId}/start`, {
+        method: "POST",
+        body: JSON.stringify({ memoryConfirmed: true }),
+      });
+      renderHandsFree();
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+}
+function renderHandsFree() {
+  app.innerHTML = `<div class="hands-free"><span class="eyebrow">SESSION ACTIVE · HANDS-FREE</span><div class="breath"></div><h2>Remain comfortable</h2><p>Audio, cues, telemetry, and hidden output are running automatically.<br>No screen interaction is required.</p><div class="progress"><span style="width:68%"></span></div><small>Stage in progress · hidden output protected</small><button class="button" id="returned">I have returned</button></div>`;
+  $("#returned").onclick = renderRaw;
+}
+function renderRaw() {
+  app.innerHTML = `<div class="section-intro"><div><h2>Raw report · before reveal</h2><p>Capture observation first. The generated result remains hidden.</p></div>${pill("Raw Report Pending")}</div><div class="callout warning">Record subjective time before actual duration is shown. Unknown / Not experienced are valid responses.</div><div class="card" style="margin-top:18px"><div class="form-grid"><div class="field"><label for="subjectiveTime">Subjective total duration</label><input id="subjectiveTime" placeholder="e.g. 20 minutes"></div><div class="field"><label for="intensity">Overall state intensity (0–10)</label><input id="intensity" type="number" min="0" max="10"></div><div class="field"><label for="modality">Actual encoding modality</label><input id="modality" placeholder="semantic, visual, kinesthetic, combined"></div><div class="field"><label for="certainty">Pre-reveal belief (%)</label><input id="certainty" type="number" min="0" max="100"></div><div class="field full"><label for="timeline">Subjective timeline</label><textarea id="timeline" placeholder="Approximate sequence and moments"></textarea></div><div class="field full"><label for="notes">Free raw notes</label><textarea id="notes" placeholder="Observation only"></textarea></div></div><div class="actions" style="margin-top:18px"><button class="button" id="save">Save draft</button><button class="button primary" id="lock">LOCK RAW REPORT</button></div></div>`;
+  const collect = () =>
+    Object.fromEntries(
+      [...document.querySelectorAll("input,textarea")].map((x) => [
+        x.id,
+        x.value,
+      ]),
+    );
+  $("#save").onclick = async () => {
+    await api(`/api/sessions/${currentSession.sessionId}/draft`, {
+      method: "POST",
+      body: JSON.stringify({ report: collect() }),
+    });
+    toast("Draft autosaved locally.");
+  };
+  $("#lock").onclick = async () => {
+    if (!confirm("Lock this raw report? It becomes read-only.")) return;
+    await api(`/api/sessions/${currentSession.sessionId}/lock-report`, {
+      method: "POST",
+      body: JSON.stringify({ report: collect() }),
+    });
+    app.innerHTML = `<div class="card"><div class="lock-box">✓ Raw report locked · reveal gate satisfied</div><p class="subtle">The original report is immutable. Later recollections are append-only.</p><button class="button primary" id="reveal">Reveal result</button></div>`;
+    $("#reveal").onclick = async () => {
+      const r = await api(`/api/sessions/${currentSession.sessionId}/reveal`, {
+        method: "POST",
+      });
+      app.innerHTML = `<div class="section-intro"><div><h2>Session reveal</h2><p>Neutral presentation; one session does not establish a mechanism.</p></div>${pill("Revealed")}</div><div class="grid three"><div class="card"><div class="metric">${esc(r.objective)}</div><div class="metric-label">Objective state</div></div><div class="card"><div class="metric">${esc(r.participantTarget)}</div><div class="metric-label">Participant target</div></div><div class="card"><div class="metric">${r.primary?.match ? "Match" : "No Match"}</div><div class="metric-label">Primary endpoint</div></div></div><div class="card" style="margin-top:18px"><div class="lock-box">✓ ${r.integrity?.valid ? "Integrity verified" : "Integrity requires review"}</div><p>${r.integrity?.eventCount || 0} events · ${r.integrity?.machineOutputCount || 0} machine-output records</p></div>`;
+    };
+  };
+}
+function stopPlayer() {
+  if (player.timer) clearInterval(player.timer);
+  if (player.node) player.node.disconnect();
+  if (player.ctx && player.ctx.state !== "closed") player.ctx.close();
+  player = {
+    ctx: null,
+    node: null,
+    gain: null,
+    status: "stopped",
+    started: 0,
+    elapsed: 0,
+    timer: null,
+    frames: 0,
+  };
+  updatePlayer();
+}
+function updatePlayer() {
+  const e = $("#playerState");
+  if (!e) return;
+  const secs =
+    player.elapsed +
+    (player.status === "playing"
+      ? (performance.now() - player.started) / 1000
+      : 0);
+  e.innerHTML = `<div class="review-row"><span>Status</span><strong>${player.status}</strong></div><div class="review-row"><span>Elapsed</span><strong>${secs.toFixed(1)} s</strong></div><div class="review-row"><span>Generated frames</span><strong>${player.frames || 0}</strong></div>`;
+  for (const [id, disabled] of [
+    ["livePlay", player.status === "playing"],
+    ["livePause", player.status !== "playing"],
+    ["liveResume", player.status !== "paused"],
+    ["liveStop", player.status === "stopped"],
+  ])
+    if ($("#" + id)) $("#" + id).disabled = disabled;
+}
+async function playRecipe(recipe) {
+  stopPlayer();
+  const C = window.AudioContext || window.webkitAudioContext;
+  if (!C) throw Error("Web Audio is unavailable.");
+  const ctx = new C(),
+    gain = ctx.createGain();
+  await ctx.audioWorklet.addModule(
+    new URL("./mip-processor.js", import.meta.url),
+  );
+  const node = new AudioWorkletNode(ctx, "mip-processor", {
+    numberOfInputs: 0,
+    numberOfOutputs: 1,
+    outputChannelCount: [2],
+  });
+  gain.gain.value = Number(recipe.gain ?? 0.25);
+  node.port.onmessage = (e) => {
+    if (e.data?.type === "telemetry") player.frames = e.data.frames;
+    updatePlayer();
+  };
+  node.port.postMessage({ type: "configure", recipe });
+  node.connect(gain);
+  gain.connect(ctx.destination);
+  await ctx.resume();
+  player = {
+    ctx,
+    node,
+    gain,
+    status: "playing",
+    started: performance.now(),
+    elapsed: 0,
+    timer: setInterval(updatePlayer, 100),
+    frames: 0,
+  };
+  updatePlayer();
+}
+function renderAudio() {
+  app.innerHTML = `<div class="section-intro"><div><h2>Audio Lab</h2><p>Live stateful synthesis goes directly to the OS-selected output; no finite WAV loop is used.</p></div>${pill("Live synthesis")}</div><div class="card"><div class="grid two"><div><h3>Live player</h3><div class="field"><label for="recipeSelect">Preset / recipe</label><select id="recipeSelect">${presets.map((a) => `<option value="${a.id}">${a.id} · ${a.leftHz}/${a.rightHz} Hz</option>`).join("")}</select></div><div class="actions" style="margin-top:14px"><button class="button primary" id="livePlay">Play</button><button class="button" id="livePause" disabled>Pause</button><button class="button" id="liveResume" disabled>Resume</button><button class="button danger" id="liveStop" disabled>Stop</button></div></div><div id="playerState"><div class="review-row"><span>Status</span><strong>stopped</strong></div><div class="review-row"><span>Elapsed</span><strong>0.0 s</strong></div><div class="review-row"><span>Generated frames</span><strong>0</strong></div></div></div></div><div class="grid two" style="margin-top:18px"><div class="card"><h3>Quick Generator</h3><p class="subtle">One center value derives the centered 4 Hz pair.</p><div class="field"><label for="center">Center frequency (Hz)</label><input id="center" type="number" value="396" min="1"></div><div class="review-row"><span>Derived channels</span><strong id="derived">394 / 398 Hz</strong></div><button class="button primary" id="quick">Use in live player</button></div><div class="card"><h3>Simple Custom</h3><div class="form-grid"><div class="field"><label for="customCenter">Center (Hz)</label><input id="customCenter" type="number" value="396"></div><div class="field"><label for="customBeat">Difference (Hz)</label><input id="customBeat" type="number" value="4" min="0"></div><div class="field"><label for="customGain">Output gain</label><input id="customGain" type="number" value="0.25" min=".01" max="1" step=".01"></div></div><button class="button" id="custom" style="margin-top:14px">Validate and use</button></div></div><div class="card" style="margin-top:18px"><h3>Advanced / layered Hemi-Sync</h3><p class="subtle">Live multi-carrier, Septon, deterministic phased-pink, delay/comb, envelopes, AM/FM, cues, and future voice references use the same synthesis semantics.</p><div class="callout warning"><strong>Historical provenance:</strong> incomplete CENTER LANE parameters remain unknown and are never inferred.</div><button class="button" id="layered">Play live layered demo</button></div>`;
+  const sel = $("#recipeSelect"),
+    get = () => presets.find((x) => x.id === sel.value) || presets[0];
+  $("#livePlay").onclick = () =>
+    playRecipe(get()).catch((e) => toast(e.message));
+  $("#livePause").onclick = () => {
+    if (player.status === "playing") {
+      player.elapsed += (performance.now() - player.started) / 1000;
+      player.status = "paused";
+      player.ctx.suspend();
+      updatePlayer();
+    }
+  };
+  $("#liveResume").onclick = () => {
+    if (player.status === "paused") {
+      player.started = performance.now();
+      player.status = "playing";
+      player.ctx.resume();
+      updatePlayer();
+    }
+  };
+  $("#liveStop").onclick = stopPlayer;
+  $("#center").oninput = () => {
+    const c = Number($("#center").value);
+    $("#derived").textContent = `${c - 2} / ${c + 2} Hz`;
+  };
+  $("#quick").onclick = async () => {
+    try {
+      const r = await api("/api/audio/quick", {
+        method: "POST",
+        body: JSON.stringify({ centerHz: $("#center").value }),
+      });
+      await playRecipe(r.recipe);
+      toast("Quick recipe is playing through the OS audio output.");
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+  $("#custom").onclick = async () => {
+    try {
+      const r = await api("/api/audio/quick", {
+        method: "POST",
+        body: JSON.stringify({
+          centerHz: $("#customCenter").value,
+          beatHz: $("#customBeat").value,
+        }),
+      });
+      r.recipe.gain = Number($("#customGain").value);
+      await playRecipe(r.recipe);
+      toast(`Playing ${r.recipe.leftHz}/${r.recipe.rightHz} Hz`);
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+  $("#layered").onclick = () =>
+    playRecipe({
+      ...get(),
+      id: "LAYERED_LIVE",
+      mode: "PHASED_PINK_PATENT_5356368",
+      carriers: [
+        { leftHz: 394, rightHz: 398, gain: 0.18 },
+        { leftHz: 200, rightHz: 204, gain: 0.06 },
+      ],
+      septon: [{ leftHz: 100, rightHz: 101.5, gain: 0.03 }],
+      noise: {
+        algorithm: "PHASED_PINK_PATENT_5356368",
+        seed: 5356368,
+        gain: 0.025,
+        sweepHz: 0.125,
+      },
+    }).catch((e) => toast(e.message));
+}
+function renderProfiles() {
+  app.innerHTML = `<div class="section-intro"><div><h2>Experiment Profiles</h2><p>Versioned configuration workspace with immutable committed snapshots.</p></div><button class="button primary" id="duplicate">Duplicate profile</button></div><div class="grid two">${profiles.map((p) => `<article class="card"><div style="display:flex;justify-content:space-between"><h3>${esc(p.name)}</h3>${pill(p.status)}</div><p class="subtle">${esc(p.purpose)}</p><div class="review-row"><span>Timing</span><strong>${esc(p.timing.mode)}</strong></div><div class="review-row"><span>Outcome / mapping</span><strong>${esc(p.outcomeSpace.type)} · ${esc(p.mapping.id)}</strong></div><details><summary>Effective JSON</summary><pre class="json">${esc(JSON.stringify(p, null, 2))}</pre></details></article>`).join("")}</div>`;
+  $("#duplicate").onclick = async () => {
+    if (!window.mip)
+      return toast("Profile editing requires the Electron application.");
+    try {
+      await window.mip.duplicateProfile({
+        profileId: selectedProfile?.id || profiles[0]?.id,
+      });
+      profiles = await window.mip.getProfiles();
+      toast("Profile duplicated as a new immutable version.");
+      renderProfiles();
+    } catch (e) {
+      toast(e.message);
+    }
+  };
+}
+function renderCalibration() {
+  app.innerHTML = `<div class="section-intro"><div><h2>Calibration</h2><p>Calibration runs in the authoritative main-process RNG service and is persisted in SQLite.</p></div>${pill("No participant session")}</div><div class="card"><div class="form-grid"><div class="field"><label for="calRng">Random source</label><select id="calRng"><option>OS_CSPRNG</option><option>DETERMINISTIC_PRNG_TEST</option></select></div><div class="field"><label for="calN">Sample count</label><input id="calN" type="number" value="256" min="2"></div></div><button class="button primary" id="runCal" style="margin-top:16px">Run calibration</button></div><div id="calResult" style="margin-top:18px"></div>`;
+  $("#runCal").onclick = () => {
+    if (!window.mip)
+      return toast("Calibration requires the Electron application.");
+    window.mip
+      .runCalibration({
+        provider: $("#calRng").value,
+        samples: Number($("#calN").value),
+      })
+      .then((r) => {
+        $("#calResult").innerHTML =
+          `<div class="card"><h3>Persisted calibration result</h3><div class="review-row"><span>Provider</span><strong>${esc(r.provider)} · ${esc(r.providerVersion)}</strong></div><div class="review-row"><span>Samples</span><strong>${r.samples}</strong></div><div class="review-row"><span>Counts</span><strong>${r.counts[0]} / ${r.counts[1]}</strong></div><div class="review-row"><span>SHA-256</span><strong class="mono">${r.resultHash}</strong></div></div>`;
+      })
+      .catch((e) => toast(e.message));
+  };
+}
+function cryptoHash(s) {
+  let h = 2166136261;
+  for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
+  return (h >>> 0).toString(16);
+}
+async function renderReports() {
+  const list = await api("/api/sessions");
+  app.innerHTML = `<div class="section-intro"><div><h2>Sessions & Reports</h2><p>Review every complete, incomplete, aborted, and integrity-failed bundle.</p></div><input id="filter" class="button" placeholder="Filter by ID or profile" aria-label="Filter sessions"></div><div class="card"><div class="table-wrap"><table class="data-table"><thead><tr><th>Session</th><th>Date</th><th>Profile</th><th>Status</th><th>Timing</th><th>Reveal</th></tr></thead><tbody id="rows">${list.map((m) => `<tr data-q="${esc((m.sessionId + " " + m.profileId).toLowerCase())}"><td><button class="button" data-id="${m.sessionId}">${m.sessionId}</button></td><td>${new Date(m.createdUtc).toLocaleString()}</td><td>${esc(m.profileId)}</td><td>${pill(m.status)}</td><td>${esc(m.timing?.mode || "—")}</td><td>${m.hasReveal ? "Available" : "Gated"}</td></tr>`).join("") || '<tr><td colspan="6"><div class="empty">No sessions yet.</div></td></tr>'}</tbody></table></div></div>`;
+  $("#filter").oninput = (e) =>
+    document
+      .querySelectorAll("#rows tr")
+      .forEach(
+        (r) =>
+          (r.style.display = r.dataset.q?.includes(e.target.value.toLowerCase())
+            ? ""
+            : "none"),
+      );
+  document
+    .querySelectorAll("[data-id]")
+    .forEach((b) => (b.onclick = () => renderSession(b.dataset.id)));
+}
+async function renderSession(id) {
+  const [m, e, v] = await Promise.all([
+    api(`/api/sessions/${id}`),
+    api(`/api/sessions/${id}/events`),
+    api(`/api/sessions/${id}/verify`),
+  ]);
+  app.innerHTML = `<div class="section-intro"><div><h2>${esc(id)} · Audit workspace</h2><p>${esc(m.profileId)} · ${new Date(m.createdUtc).toLocaleString()}</p></div>${pill(m.status)}</div><div class="card"><div class="tabs"><button data-tab="overview" class="active">Overview</button><button data-tab="timeline">Timeline</button><button data-tab="machine">Machine Output</button><button data-tab="raw">Raw Report</button><button data-tab="analysis">Analysis</button><button data-tab="audio">Audio & Configuration</button><button data-tab="integrity">Integrity</button></div><div id="tabContent"></div></div><button class="button" id="back">← Back to sessions</button>`;
+  const content = $("#tabContent");
+  const show = (t) => {
+    document
+      .querySelectorAll("[data-tab]")
+      .forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
+    if (t === "overview")
+      content.innerHTML = `<div class="grid two"><div class="review-row"><span>Status</span><strong>${esc(m.status)}</strong></div><div class="review-row"><span>Reveal policy</span><strong>${esc(m.revealPolicy)}</strong></div><div class="review-row"><span>Participant</span><strong>${esc(m.participantLabel)}</strong></div><div class="review-row"><span>Config fingerprint</span><strong class="mono">${esc(m.configFingerprint)}</strong></div></div>`;
+    if (t === "timeline")
+      content.innerHTML = `<div class="timeline">${e.events.map((x) => `<div class="timeline-item"><div class="timeline-time">${new Date(x.occurredUtc).toLocaleTimeString()}</div><div class="timeline-node"></div><div class="timeline-event">${esc(x.type)}<small>Event ${x.seq} · ${x.hash.slice(0, 16)}…</small></div></div>`).join("")}</div>`;
+    if (t === "machine" || t === "analysis")
+      content.innerHTML = m.revealEligible
+        ? `<div class="callout success">${t === "machine" ? "Machine output is available after reveal." : "Deterministic analysis with primary/exploratory windows."}</div><pre class="json">${esc(JSON.stringify(m.analysis || {}, null, 2))}</pre>`
+        : '<div class="callout warning">Machine output remains gated until raw-report lock and reveal.</div>';
+    if (t === "raw")
+      content.innerHTML = `<div class="lock-box">${m.revealEligible ? "✓ Locked raw report available" : "Raw report pending lock"}</div>`;
+    if (t === "audio")
+      content.innerHTML = `<pre class="json">${esc(JSON.stringify(m.audioArtifact || m.configSnapshot?.audio || {}, null, 2))}</pre>`;
+    if (t === "integrity")
+      content.innerHTML = `<div class="lock-box">${v.valid ? "✓ Integrity verified" : "✕ Integrity failed"}</div><pre class="json">${esc(JSON.stringify(v, null, 2))}</pre>`;
+  };
+  document
+    .querySelectorAll("[data-tab]")
+    .forEach((b) => (b.onclick = () => show(b.dataset.tab)));
+  $("#back").onclick = () => setPage("reports");
+  show("overview");
+}
+init().catch(
+  (e) =>
+    (app.innerHTML = `<div class="card"><h2>Application unavailable</h2><p>${esc(e.message)}</p><p>Start with <code>npm start</code> and reload.</p></div>`),
+);
