@@ -1,0 +1,2 @@
+{"seq":1,"eventId":"LEGACY-110-E1","sessionId":"LEGACY-110","type":"COMMITTED","occurredUtc":"2022-02-03T04:05:07.000Z","monotonicMs":10,"data":{"legacy":true},"previousHash":"GENESIS","hash":"4b1e7c4b4c1990d5e8144ce6bf3cdce7c5e0c5be0e6d0f0d5e5d9d1a4f9d3e0a"}
+{"seq":2,"eventId":"LEGACY-110-E2","sessionId":"LEGACY-110","type":"STARTED","occurredUtc":"2022-02-03T04:05:08.000Z","monotonicMs":20,"data":{"started":true},"previousHash":"4b1e7c4b4c1990d5e8144ce6bf3cdce7c5e0c5be0e6d0f0d5e5d9d1a4f9d3e0a","hash":"not-a-real-fixture-hash"}

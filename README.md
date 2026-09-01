@@ -90,9 +90,7 @@ MIP Desktop v1.2 is the active implementation direction:
 - no production localhost server;
 - no browser required for owner operation.
 
-The current implementation baseline is preserved on branch `fix-v1.1` at commit `7de6d629e76433ec7c06443810f658599a50084c`.
-
-The earlier pre-fix implementation is preserved on branch `pre-fix-v1.0-checkpoint` at commit `a683418ff3b9d9096070c76c94fcaac5db78aa56`.
+The active v1.2 implementation is developed on branch `feature/electron-v1.2`; `main` remains untouched. The completed v1.1 baseline is preserved on branch `fix-v1.1` at commit `7de6d629e76433ec7c06443810f658599a50084c`, and the earlier pre-fix implementation is preserved on branch `pre-fix-v1.0-checkpoint` at commit `a683418ff3b9d9096070c76c94fcaac5db78aa56`.
 
 ## Current program areas
 

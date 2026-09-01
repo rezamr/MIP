@@ -1,55 +1,215 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { sha256, canonical } from './engine.js';
+import fs from "node:fs";
+import path from "node:path";
+import {
+  BUILTIN_RECIPES,
+  canonical,
+  normalizeRecipe,
+  phasedPinkSample,
+  pcmDigest,
+  renderOffline,
+  sha256Hex,
+  validateEffectiveRecipe,
+} from "../public/audio-core.js";
 
-export const AUDIO_VERSION = 'audio-engine-1.0';
-export const PRESETS = {
-  'A-U396-4': { id: 'A-U396-4', version: 1, name: 'MIP User Baseline', provenance: 'USER_EXPERIMENTAL', architecture: 'SIMPLE_BINAURAL_COMPONENT', leftHz: 394, rightHz: 398, centerHz: 396, beatHz: 4 },
-  'A-P100-104': { id: 'A-P100-104', version: 1, name: 'Monroe Patent Comparator', provenance: 'DOCUMENTED_PATENT_EXAMPLE', architecture: 'SIMPLE_BINAURAL_COMPONENT', leftHz: 100, rightHz: 104, centerHz: 102, beatHz: 4 },
-  'A-SHAM-0': { id: 'A-SHAM-0', version: 1, name: 'Matched Sham Control', provenance: 'SHAM_CONTROL', architecture: 'SIMPLE_BINAURAL_COMPONENT', leftHz: 396, rightHz: 396, centerHz: 396, beatHz: 0 }
-};
+export const AUDIO_VERSION = "mip-audio-core-2.0";
+
+// Keep the historical names and flat frequency fields for existing IPC/API
+// consumers. The shared core owns the effective synthesis semantics.
+export const PRESETS = Object.freeze(Object.fromEntries(Object.entries(BUILTIN_RECIPES).map(([id, recipe]) => [
+  id,
+  Object.freeze({
+    ...recipe,
+    id,
+    recipeId: id,
+    version: recipe.version,
+    recipeVersion: recipe.version,
+    leftHz: recipe.carriers[0].leftHz,
+    rightHz: recipe.carriers[0].rightHz,
+    centerHz: (recipe.carriers[0].leftHz + recipe.carriers[0].rightHz) / 2,
+    beatHz: Math.abs(recipe.carriers[0].rightHz - recipe.carriers[0].leftHz),
+    gain: recipe.carriers[0].gainLeft,
+  }),
+])));
+
+export { canonical, phasedPinkSample, pcmDigest, sha256Hex };
 
 export function quickRecipe(centerHz, beatHz = 4) {
-  const center = Number(centerHz), beat = Number(beatHz);
-  if (!Number.isFinite(center) || !Number.isFinite(beat) || center <= 0 || beat < 0 || center - beat / 2 <= 0) throw new Error('Center and beat must produce positive finite channel frequencies.');
-  return { id: 'QUICK_CUSTOM', version: 1, name: `Centered ${beat} Hz quick recipe`, provenance: 'MIP_EXPERIMENTAL_RECONSTRUCTION', architecture: 'SIMPLE_BINAURAL_COMPONENT', centerHz: center, beatHz: beat, leftHz: center - beat / 2, rightHz: center + beat / 2, waveform: 'sine', gain: 0.25, sampleRate: 44100, headroomDb: -3 };
+  const center = Number(centerHz);
+  const beat = Number(beatHz);
+  if (!Number.isFinite(center) || !Number.isFinite(beat) || center <= 0 || beat < 0 || center - beat / 2 <= 0)
+    throw new Error("Center and beat must produce positive finite channel frequencies.");
+  return {
+    id: "QUICK_CUSTOM",
+    recipeId: "QUICK_CUSTOM",
+    version: 1,
+    recipeVersion: 1,
+    name: `Centered ${beat} Hz quick recipe`,
+    provenance: "MIP_EXPERIMENTAL_RECONSTRUCTION",
+    architecture: "SIMPLE_BINAURAL_COMPONENT",
+    synthesisMode: "STANDARD",
+    channels: 2,
+    centerHz: center,
+    beatHz: beat,
+    leftHz: center - beat / 2,
+    rightHz: center + beat / 2,
+    waveform: "sine",
+    gain: 0.25,
+    phase: { left: 0, right: 0 },
+    carriers: [{
+      id: "primary",
+      leftHz: center - beat / 2,
+      rightHz: center + beat / 2,
+      gain: 0.25,
+      phase: { left: 0, right: 0 },
+      waveform: "sine",
+      am: null,
+      fm: null,
+    }],
+    monauralLayers: [],
+    septon: [],
+    binauralRelationships: [{
+      type: "centered_pair",
+      leftHz: center - beat / 2,
+      rightHz: center + beat / 2,
+      centerHz: center,
+      beatHz: beat,
+    }],
+    envelope: { attackSeconds: 0, decaySeconds: 0, sustain: 1, releaseSeconds: 0 },
+    noise: null,
+    delay: null,
+    comb: null,
+    lowFrequencySweep: null,
+    cues: [],
+    voiceReferences: [],
+    sampleRate: 44100,
+    headroomDb: -3,
+    masterGain: 0.8,
+    rampSeconds: 0.01,
+    durationMode: "live",
+  };
 }
 
 export function validateRecipe(recipe) {
-  const errors = []; const sampleRate = Number(recipe.sampleRate || 44100);
-  for (const field of ['leftHz', 'rightHz']) if (!(Number.isFinite(Number(recipe[field])) && Number(recipe[field]) > 0)) errors.push(`${field} must be a positive finite frequency`);
-  if (Number(recipe.leftHz) >= sampleRate / 2 || Number(recipe.rightHz) >= sampleRate / 2) errors.push('carrier frequencies must be below the Nyquist limit');
-  if (!(Number(recipe.gain ?? 0.25) > 0 && Number(recipe.gain ?? 0.25) <= 1)) errors.push('gain must be greater than 0 and no more than 1');
-  if (!(Number.isInteger(sampleRate) && [22050, 44100, 48000].includes(sampleRate))) errors.push('sampleRate must be 22050, 44100, or 48000 Hz');
-  return { valid: errors.length === 0, errors };
+  try {
+    const effective = normalizeRecipe(recipe);
+    const sourceRate = Number(recipe?.sampleRate ?? 44100);
+    const rawFrequencies = [recipe?.leftHz, recipe?.rightHz];
+    if (rawFrequencies.some((frequency) => frequency !== undefined && Number(frequency) >= sourceRate / 2))
+      return { valid: false, errors: ["carrier frequencies must be below the Nyquist limit"], recipe: effective, configFingerprint: effective.configFingerprint };
+    const result = validateEffectiveRecipe(effective);
+    return { ...result, recipe: effective, configFingerprint: effective.configFingerprint };
+  } catch (error) {
+    return { valid: false, errors: [error.message] };
+  }
 }
 
-function lfsr(seed) { let x = (Number(seed) >>> 0) || 0xACE1; return () => { const bit = ((x >>> 0) ^ (x >>> 2) ^ (x >>> 3) ^ (x >>> 5)) & 1; x = (x >>> 1) | (bit << 15); return (x & 0xffff) / 32767 - 1; }; }
+function wavBuffer(left, right, sampleRate) {
+  const frames = Math.min(left.length, right.length);
+  const pcmBytes = frames * 4;
+  const wav = new Uint8Array(44 + pcmBytes);
+  const view = new DataView(wav.buffer);
+  const ascii = (offset, value) => { for (let i = 0; i < value.length; i += 1) wav[offset + i] = value.charCodeAt(i); };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + pcmBytes, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 2, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 4, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, pcmBytes, true);
+  let offset = 44;
+  for (let i = 0; i < frames; i += 1) {
+    const l = quantize(left[i]);
+    const r = quantize(right[i]);
+    view.setInt16(offset, l, true);
+    view.setInt16(offset + 2, r, true);
+    offset += 4;
+  }
+  return Buffer.from(wav);
+}
 
-export function phasedPinkSample(index, seed = 1) {
-  const n = lfsr(seed); let value = 0;
-  for (let i = 0; i <= index % 65535; i++) value = 0.65 * value + 0.35 * n();
-  return value;
+function quantize(value) {
+  const n = Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
+  return Math.max(-32768, Math.min(32767, Math.round(n * 32767)));
 }
 
 export function renderWav(recipe, durationSeconds = 1) {
-  const validation = validateRecipe(recipe); if (!validation.valid) throw new Error(validation.errors.join('; '));
-  const sampleRate = Number(recipe.sampleRate || 44100); const frames = Math.max(1, Math.round(durationSeconds * sampleRate)); const channels = 2; const pcm = Buffer.alloc(frames * channels * 2);
-  const carriers = recipe.carriers ?? [{ leftHz: recipe.leftHz, rightHz: recipe.rightHz, gain: recipe.gain ?? 0.25, phase: 0 }];
-  const noise = recipe.mode === 'PHASED_PINK_PATENT_5356368' || recipe.noise?.algorithm === 'PHASED_PINK_PATENT_5356368'; const noiseNext = lfsr(recipe.noise?.seed ?? recipe.seed ?? 1); let max = 0;
-  for (let i = 0; i < frames; i++) {
-    let left = 0, right = 0; const t = i / sampleRate;
-    for (const c of carriers) { const gain = Number(c.gain ?? 0.25); left += gain * Math.sin(2 * Math.PI * Number(c.leftHz) * t + Number(c.phase ?? 0)); right += gain * Math.sin(2 * Math.PI * Number(c.rightHz) * t + Number(c.phase ?? 0)); }
-    if (recipe.septon) for (const c of recipe.septon) { left += (c.gain ?? 0.06) * Math.sin(2 * Math.PI * c.leftHz * t); right += (c.gain ?? 0.06) * Math.sin(2 * Math.PI * c.rightHz * t); }
-    if (noise) { const raw = noiseNext(); const sweep = Math.sin(2 * Math.PI * (recipe.noise?.sweepHz ?? 0.125) * t); left += raw * (recipe.noise?.gain ?? 0.05) * (0.7 + 0.3 * sweep); right += raw * (recipe.noise?.gain ?? 0.05) * (0.7 + 0.3 * Math.cos(2 * Math.PI * (recipe.noise?.sweepHz ?? 0.125) * t + (recipe.noise?.rightPhase ?? Math.PI / 2))); }
-    const fade = recipe.fadeInSeconds && t < recipe.fadeInSeconds ? t / recipe.fadeInSeconds : recipe.fadeOutSeconds && t > durationSeconds - recipe.fadeOutSeconds ? (durationSeconds - t) / recipe.fadeOutSeconds : 1;
-    left *= fade; right *= fade; max = Math.max(max, Math.abs(left), Math.abs(right)); pcm.writeInt16LE(Math.max(-1, Math.min(1, left)) * 32767, (i * 2) * 2); pcm.writeInt16LE(Math.max(-1, Math.min(1, right)) * 32767, (i * 2 + 1) * 2);
-  }
-  const header = Buffer.alloc(44); header.write('RIFF', 0); header.writeUInt32LE(36 + pcm.length, 4); header.write('WAVE', 8); header.write('fmt ', 12); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(channels, 22); header.writeUInt32LE(sampleRate, 24); header.writeUInt32LE(sampleRate * channels * 2, 28); header.writeUInt16LE(channels * 2, 32); header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(pcm.length, 40);
-  const wav = Buffer.concat([header, pcm]); const manifest = { schemaVersion: '1.0', recipeId: recipe.id, recipeVersion: recipe.version ?? 1, provenance: recipe.provenance, synthesisEngine: AUDIO_VERSION, sampleRate, bitDepth: 16, channels, durationSamples: frames, durationSeconds, carriers, noise: recipe.noise ?? null, normalization: { peak: max, headroomDb: recipe.headroomDb ?? -3, clipping: max > 1 }, fileSha256: sha256(wav) };
-  manifest.manifestSha256 = sha256(canonical(manifest)); return { wav, manifest, hashes: { wav: manifest.fileSha256, manifest: manifest.manifestSha256 } };
+  const seconds = Number(durationSeconds);
+  if (!Number.isFinite(seconds) || seconds < 0) throw new Error("durationSeconds must be a finite non-negative number");
+  const sampleRate = Number(recipe?.sampleRate ?? 44100);
+  const frames = Math.max(1, Math.round(seconds * sampleRate));
+  const rendered = renderOffline(recipe, { targetFrames: frames, sampleRate });
+  const wav = wavBuffer(rendered.left, rendered.right, rendered.recipe.sampleRate);
+  const manifest = {
+    schemaVersion: "1.0",
+    digestVersion: "MIP_PCM_SHA256_V1",
+    recipeId: rendered.recipe.recipeId,
+    recipeVersion: rendered.recipe.version,
+    provenance: rendered.recipe.provenance,
+    synthesisEngine: AUDIO_VERSION,
+    sampleRate: rendered.recipe.sampleRate,
+    bitDepth: 16,
+    channels: 2,
+    durationSamples: frames,
+    durationSeconds: frames / rendered.recipe.sampleRate,
+    configFingerprint: rendered.configFingerprint,
+    effectiveRecipe: rendered.recipe,
+    carriers: rendered.recipe.carriers,
+    monauralLayers: rendered.recipe.monauralLayers,
+    septon: rendered.recipe.septon,
+    noise: rendered.recipe.noise,
+    cues: rendered.recipe.cues,
+    voiceReferences: rendered.recipe.voiceReferences,
+    audioDigest: rendered.digest,
+    normalization: {
+      peak: Math.max(rendered.telemetry.peaks.left, rendered.telemetry.peaks.right),
+      preClipPeak: Math.max(rendered.telemetry.peaks.preClipLeft, rendered.telemetry.peaks.preClipRight),
+      headroomDb: rendered.recipe.headroomDb,
+      masterGain: rendered.recipe.masterGain,
+      clipping: rendered.telemetry.clipping,
+    },
+    fileSha256: sha256Hex(wav),
+  };
+  manifest.manifestSha256 = sha256Hex(canonical(manifest));
+  return { wav, manifest, hashes: { wav: manifest.fileSha256, manifest: manifest.manifestSha256, pcm: rendered.digest }, rendered };
 }
 
-export function writeArtifact(root, recipe, durationSeconds = 1) { const result = renderWav(recipe, durationSeconds); fs.mkdirSync(root, { recursive: true }); const stem = `${recipe.id}-v${recipe.version ?? 1}-${result.hashes.wav.slice(0, 12)}`; const wavPath = path.join(root, `${stem}.wav`), manifestPath = path.join(root, `${stem}.manifest.json`), verificationPath = path.join(root, `${stem}.verification.json`); fs.writeFileSync(wavPath, result.wav); fs.writeFileSync(manifestPath, JSON.stringify(result.manifest, null, 2)); const verification = { ...verifyArtifact(result.wav, result.manifest), checks: { deterministicHash: true, finiteSamples: true, noClipping: !result.manifest.normalization.clipping, stereo: true, sampleRate: result.manifest.sampleRate } }; fs.writeFileSync(verificationPath, JSON.stringify(verification, null, 2)); return { ...result, wavPath, manifestPath, verificationPath, verification }; }
+export function writeArtifact(root, recipe, durationSeconds = 1) {
+  const result = renderWav(recipe, durationSeconds);
+  fs.mkdirSync(root, { recursive: true });
+  const stem = `${result.manifest.recipeId}-v${result.manifest.recipeVersion}-${result.hashes.wav.slice(0, 12)}`;
+  const wavPath = path.join(root, `${stem}.wav`);
+  const manifestPath = path.join(root, `${stem}.manifest.json`);
+  const verificationPath = path.join(root, `${stem}.verification.json`);
+  fs.writeFileSync(wavPath, result.wav);
+  fs.writeFileSync(manifestPath, JSON.stringify(result.manifest, null, 2));
+  const verification = {
+    ...verifyArtifact(result.wav, result.manifest),
+    checks: {
+      deterministicHash: true,
+      finiteSamples: true,
+      noClipping: !result.manifest.normalization.clipping,
+      stereo: true,
+      sampleRate: result.manifest.sampleRate,
+      canonicalPcmDigest: result.hashes.pcm,
+    },
+  };
+  fs.writeFileSync(verificationPath, JSON.stringify(verification, null, 2));
+  return { ...result, wavPath, manifestPath, verificationPath, verification };
+}
 
-export function verifyArtifact(wav, manifest) { const errors = []; if (!Buffer.isBuffer(wav) || wav.length < 44 || wav.toString('ascii', 0, 4) !== 'RIFF' || wav.toString('ascii', 8, 12) !== 'WAVE') errors.push('Invalid WAV container'); if (manifest?.fileSha256 && sha256(wav) !== manifest.fileSha256) errors.push('WAV SHA-256 does not match manifest'); if (manifest?.durationSamples && wav.length !== 44 + manifest.durationSamples * manifest.channels * (manifest.bitDepth / 8)) errors.push('WAV sample count does not match manifest'); if (manifest?.channels !== 2) errors.push('Formal artifact must be stereo'); return { valid: errors.length === 0, errors, wavSha256: sha256(wav), expectedSha256: manifest?.fileSha256 ?? null }; }
+export function verifyArtifact(wav, manifest) {
+  const errors = [];
+  const isBuffer = Buffer.isBuffer(wav) || wav instanceof Uint8Array;
+  if (!isBuffer || wav.length < 44 || String.fromCharCode(...wav.slice(0, 4)) !== "RIFF" || String.fromCharCode(...wav.slice(8, 12)) !== "WAVE") errors.push("Invalid WAV container");
+  const wavSha256 = isBuffer ? sha256Hex(wav) : null;
+  if (manifest?.fileSha256 && wavSha256 !== manifest.fileSha256) errors.push("WAV SHA-256 does not match manifest");
+  if (manifest?.durationSamples && wav.length !== 44 + manifest.durationSamples * manifest.channels * (manifest.bitDepth / 8)) errors.push("WAV sample count does not match manifest");
+  if (manifest?.channels !== 2) errors.push("Formal artifact must be stereo");
+  return { valid: errors.length === 0, errors, wavSha256, expectedSha256: manifest?.fileSha256 ?? null };
+}

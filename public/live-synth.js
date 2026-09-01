@@ -1,12 +1,58 @@
-// Stateful live synthesizer shared by Audio Lab and formal-session playback.
-// It generates phase-continuous stereo PCM blocks and never loops a saved WAV.
+/*
+ * Compatibility facade for the original LiveSynth API.
+ *
+ * The active renderer and AudioWorklet use AudioEngine directly. Keeping this
+ * small facade lets older offline tests exercise the same stateful DSP while
+ * using the shared canonical PCM SHA-256 implementation.
+ */
+import { AudioEngine, normalizeRecipe, pcmDigest } from "./audio-core.js";
+
 export class LiveSynth {
   constructor(recipe, sampleRate = 44100, seed = 1) {
-    this.recipe = recipe; this.sampleRate = sampleRate; this.frame = 0; this.seed = Number(seed) || 1; this.state = { phases: (recipe.carriers || [{ leftHz: recipe.leftHz, rightHz: recipe.rightHz, gain: recipe.gain ?? .25 }]).map(() => 0), noise: this.seed & 0xffff || 0xACE1, pink: 0, digest: null };
-    this.state.digest = new TextEncoder(); this.digestChunks = []; this.lastBlockDigest = '';
+    this.seed = Number(seed) || 1;
+    const raw = {
+      ...(recipe || {}),
+      id: recipe?.id ?? recipe?.recipeId ?? "LIVE_SYNTH_COMPAT",
+      sampleRate: Number(recipe?.sampleRate ?? sampleRate),
+      durationMode: "live",
+      developmentFixture: true,
+    };
+    if (raw.noise && raw.noise.seed === undefined) raw.noise.seed = this.seed;
+    this.recipe = normalizeRecipe(raw, { sampleRate: raw.sampleRate, developmentFixture: true });
+    this.engine = new AudioEngine(this.recipe);
+    this.engine.start();
+    this.frame = 0;
+    this.lastBlockDigest = null;
   }
-  noise() { let x = this.state.noise; const bit = ((x ^ (x >>> 2) ^ (x >>> 3) ^ (x >>> 5)) & 1); x = (x >>> 1) | (bit << 15); this.state.noise = x & 0xffff; const white = this.state.noise / 32767 - 1; this.state.pink = .65 * this.state.pink + .35 * white; return this.state.pink; }
-  generate(frames) { const outL = new Float32Array(frames), outR = new Float32Array(frames); const carriers = this.recipe.carriers || [{ leftHz:this.recipe.leftHz, rightHz:this.recipe.rightHz, gain:this.recipe.gain ?? .25, phase:0 }]; const dt = 1 / this.sampleRate; for (let i=0;i<frames;i++) { let l=0,r=0,t=this.frame*dt; carriers.forEach((c,j)=>{ const gain=Number(c.gain ?? .25), phase=this.state.phases[j] ?? Number(c.phase ?? 0); l += gain*Math.sin(phase); r += gain*Math.sin(phase + 2*Math.PI*(Number(c.rightHz)-Number(c.leftHz))*t); this.state.phases[j] = phase + 2*Math.PI*Number(c.leftHz)*dt; }); if (this.recipe.septon) this.recipe.septon.forEach(c=>{ l += (c.gain??.05)*Math.sin(2*Math.PI*c.leftHz*t); r += (c.gain??.05)*Math.sin(2*Math.PI*c.rightHz*t); }); if (this.recipe.mode==='PHASED_PINK_PATENT_5356368' || this.recipe.noise?.algorithm==='PHASED_PINK_PATENT_5356368') { const n=this.noise()*(this.recipe.noise?.gain??.04), sw=2*Math.PI*(this.recipe.noise?.sweepHz??.125)*t; l+=n*(.7+.3*Math.sin(sw)); r+=n*(.7+.3*Math.cos(sw+(this.recipe.noise?.rightPhase??Math.PI/2))); } outL[i]=Math.max(-1,Math.min(1,l)); outR[i]=Math.max(-1,Math.min(1,r)); this.frame++; } this.lastBlockDigest = this.digest(outL,outR); return [outL,outR]; }
-  digest(left,right) { let sum=0; for(let i=0;i<left.length;i++) sum = (sum + Math.round((left[i]+right[i])*32767) * 2654435761) >>> 0; return sum.toString(16).padStart(8,'0'); }
-  snapshot() { return { frame:this.frame, seed:this.seed, state:{...this.state, digest:undefined}, lastBlockDigest:this.lastBlockDigest }; }
+
+  generate(frames) {
+    const count = Number(frames);
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error("frames must be a non-negative safe integer");
+    const left = new Float32Array(count);
+    const right = new Float32Array(count);
+    this.engine.renderInto(left, right);
+    this.frame = this.engine.frame;
+    this.lastBlockDigest = pcmDigest(left, right, this.recipe.sampleRate, count);
+    return [left, right];
+  }
+
+  stop() {
+    this.engine.stop();
+    while (this.engine.state !== "stopped") {
+      const remaining = Math.max(1, this.engine.rampFrames);
+      this.engine.renderInto(new Float32Array(remaining), new Float32Array(remaining));
+    }
+    return this.engine.finalize();
+  }
+
+  snapshot() {
+    return {
+      frame: this.frame,
+      seed: this.seed,
+      state: this.engine.snapshot(),
+      lastBlockDigest: this.lastBlockDigest,
+    };
+  }
 }
+
+export default LiveSynth;

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "1.0",
+  "metadata": {"exportedBy": "legacy-fixture", "note": "original metadata"},
+  "sessions": [
+    {
+      "sessionId": "LEGACY-100",
+      "createdUtc": "2021-01-02T03:04:05.000Z",
+      "participantLabel": "Legacy participant",
+      "profileId": "BASELINE_NOW_BINARY_V1",
+      "profileVersion": 1,
+      "objective": 1,
+      "participantTarget": "one",
+      "metadata": {"operator": "fixture"},
+      "events": [{"seq": 1, "eventId": "LEGACY-100-E1", "type": "COMMITTED", "data": {"old": true}}],
+      "outputs": [{"index": 0, "value": 1, "recordHash": "legacy-output-hash"}],
+      "rawReport": {"state": "ordinary", "freeText": "preserved"},
+      "analysis": {"method": "legacy-analysis", "value": 0.5}
+    },
+    {
+      "sessionId": "LEGACY-101",
+      "createdUtc": "2021-01-03T03:04:05.000Z",
+      "participantLabel": "Missing fields participant",
+      "metadata": {"missing": ["objective", "target"]},
+      "events": []
+    }
+  ]
+}

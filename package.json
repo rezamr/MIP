@@ -11,10 +11,10 @@
     "start": "node scripts/rebuild-native.cjs electron && electron .",
     "dev": "node scripts/rebuild-native.cjs electron && electron .",
     "server:start": "node src/server.js",
-    "test": "node scripts/rebuild-native.cjs node && node --test",
+    "test": "node scripts/test-all.cjs",
     "dry-run": "node scripts/dry-run.js",
-    "build": "electron-builder --dir",
-    "dist": "electron-builder --win nsis --x64"
+    "build": "node scripts/rebuild-native.cjs electron && electron-builder --dir",
+    "dist": "node scripts/rebuild-native.cjs electron && electron-builder --win nsis --x64 --publish never"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0"
@@ -32,6 +32,7 @@
     "files": [
       "src/**/*",
       "public/**/*",
+      "renderer/**/*",
       "Logo.svg",
       "package.json"
     ],

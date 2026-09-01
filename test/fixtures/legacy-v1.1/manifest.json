@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "1.1",
+  "sessionId": "LEGACY-110",
+  "createdUtc": "2022-02-03T04:05:06.000Z",
+  "participantLabel": "Legacy v1.1 participant",
+  "profileId": "BASELINE_NOW_BINARY_V1",
+  "profileVersion": 1,
+  "metadata": {"source": "v1.1 fixture"}
+}
