@@ -18,6 +18,7 @@ let protocolHandlersBound = false;
 let audioGeneration = 0;
 let stopInFlight = null;
 let prepareInFlight = null;
+const pendingPreparations = new Set();
 let player = {
   ctx: null,
   node: null,
@@ -362,7 +363,8 @@ async function renderRaw() {
     } catch (error) { toast(error.message); }
   };
 }
-async function stopPlayer() {
+async function stopPlayer({ cancelPreparations = true } = {}) {
+  if (cancelPreparations) for (const preparation of pendingPreparations) preparation.cancelled = true;
   if (stopInFlight) return stopInFlight;
   const operation = stopPlayerInternal();
   stopInFlight = operation;
@@ -443,15 +445,23 @@ function updatePlayer() {
     if ($("#" + id)) $("#" + id).disabled = disabled;
 }
 async function preparePlayer(recipe, options = {}) {
+  const preparation = { cancelled: false };
+  pendingPreparations.add(preparation);
+  // Publish the pending state before the serialized operation reaches its
+  // first await. This keeps Stop available during the tiny hand-off window
+  // between the click and AudioWorklet module preparation.
+  player = { ...player, status: "preparing", pendingPreparation: true };
+  updatePlayer();
   // Serialize every replacement, including quick/custom/layered auditions.
   // Without this queue two rapid clicks can each create an AudioContext before
   // either one publishes its controller, leaving an orphaned Worklet playing.
   const previous = prepareInFlight || Promise.resolve();
-  const operation = previous.catch(() => {}).then(() => preparePlayerInternal(recipe, options));
+  const operation = previous.catch(() => {}).then(() => preparePlayerInternal(recipe, { ...options, preparation }));
   prepareInFlight = operation;
   try {
     return await operation;
   } finally {
+    pendingPreparations.delete(preparation);
     if (prepareInFlight === operation) prepareInFlight = null;
   }
 }
@@ -461,8 +471,11 @@ async function preparePlayerInternal(recipe, {
   formal = false,
   handshake = null,
   healthCheck = null,
+  preparation = null,
 } = {}) {
-  await stopPlayer();
+  if (preparation?.cancelled) throw new Error("Audio preparation was cancelled");
+  await stopPlayer({ cancelPreparations: false });
+  if (preparation?.cancelled) throw new Error("Audio preparation was cancelled");
   const generation = ++audioGeneration;
   const audioRuntime = new RendererAudio((message) => {
     if (generation !== audioGeneration || player.audioRuntime !== audioRuntime) return;
@@ -500,7 +513,7 @@ async function preparePlayerInternal(recipe, {
   updatePlayer();
   try {
     const ack = await audioRuntime.prepare(recipe, { timeoutMs: 5000, handshake });
-    if (generation !== audioGeneration || player.audioRuntime !== audioRuntime)
+    if (preparation?.cancelled || generation !== audioGeneration || player.audioRuntime !== audioRuntime)
       throw new Error("Audio preparation was cancelled");
     // RendererAudio.prepare() intentionally creates a fresh controller.  Read
     // the controller only after preparation so all subsequent lifecycle
@@ -517,7 +530,7 @@ async function preparePlayerInternal(recipe, {
     updatePlayer();
     if (autoStart) {
       const started = await audioRuntime.start({ timeoutMs: 5000 });
-      if (generation !== audioGeneration || player.audioRuntime !== audioRuntime) {
+      if (preparation?.cancelled || generation !== audioGeneration || player.audioRuntime !== audioRuntime) {
         await audioRuntime.stop({ timeoutMs: 5000 }).catch(() => audioRuntime.dispose());
         throw new Error("Audio start was cancelled");
       }
