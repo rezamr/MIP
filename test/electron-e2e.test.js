@@ -78,6 +78,16 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.equal(initial.pageGuideCoverage.guides, 9, JSON.stringify(initial.pageNavigation));
     assert.deepEqual(initial.pageGuideCoverage.consoleErrors, []);
     assert.deepEqual(initial.pageGuideCoverage.unhandledErrors, []);
+    assert.deepEqual(initial.calibrationUi, {
+      controls: true,
+      selectedOutcomeSpace: true,
+      calculatedCardinality: true,
+      persistedOutcomeSpace: true,
+      persistedCardinality: true,
+      persistedSamples: true,
+      persistedIntegrity: true,
+      provider: true,
+    });
     assert.deepEqual(initial.audioLabPanels, { pureRecipeDetails: true, sourceProvenance: true, engineeringVerification: true, activeLayers: true, masterGainText: true });
     assert.deepEqual(initial.layeredRecipePanels, { repositoryBacked: true, activeLayers: true, sourceClasses: true, engineeringVerification: true });
     assert.deepEqual(initial.audioControlSmoke, { doublePlay: true, play: true, rerender: true, pause: true, resume: true, gain: true, stop: true });
@@ -144,7 +154,7 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.match(initial.reportNavigation, /Sessions/i);
 
     const restarted = await launchE2E(root, "restart", initial.sessionId, initial.recipeEditing.editedRecipeId);
-    assert.equal(restarted.ok, true);
+    assert.equal(restarted.ok, true, JSON.stringify(restarted));
     assert.equal(restarted.sessionPersisted, true);
     assert.equal(restarted.schemaVersion, initial.settings.schemaVersion);
     assert.equal(restarted.persistedReport.locked, true);

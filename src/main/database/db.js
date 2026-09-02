@@ -23,7 +23,9 @@ import {
   REFERENCE_NOT_APPLICABLE,
 } from "../repositories/AudioRecipeVersionPolicy.js";
 
-export const CURRENT_SCHEMA_VERSION = 14;
+export const CURRENT_SCHEMA_VERSION = 15;
+
+export const BUILTIN_METADATA_RECONCILIATION_VERSION = "BUILTIN_RECIPE_METADATA_RECONCILIATION_V1";
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -764,6 +766,185 @@ function backfillVersionMetadata(db) {
   `);
 }
 
+function builtinDefinitions() {
+  return [...Object.values(PRESETS), ...Object.values(EXPERIMENTAL_PRESETS)];
+}
+
+function normalizePersistedRecipe(config) {
+  try {
+    return normalizeRecipe(config);
+  } catch {
+    try { return normalizeRecipe(config, { developmentFixture: true }); }
+    catch { return null; }
+  }
+}
+
+function builtinSourceIdentity(recipe) {
+  const experimental = recipe.recipeId === "MIP_LAYERED_EXPERIMENTAL_V1";
+  return {
+    recipeId: recipe.recipeId,
+    identityType: experimental ? "EXPERIMENTAL_FIXTURE" : "BUILT_IN",
+    identityLabel: recipe.name || recipe.recipeId,
+    sourceKind: experimental ? "MIP_RECONSTRUCTION" : "BUILT_IN",
+    sourceRef: recipe.recipeId,
+    source: experimental ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS",
+  };
+}
+
+function builtinValidationMetadata(recipe) {
+  const validation = validateRecipe(recipe);
+  const effective = validation.recipe || recipe;
+  const provenanceValidation = validateRecipeProvenance(effective);
+  return {
+    valid: validation.valid && provenanceValidation.valid,
+    errors: [...(validation.errors || []), ...(provenanceValidation.errors || [])],
+    provenance: { valid: provenanceValidation.valid, errors: provenanceValidation.errors || [] },
+    configFingerprint: recipe.configFingerprint,
+    validationVersion: "AUDIO_RECIPE_VALIDATION_V1",
+  };
+}
+
+function builtinVersionMetadata(recipe, verification, validation) {
+  const identity = builtinSourceIdentity(recipe);
+  return {
+    source: identity.source,
+    sourceIdentity: identity,
+    recipeProvenance: recipe.provenance,
+    historicalStatus: recipe.historicalStatus,
+    historicalExactness: recipe.historicalExactness,
+    parameterProvenance: clone(recipe.parameterProvenance || {}),
+    engineeringVerification: clone(verification),
+    provenanceAudit: clone(recipe.provenanceAudit || null),
+    metadataReconciliation: {
+      version: BUILTIN_METADATA_RECONCILIATION_VERSION,
+      status: "MATCHED",
+      configFingerprint: recipe.configFingerprint,
+    },
+    validation: clone(validation),
+  };
+}
+
+/**
+ * Reconcile only repository-owned built-in version metadata.  Material
+ * config_json and config_hash are deliberately never written here: a current
+ * source definition may repair metadata only when its normalized material
+ * fingerprint is exactly the same as the persisted immutable version.
+ */
+export function reconcileBuiltinRecipeMetadata(db) {
+  const database = sqlDb(db);
+  const repaired = [];
+  const mismatches = [];
+  const skipped = [];
+  const select = database.prepare(`
+    SELECT v.recipe_id,v.version,v.config_json,v.config_hash,v.created_utc,
+      m.status,m.is_draft,m.is_active,m.incomplete,m.parent_version,
+      m.created_utc AS metadata_created_utc,m.provenance_json,m.validation_json
+    FROM audio_recipe_versions v
+    LEFT JOIN audio_recipe_version_metadata m
+      ON m.recipe_id=v.recipe_id AND m.version=v.version
+    WHERE v.recipe_id=? AND v.version=?
+  `);
+  const hasMetadata = database.prepare("SELECT 1 FROM audio_recipe_version_metadata WHERE recipe_id=? AND version=?");
+  const updateMetadata = database.prepare(`
+    UPDATE audio_recipe_version_metadata
+    SET identity_id=?,provenance_json=?,validation_json=?,incomplete=?
+    WHERE recipe_id=? AND version=?
+  `);
+  const insertMetadata = database.prepare(`
+    INSERT INTO audio_recipe_version_metadata(
+      recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,
+      incomplete,parent_version,validation_json,created_utc
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+  `);
+  const definitions = builtinDefinitions();
+  const transaction = database.transaction(() => {
+    for (const definition of definitions) {
+      const row = select.get(definition.recipeId, Number(definition.version));
+      if (!row) {
+        skipped.push({ recipeId: definition.recipeId, version: definition.version, reason: "persisted immutable version not found" });
+        continue;
+      }
+      const current = normalizeRecipe(definition);
+      const persisted = normalizePersistedRecipe(json(row.config_json, {}));
+      const persistedFingerprint = persisted?.configFingerprint || null;
+      const currentFingerprint = current.configFingerprint || null;
+      const metadataBefore = json(row.provenance_json, {}) || {};
+      if (!persisted || persistedFingerprint !== currentFingerprint) {
+        const staleVerification = persisted
+          ? bindEngineeringVerification(
+            persisted,
+            metadataBefore.engineeringVerification || persisted.engineeringVerification,
+            { materialChanged: true, valid: (() => { try { return validateRecipe(persisted).valid; } catch { return false; } })() },
+          )
+          : metadataBefore.engineeringVerification && typeof metadataBefore.engineeringVerification === "object"
+            ? { ...clone(metadataBefore.engineeringVerification), status: "STALE", referenceStatus: "STALE", formalOperationalEligibility: false, configFingerprint: persistedFingerprint }
+            : null;
+        const marker = {
+          ...metadataBefore,
+          ...(staleVerification ? { engineeringVerification: staleVerification } : {}),
+          metadataReconciliation: {
+            version: BUILTIN_METADATA_RECONCILIATION_VERSION,
+            status: "MATERIAL_MISMATCH_REVIEW_REQUIRED",
+            persistedConfigFingerprint: persistedFingerprint,
+            currentConfigFingerprint: currentFingerprint,
+          },
+        };
+        if (hasMetadata.get(row.recipe_id, row.version)) {
+          if (canonical(metadataBefore) !== canonical(marker))
+            updateMetadata.run(row.recipe_id, JSON.stringify(marker), row.validation_json, row.incomplete ? 1 : 0, row.recipe_id, row.version);
+        } else {
+          insertMetadata.run(row.recipe_id, row.version, row.recipe_id, JSON.stringify(marker), row.status || "ACTIVE", row.is_draft === null || row.is_draft === undefined ? 0 : row.is_draft, row.is_active === null || row.is_active === undefined ? 1 : row.is_active, row.incomplete === null || row.incomplete === undefined ? 1 : row.incomplete, row.parent_version ?? null, row.validation_json, row.metadata_created_utc || row.created_utc || now());
+        }
+        mismatches.push({ recipeId: row.recipe_id, version: row.version, persistedConfigFingerprint: persistedFingerprint, currentConfigFingerprint: currentFingerprint, status: "MATERIAL_MISMATCH_REVIEW_REQUIRED" });
+        continue;
+      }
+
+      const validation = builtinValidationMetadata(current);
+      const verification = bindEngineeringVerification(current, current.engineeringVerification, {
+        materialChanged: false,
+        valid: validation.valid,
+      });
+      const metadata = builtinVersionMetadata(current, verification, validation);
+      const metadataAfter = JSON.stringify(metadata);
+      const metadataExists = hasMetadata.get(row.recipe_id, row.version);
+      const status = row.status || "ACTIVE";
+      const isDraft = row.is_draft === null || row.is_draft === undefined ? 0 : row.is_draft;
+      const isActive = row.is_active === null || row.is_active === undefined ? 1 : row.is_active;
+      const incomplete = validation.valid ? 0 : 1;
+      const needsUpdate = !metadataExists || canonical(metadataBefore) !== canonical(metadata) || JSON.stringify(json(row.validation_json, null)) !== JSON.stringify(validation) || Number(row.incomplete || 0) !== incomplete;
+      if (metadataExists) {
+        if (needsUpdate) updateMetadata.run(row.recipe_id, metadataAfter, JSON.stringify(validation), incomplete, row.recipe_id, row.version);
+      } else {
+        insertMetadata.run(row.recipe_id, row.version, row.recipe_id, metadataAfter, status, isDraft, isActive, incomplete, row.parent_version ?? null, JSON.stringify(validation), row.metadata_created_utc || row.created_utc || now());
+      }
+      repaired.push({ recipeId: row.recipe_id, version: row.version, changed: needsUpdate, configFingerprint: currentFingerprint });
+    }
+  });
+  transaction();
+  return {
+    version: BUILTIN_METADATA_RECONCILIATION_VERSION,
+    repaired,
+    mismatches,
+    skipped,
+  };
+}
+
+function applyRecipeVersionMetadata(materialRecipe, versionMetadata) {
+  const metadata = versionMetadata && typeof versionMetadata === "object" ? versionMetadata : {};
+  const projected = clone(materialRecipe || {});
+  if (metadata.parameterProvenance && typeof metadata.parameterProvenance === "object" && !Array.isArray(metadata.parameterProvenance))
+    projected.parameterProvenance = clone(metadata.parameterProvenance);
+  if (metadata.provenanceAudit !== undefined) projected.provenanceAudit = clone(metadata.provenanceAudit);
+  if (metadata.historicalStatus !== undefined) projected.historicalStatus = String(metadata.historicalStatus);
+  if (metadata.historicalExactness !== undefined) projected.historicalExactness = String(metadata.historicalExactness);
+  if (typeof metadata.recipeProvenance === "string") projected.provenance = metadata.recipeProvenance;
+  else if (typeof metadata.provenance === "string") projected.provenance = metadata.provenance;
+  if (metadata.engineeringVerification && typeof metadata.engineeringVerification === "object")
+    projected.engineeringVerification = clone(metadata.engineeringVerification);
+  try { return normalizeRecipe(projected); }
+  catch { return projected; }
+}
+
 function backfillAnalysisData(db) {
   if (!tableExists(db, "analyses") || !tableExists(db, "analysis_versions")) return;
   const analyses = db.prepare("SELECT * FROM analyses ORDER BY session_id").all();
@@ -952,6 +1133,14 @@ export function migrateConnection(db) {
     ensureV14Columns(db);
     ensureV14Indexes(db);
   });
+  apply(15, () => {
+    // v15 records the built-in metadata reconciliation boundary.  The
+    // fingerprint-gated reconciliation itself also runs after seeding so a
+    // fresh database and a previously upgraded database converge to the same
+    // authoritative version metadata.
+    ensureV12Tables(db);
+    ensureV12Columns(db);
+  });
 
   // A failed process can leave objects created just before a migration marker.
   ensureV12Tables(db);
@@ -965,6 +1154,7 @@ export function migrateConnection(db) {
   backfillSessionIdSequence(db);
   backfillSessionDetails(db);
   backfillVersionMetadata(db);
+  reconcileBuiltinRecipeMetadata(db);
   allowAnalysisBackfill(db);
   backfillAnalysisData(db);
   ensureTriggers(db);
@@ -995,35 +1185,46 @@ function profileDto(row, includeConfig = true) {
 function recipeDto(row, includeConfig = true) {
   const config = json(row.config_json, {});
   const versionMetadata = json(row.provenance_json, {});
-  let effective = config;
+  let materialRecipe = config;
   try {
-    effective = normalizeRecipe(config);
+    materialRecipe = normalizeRecipe(config);
   } catch {
     // Preserve a redacted/inspectable DTO for legacy rows that predate the
     // complete recipe contract; validation gates below remain conservative.
-    try { effective = normalizeRecipe(config, { developmentFixture: true }); }
-    catch { effective = config; }
+    try { materialRecipe = normalizeRecipe(config, { developmentFixture: true }); }
+    catch { materialRecipe = config; }
   }
+  // Material remains sourced from immutable config_json.  Version metadata is
+  // a separate authoritative projection for provenance, verification, and
+  // repository identity; applying it here must not rewrite material or its
+  // configFingerprint.
+  const effective = applyRecipeVersionMetadata(materialRecipe, versionMetadata);
   const validation = (() => {
     try { return validateRecipe(effective); } catch { return { valid: false, errors: ["recipe normalization failed"] }; }
   })();
+  const validatedRecipe = validation.recipe || effective;
   const provenanceValidation = (() => {
-    try { return validateRecipeProvenance(effective); } catch { return { valid: false, errors: ["recipe provenance validation failed"], summary: { provenanceEligible: false } }; }
+    try { return validateRecipeProvenance(validatedRecipe); } catch { return { valid: false, errors: ["recipe provenance validation failed"], summary: { provenanceEligible: false } }; }
   })();
   const metadataValidation = json(row.validation_json, {}) || {};
+  const authoritativeEngineering = versionMetadata.engineeringVerification || config.engineeringVerification || validatedRecipe.engineeringVerification;
   const engineeringVerification = resolveEngineeringVerification(
-    effective,
-    config.engineeringVerification || versionMetadata.engineeringVerification,
+    validatedRecipe,
+    authoritativeEngineering,
     { valid: validation.valid && provenanceValidation.valid && metadataValidation.valid !== false },
   );
   const repositoryActive = String(row.status || "ACTIVE").toUpperCase() === "ACTIVE" && Boolean(row.is_active) && !Boolean(row.is_draft);
   const referenceGate = !engineeringVerification.referenceRequired || engineeringVerification.referenceStatus === "PASS";
   const operationalGate = engineeringVerification.configurationStatus === "PASS" && engineeringVerification.runtimeCompatibility === "PASS" && engineeringVerification.deterministicSelfCheck === "PASS";
-  const formalOperationalEligibility = repositoryActive && !Boolean(row.incomplete) && validation.valid && provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true && operationalGate && referenceGate;
+  const metadataReconciliation = versionMetadata.metadataReconciliation || null;
+  const materialMismatch = metadataReconciliation?.status === "MATERIAL_MISMATCH_REVIEW_REQUIRED";
+  const formalOperationalEligibility = repositoryActive && !Boolean(row.incomplete) && !materialMismatch && validation.valid && provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true && operationalGate && referenceGate;
   const formalEligibilityReason = formalOperationalEligibility
     ? engineeringVerification.referenceStatus === REFERENCE_NOT_APPLICABLE
       ? "Immutable active custom version, valid configuration, provenance, runtime compatibility, and deterministic self-check passed. No golden reference fixture applies to this custom recipe."
       : "Immutable active version, valid configuration, complete provenance, runtime compatibility, deterministic self-check, and current reference verification gates passed."
+    : materialMismatch
+      ? "Built-in material fingerprint does not match the current canonical definition; metadata was not repaired and requires review."
     : !repositoryActive
       ? "Version is not active; formal sessions require an active immutable version."
       : row.incomplete || !validation.valid
@@ -1038,25 +1239,29 @@ function recipeDto(row, includeConfig = true) {
               ? "No golden reference fixture applies to this custom recipe; required operational checks are not complete."
               : "Current applicable reference verification has not been run for this effective recipe.";
   return {
-    ...(includeConfig ? effective : {}),
+    ...(includeConfig ? validatedRecipe : {}),
     recipeId: row.recipe_id,
     id: row.recipe_id,
     version: row.version,
     // The recipe version is immutable evidence.  Preserve its material
     // provenance; expose the identity-level provenance separately instead of
     // mutating the effective recipe returned to callers.
-    provenance: config.provenance ?? row.provenance ?? null,
+    provenance: typeof versionMetadata.recipeProvenance === "string"
+      ? versionMetadata.recipeProvenance
+      : config.provenance ?? row.provenance ?? null,
     repositoryProvenance: row.provenance ?? null,
     status: row.status || "ACTIVE",
     isDraft: Boolean(row.is_draft),
     isActive: Boolean(row.is_active),
     incomplete: Boolean(row.incomplete),
     configHash: row.config_hash,
-    parameterProvenance: effective.parameterProvenance || versionMetadata.parameterProvenance || {},
+    parameterProvenance: validatedRecipe.parameterProvenance || {},
     provenanceEligibility: provenanceValidation.summary?.provenanceEligible === true,
-    provenanceAudit: effective.provenanceAudit || versionMetadata.provenanceAudit || null,
-    historicalStatus: effective.historicalStatus || "NOT_HISTORICALLY_EXACT",
-    historicalExactness: effective.historicalExactness || "NOT_CLAIMED",
+    provenanceAudit: validatedRecipe.provenanceAudit || null,
+    historicalStatus: validatedRecipe.historicalStatus || "NOT_HISTORICALLY_EXACT",
+    historicalExactness: validatedRecipe.historicalExactness || "NOT_CLAIMED",
+    sourceIdentity: versionMetadata.sourceIdentity || null,
+    metadataReconciliation,
     formalEligibility: formalOperationalEligibility,
     formalOperationalEligibility,
     formalEligibilityReason,
@@ -1141,7 +1346,7 @@ export class MipDatabase {
     const insertRecipe = this.db.prepare("INSERT OR IGNORE INTO audio_recipes(recipe_id,provenance) VALUES(?,?)");
     const insertIdentity = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_identities(recipe_id,identity_type,identity_label,provenance_json,source_kind,source_ref,created_utc) VALUES(?,?,?,?,?,?,?)");
     const insertVersion = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_versions(recipe_id,version,config_json,config_hash,created_utc,immutable) VALUES(?,?,?,?,?,1)");
-    const insertMeta = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?)");
+    const insertMeta = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,incomplete,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
     for (const recipe of [...Object.values(PRESETS), ...Object.values(EXPERIMENTAL_PRESETS)]) {
       const config = { ...clone(recipe), recipeId: recipe.id };
       const recipeValidation = validateRecipe(config);
@@ -1150,11 +1355,20 @@ export class MipDatabase {
         config.engineeringVerification,
         { valid: recipeValidation.valid },
       );
+      const current = normalizeRecipe(recipeValidation.recipe || config);
+      const validation = builtinValidationMetadata(current);
+      const metadata = builtinVersionMetadata(current, config.engineeringVerification, validation);
+      const identity = builtinSourceIdentity(current);
       insertRecipe.run(recipe.id, recipe.provenance || "MIP built-in");
-      insertIdentity.run(recipe.id, recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "EXPERIMENTAL_FIXTURE" : "BUILT_IN", recipe.name || recipe.id, JSON.stringify({ source: recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS", historicalStatus: recipe.historicalStatus, parameterProvenance: recipe.parameterProvenance }), recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "MIP_RECONSTRUCTION" : "BUILT_IN", recipe.id, now());
+      insertIdentity.run(recipe.id, identity.identityType, identity.identityLabel, JSON.stringify({ source: identity.source, sourceIdentity: identity, historicalStatus: recipe.historicalStatus, parameterProvenance: recipe.parameterProvenance }), identity.sourceKind, identity.sourceRef, now());
       insertVersion.run(recipe.id, recipe.version, JSON.stringify(config), sha256(canonical(config)), now());
-      insertMeta.run(recipe.id, recipe.version, recipe.id, JSON.stringify({ source: recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS", parameterProvenance: config.parameterProvenance, engineeringVerification: config.engineeringVerification }), "ACTIVE", 0, 1, null, JSON.stringify({ valid: recipeValidation.valid, errors: recipeValidation.errors || [] }), now());
+      insertMeta.run(recipe.id, recipe.version, recipe.id, JSON.stringify(metadata), "ACTIVE", 0, 1, validation.valid ? 0 : 1, null, JSON.stringify(validation), now());
     }
+    // Existing immutable material rows are intentionally left untouched; this
+    // second pass repairs/reports only version-level metadata and also covers
+    // rows that were present before the current seed definitions shipped.
+    this.builtinMetadataReconciliation = reconcileBuiltinRecipeMetadata(this.db);
+    return this.builtinMetadataReconciliation;
   }
 
   profileList(options = {}) { return this.profiles.list(options); }
@@ -1539,7 +1753,7 @@ export class MipDatabase {
     // Repository DTOs carry projection-only fields alongside the immutable
     // effective recipe.  Never include those fields in a formal audio commit;
     // the committed fingerprint must describe only recipe material.
-    for (const key of ["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance", "formalOperationalEligibility"])
+    for (const key of ["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance", "sourceIdentity", "metadataReconciliation", "formalOperationalEligibility"])
       delete config[key];
     const hashConfig = { ...config };
     delete hashConfig.configFingerprint;

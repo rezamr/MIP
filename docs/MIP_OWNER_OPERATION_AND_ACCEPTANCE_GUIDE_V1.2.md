@@ -142,6 +142,10 @@ user-defined, and unknown blocked parameters.  `Engineering verification` is
 software-only and remains separate from owner audible result.  For a genuinely
 custom recipe, the reference status is `NOT_APPLICABLE` and the card explicitly
 states: **No golden reference fixture applies to this custom recipe.**
+On startup, repository-owned built-ins reconcile version metadata only when the
+persisted normalized material fingerprint matches the current definition.  A
+material mismatch stays immutable and is shown as requiring review; it is never
+silently presented as a current PASS.
 
 The three simple conditions are clean component tests:
 
@@ -167,11 +171,15 @@ confirm all optional layers show `NONE` or `N/A`.
 session.  Calibration does not make an RNG “more random” and does not prove a
 paranormal effect; it records provider behavior and diagnostics.
 
-Select `OS_CSPRNG` for operational calibration or the explicitly labelled
-deterministic test provider for fixtures.  Binary results may show zero/one,
-but generic finite outcome spaces report cardinality, unique outcomes,
-duplicates, numeric min/max, and suitable diagnostics without enumerating a
-billion-value range.
+Select the outcome-space source in Calibration: Application Research Default,
+a profile outcome space, Binary, or an explicit Integer Range.  Enter inclusive
+minimum/maximum bounds for a range and confirm the calculated cardinality K.
+For example, `OS_CSPRNG`, 256 samples, and `INTEGER_RANGE 0..999999999`
+should report K = 1,000,000,000, unique/duplicate counts, observed min/max,
+and a sparse bucket summary.  The range remains symbolic; the application
+never enumerates one billion possible values.  Use `OS_CSPRNG` for operational
+calibration or the explicitly labelled deterministic test provider for
+fixtures.  Binary results continue to show zero/one counts.
 
 **Acceptance test.** Run a small OS-CSPRNG calibration before operational
 testing, verify its immutable result hash, inspect history, and export the

@@ -94,6 +94,67 @@ export async function runElectronE2E(mainWindow, options = {}) {
       if (!pageNavigation.every((page) => page.rendered && page.guideMatchesPage && page.explanatoryText)) throw new Error("Top-level page/Page Guide E2E failed: " + JSON.stringify(pageNavigation));
       if (pageErrors.length || unhandledErrors.length) throw new Error("Renderer emitted an error during page E2E: " + JSON.stringify({ pageErrors, unhandledErrors }));
 
+      // Calibration acceptance is exercised through the real renderer and
+      // preload bridge.  The INTEGER_RANGE is symbolic: the main process
+      // samples only 256 observations and never enumerates the one-billion
+      // value domain.
+      document.querySelector('[data-page="calibration"]')?.click();
+      await sleep(120);
+      const calibrationUi = {
+        controls: Boolean(document.querySelector("#calSpaceSource") && document.querySelector("#calRangeMin") && document.querySelector("#calRangeMax") && document.querySelector("#calN") && document.querySelector("#calRng")),
+        selectedOutcomeSpace: false,
+        calculatedCardinality: false,
+        persistedOutcomeSpace: false,
+        persistedCardinality: false,
+        persistedSamples: false,
+        persistedIntegrity: false,
+        provider: false,
+      };
+      const setInput = (selector, value, eventType = "input") => {
+        const element = document.querySelector(selector);
+        if (!element) return false;
+        element.value = String(value);
+        element.dispatchEvent(new Event(eventType, { bubbles: true }));
+        return true;
+      };
+      if (calibrationUi.controls) {
+        const source = document.querySelector("#calSpaceSource");
+        source.value = "INTEGER_RANGE";
+        source.dispatchEvent(new Event("change", { bubbles: true }));
+        setInput("#calRangeMin", 0);
+        setInput("#calRangeMax", 999999999);
+        setInput("#calN", 256);
+        setInput("#calRng", "OS_CSPRNG", "change");
+        const summary = document.querySelector("#calSpaceSummary")?.textContent || "";
+        calibrationUi.selectedOutcomeSpace = /INTEGER_RANGE/.test(summary);
+        calibrationUi.calculatedCardinality = /1,?000,?000,?000/.test(summary);
+        document.querySelector("#runCal")?.click();
+        for (let attempt = 0; attempt < 240; attempt += 1) {
+          const historyText = document.querySelector("#calHistory")?.innerText || "";
+          if (/INTEGER_RANGE/.test(historyText) && /K=1,?000,?000,?000/.test(historyText)) break;
+          await sleep(25);
+        }
+        const historyText = document.querySelector("#calHistory")?.innerText || "";
+        calibrationUi.persistedOutcomeSpace = /INTEGER_RANGE/.test(historyText) && /0\.\.999999999/.test(historyText);
+        calibrationUi.persistedCardinality = /K=1,?000,?000,?000/.test(historyText);
+        calibrationUi.persistedSamples = /256 observations/.test(historyText);
+        const detailButton = document.querySelector("#calHistory [data-cal-detail]");
+        detailButton?.click();
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+          if ((document.querySelector("#calDetail")?.innerText || "").includes("immutable detail")) break;
+          await sleep(25);
+        }
+        const detailText = document.querySelector("#calDetail")?.innerText || "";
+        calibrationUi.persistedOutcomeSpace = calibrationUi.persistedOutcomeSpace || /INTEGER_RANGE/.test(detailText);
+        calibrationUi.persistedCardinality = calibrationUi.persistedCardinality || /Cardinality K\s*1,?000,?000,?000/.test(detailText);
+        calibrationUi.persistedSamples = calibrationUi.persistedSamples || /Samples\s*256/.test(detailText);
+        const verification = detailButton?.dataset.calDetail ? await window.mip.verifyCalibration({ id: detailButton.dataset.calDetail }) : null;
+        calibrationUi.persistedIntegrity = verification?.valid === true || /VERIFIED/i.test(detailText);
+        calibrationUi.provider = /OS_CSPRNG/.test(historyText) || /OS_CSPRNG/.test(detailText);
+      }
+      output.calibrationUi = calibrationUi;
+      if (!Object.values(calibrationUi).every(Boolean)) throw new Error("Large-range Calibration UI E2E failed: " + JSON.stringify(calibrationUi));
+
       // Exercise the actual Audio Lab buttons through the renderer instead of
       // only testing AudioController directly.  This catches stale-controller
       // references and UI lifecycle races where audio continues after Stop.

@@ -1,6 +1,15 @@
 import { canonical, sha256 } from "../../engine.js";
 import { json, now } from "../database/db.js";
 
+// SQLite stores JSON text, so hash exactly the representation that will be
+// persisted. In particular, JSON.stringify omits undefined object properties
+// (such as proportionOne for a non-binary outcome space); hashing the raw
+// object would otherwise create a result that can never verify after reload.
+function jsonSafe(value) {
+  const encoded = JSON.stringify(value, (_key, child) => typeof child === "bigint" ? child.toString() : child);
+  return encoded === undefined ? null : JSON.parse(encoded);
+}
+
 function decode(row) {
   if (!row) return null;
   return {
@@ -50,14 +59,14 @@ export class CalibrationRepository {
       provider: input.provider || null,
       providerVersion: input.providerVersion || null,
       sampleCount: Number(input.sampleCount ?? input.samples ?? 0),
-      counts: input.counts || {},
-      statistics: input.statistics || {},
-      metadata: input.metadata || {},
+      counts: jsonSafe(input.counts || {}),
+      statistics: jsonSafe(input.statistics || {}),
+      metadata: jsonSafe(input.metadata || {}),
       integrityStatus: input.integrityStatus || "UNVERIFIED",
     };
     const hashInput = { ...result };
     result.resultHash = input.resultHash || sha256(canonical(hashInput));
-    const details = { calibrationId, counts: result.counts, statistics: result.statistics, metadata: result.metadata, device: input.device ?? null, environment: input.environment ?? null, observations: input.observations ?? null, createdUtc };
+    const details = { calibrationId, counts: result.counts, statistics: result.statistics, metadata: result.metadata, device: jsonSafe(input.device ?? null), environment: jsonSafe(input.environment ?? null), observations: jsonSafe(input.observations ?? null), createdUtc };
     const tx = this.db.transaction(() => {
       this.db.prepare("INSERT INTO calibrations(calibration_id,created_utc,provider,provider_version,sample_count,counts_json,statistics_json,metadata_json,result_hash,integrity_status) VALUES(?,?,?,?,?,?,?,?,?,?)").run(result.calibrationId, result.createdUtc, result.provider, result.providerVersion, result.sampleCount, JSON.stringify(result.counts), JSON.stringify(result.statistics), JSON.stringify(result.metadata), result.resultHash, result.integrityStatus);
       const detailHash = sha256(canonical(details));

@@ -407,12 +407,12 @@ test("reveal gate requires every independent condition", () => {
   assert.equal(evaluateRevealGate({ mode: "FUTURE_TARGET", rawReportLocked: true, evidenceComplete: true, primaryResolved: true, postTargetComplete: true, integrityAcceptable: true, futureTargetGenerated: true, predictionCommitted: true }).eligible, true);
 });
 
-test("schema 14 research definitions and future target evidence persist immutably", () => {
+test("schema 15 research definitions and future target evidence persist immutably", () => {
   const root = fs.mkdtempSync(pathForTest());
   const db = new MipDatabase(root);
   const profile = db.profiles.getVersion("TEMPORAL_INTEGER_RANGE_V1", 1);
   const session = db.beginSession(profile, "fixture", "dry", { deferCommit: false, researchDefinition: { mode: "FUTURE_TARGET", outcomeSpace: profile.outcomeSpace, targetDefinition: { mode: "FUTURE_TARGET", anchor: "ABSOLUTE_UTC", scheduledUtc: "2026-01-01T00:00:00.000Z" }, temporalAnalysis: { primaryEndpoint: "FIXED_TIME_WINDOW", windows: [{ id: "primary", preMs: 100, postMs: 100 }] }, revealPolicy: "AFTER_EVIDENCE_COMPLETE" } });
-  assert.equal(db.schemaVersion, 14);
+  assert.equal(db.schemaVersion, 15);
   assert.equal(db.research.getDefinition(session.id).cardinality, 1_000_000_000);
   db.research.recordTargetGeneration(session.id, { prediction: 12, target: 34, scheduledUtc: "2026-01-01T00:00:00.000Z", actualUtc: "2026-01-01T00:00:01.000Z", status: "GENERATED", rng: { domain: "FUTURE_TARGET", provider: "DETERMINISTIC_PRNG_TEST", version: "v1" } });
   assert.equal(db.research.getTargetGeneration(session.id, { full: true }).match, false);
@@ -437,10 +437,10 @@ test("schema 13 databases migrate forward without rewriting historical rows", ()
     legacy.prepare("INSERT INTO schema_migrations(version, applied_utc) VALUES(?, ?)").run(version, "2026-01-01T00:00:00.000Z");
   legacy.close();
   const db = new MipDatabase(root);
-  assert.equal(db.schemaVersion, 14);
+  assert.equal(db.schemaVersion, 15);
   for (const table of ["research_definitions", "session_phase_projections", "target_occurrences", "future_target_events", "cross_session_analyses", "research_defaults"])
     assert.ok(db.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table), table);
-  assert.deepEqual(db.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version), Array.from({ length: 14 }, (_unused, index) => index + 1));
+  assert.deepEqual(db.db.prepare("SELECT version FROM schema_migrations ORDER BY version").all().map((row) => row.version), Array.from({ length: 15 }, (_unused, index) => index + 1));
   db.close();
   fs.rmSync(root, { recursive: true, force: true });
 });

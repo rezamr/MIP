@@ -1248,19 +1248,77 @@ async function renderAggregate() {
 }
 
 async function renderCalibration() {
-  const history = window.mip ? await window.mip.calibrationHistory({}) : [];
-  app.innerHTML = `<div class="section-intro"><div><h2>Calibration</h2><p>Calibration runs in the authoritative main-process RNG service and is persisted in SQLite.</p></div>${pill("No participant session")}</div><div class="card"><div class="form-grid"><div class="field"><label for="calRng">Random source</label><select id="calRng"><option>OS_CSPRNG</option><option>DETERMINISTIC_PRNG_TEST</option></select></div><div class="field"><label for="calN">Sample count</label><input id="calN" type="number" value="256" min="2"></div></div><button class="button primary" id="runCal" style="margin-top:16px">Run calibration</button></div><div id="calResult" style="margin-top:18px"></div><div class="card" style="margin-top:18px"><div class="section-intro"><div><h3>Calibration history</h3><p class="subtle">Historical results are immutable; filtering never changes their evidence.</p></div><input id="calFilter" class="button" placeholder="Provider or integrity status" aria-label="Filter calibration history"></div><div id="calHistory"></div><div id="calDetail" style="margin-top:16px"></div></div>`;
+  const [history, settings] = window.mip
+    ? await Promise.all([window.mip.calibrationHistory({}), window.mip.getSettings?.() || Promise.resolve({})])
+    : [[], {}];
+  const configuredDefault = settings?.researchDefaults?.outcomeSpace;
+  const applicationDefault = configuredDefault && typeof configuredDefault === "object"
+    ? jsonSafe(configuredDefault)
+    : { type: "BINARY", values: [0, 1] };
+  const profileOptions = (profiles || []).filter((profile) => profile?.outcomeSpace && typeof profile.outcomeSpace === "object");
+  const defaultProfileId = selectedProfile?.id && profileOptions.some((profile) => profile.id === selectedProfile.id)
+    ? selectedProfile.id
+    : profileOptions[0]?.id || "";
+  const profileMarkup = profileOptions.length
+    ? profileOptions.map((profile) => `<option value="${esc(profile.id)}">${esc(profile.id)} · ${esc(profile.outcomeSpace.type || "UNKNOWN")}</option>`).join("")
+    : '<option value="">No profile outcome spaces available</option>';
+  app.innerHTML = `<div class="section-intro"><div><h2>Calibration</h2><p>Calibration runs in the authoritative main-process RNG service and is persisted in SQLite.</p></div>${pill("No participant session")}</div><div class="card"><div class="form-grid"><div class="field"><label for="calRng">Random source</label><select id="calRng"><option>OS_CSPRNG</option><option>DETERMINISTIC_PRNG_TEST</option></select></div><div class="field"><label for="calN">Sample count</label><input id="calN" type="number" value="256" min="2"></div><div class="field"><label for="calSpaceSource">Outcome space</label><select id="calSpaceSource"><option value="APPLICATION_DEFAULT">Application default</option><option value="PROFILE">Profile outcome space</option><option value="BINARY">Binary</option><option value="INTEGER_RANGE">Integer range</option></select></div><div class="field" id="calProfileField"><label for="calProfile">Profile</label><select id="calProfile" ${profileOptions.length ? "" : "disabled"}>${profileMarkup}</select></div><div class="field" id="calRangeFields" hidden><label>Integer range</label><div class="form-grid"><input id="calRangeMin" type="number" step="1" value="0" aria-label="Calibration range minimum"><input id="calRangeMax" type="number" step="1" value="1" aria-label="Calibration range maximum"></div><small>Minimum and maximum are inclusive; no values are enumerated.</small></div></div><div class="review-row"><span>Selected outcome space / K</span><strong id="calSpaceSummary">APPLICATION_DEFAULT</strong></div><div id="calValidation" class="callout" role="status" aria-live="polite" style="margin-top:12px"></div><button class="button primary" id="runCal" style="margin-top:16px">Run calibration</button></div><div id="calResult" style="margin-top:18px"></div><div class="card" style="margin-top:18px"><div class="section-intro"><div><h3>Calibration history</h3><p class="subtle">Historical results are immutable; filtering never changes their evidence.</p></div><input id="calFilter" class="button" placeholder="Provider or integrity status" aria-label="Filter calibration history"></div><div id="calHistory"></div><div id="calDetail" style="margin-top:16px"></div></div>`;
+  $("#calProfile").value = defaultProfileId;
   const historyContainer = $("#calHistory");
   const detailContainer = $("#calDetail");
+  const formatCount = (value) => Number.isFinite(Number(value)) ? new Intl.NumberFormat().format(Number(value)) : String(value ?? "—");
+  const formatSpace = (space) => space?.type === "INTEGER_RANGE"
+    ? `${space.type} · ${space.minInclusive}..${space.maxInclusive}`
+    : `${space?.type || "UNKNOWN"}${Array.isArray(space?.values) ? ` · ${space.values.join(", ")}` : ""}`;
+  const updateRangeCardinality = () => {
+    const min = Number($("#calRangeMin")?.value);
+    const max = Number($("#calRangeMax")?.value);
+    const valid = Number.isSafeInteger(min) && Number.isSafeInteger(max) && max >= min;
+    $("#calSpaceSummary").textContent = $("#calSpaceSource").value === "INTEGER_RANGE" && valid
+      ? formatSpace({ type: "INTEGER_RANGE", minInclusive: min, maxInclusive: max }) + ` · K=${new Intl.NumberFormat().format(max - min + 1)}`
+      : $("#calSpaceSource").value;
+    return valid;
+  };
+  const updateSpaceControls = () => {
+    const source = $("#calSpaceSource").value;
+    $("#calProfileField").hidden = source !== "PROFILE";
+    $("#calRangeFields").hidden = source !== "INTEGER_RANGE";
+    if (source === "APPLICATION_DEFAULT") $("#calSpaceSummary").textContent = `${formatSpace(applicationDefault)} · application default`;
+    else if (source === "PROFILE") {
+      const profile = profileOptions.find((item) => item.id === $("#calProfile").value);
+      $("#calSpaceSummary").textContent = profile ? `${formatSpace(profile.outcomeSpace)} · ${profile.id}` : "PROFILE · unavailable";
+    } else if (source === "BINARY") $("#calSpaceSummary").textContent = "BINARY · 0, 1 · K=2";
+    else updateRangeCardinality();
+  };
+  const requestedOutcomeSpace = () => {
+    const source = $("#calSpaceSource").value;
+    if (source === "APPLICATION_DEFAULT") return jsonSafe(applicationDefault);
+    if (source === "BINARY") return { type: "BINARY", values: [0, 1] };
+    if (source === "PROFILE") {
+      const profile = profileOptions.find((item) => item.id === $("#calProfile").value);
+      if (!profile) throw new Error("Select a profile with a valid outcome space.");
+      return jsonSafe(profile.outcomeSpace);
+    }
+    const min = Number($("#calRangeMin").value);
+    const max = Number($("#calRangeMax").value);
+    if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max) || max < min)
+      throw new Error("Integer range requires safe integer bounds with minimum ≤ maximum.");
+    return { type: "INTEGER_RANGE", minInclusive: min, maxInclusive: max };
+  };
+  $("#calSpaceSource").onchange = updateSpaceControls;
+  $("#calProfile").onchange = updateSpaceControls;
+  $("#calRangeMin").oninput = updateRangeCardinality;
+  $("#calRangeMax").oninput = updateRangeCardinality;
+  updateSpaceControls();
   const drawHistory = (query = "") => {
     const term = query.trim().toLowerCase();
     const rows = (history || []).filter((row) => !term || JSON.stringify(row).toLowerCase().includes(term));
-    historyContainer.innerHTML = rows.length ? rows.map((row) => `<article class="review-row"><span>${esc(row.createdUtc)} · ${esc(row.provider || "UNKNOWN")} · ${esc(row.sampleCount)}</span><strong>${renderDistribution(row.counts)} <button class="button" data-cal-detail="${esc(row.calibrationId)}">Detail</button> ${pill(row.integrityStatus || "UNVERIFIED")}</strong></article>`).join("") : '<div class="empty">No calibration records match the filter.</div>';
+    historyContainer.innerHTML = rows.length ? rows.map((row) => `<article class="review-row"><span>${esc(row.createdUtc)} · ${esc(row.provider || "UNKNOWN")} · ${esc(row.sampleCount)}</span><div>${renderDistribution(row.counts, { statistics: row.statistics })}<button class="button" data-cal-detail="${esc(row.calibrationId)}">Detail</button> ${pill(row.integrityStatus || "UNVERIFIED")}</div></article>`).join("") : '<div class="empty">No calibration records match the filter.</div>';
     historyContainer.querySelectorAll("[data-cal-detail]").forEach((button) => button.onclick = async () => {
       try {
         const row = await window.mip?.calibrationDetail({ id: button.dataset.calDetail });
         const verification = window.mip ? await window.mip.verifyCalibration({ id: button.dataset.calDetail }) : null;
-        detailContainer.innerHTML = row ? `<div class="card"><h4>${esc(row.calibrationId)} · immutable detail</h4>${fieldRow("Provider", `${row.provider} · ${row.providerVersion}`)}${fieldRow("Samples", row.sampleCount)}${fieldRow("Result hash", row.resultHash, { mono: true })}${fieldRow("Statistics", row.statistics)}${fieldRow("Integrity", verification?.valid ? "VERIFIED" : verification?.errors?.join("; ") || row.integrityStatus || "UNVERIFIED")}</div>` : '<div class="empty">Calibration detail unavailable.</div>';
+        detailContainer.innerHTML = row ? `<div class="card"><h4>${esc(row.calibrationId)} · immutable detail</h4>${fieldRow("Provider", `${row.provider} · ${row.providerVersion}`)}${fieldRow("Samples", formatCount(row.sampleCount))}${fieldRow("Outcome space", formatSpace(row.statistics?.outcomeSpace))}${fieldRow("Cardinality K", formatCount(row.statistics?.cardinality))}${fieldRow("Unique / duplicates", `${formatCount(row.statistics?.uniqueCount)} / ${formatCount(row.statistics?.duplicateCount)}`)}${fieldRow("Observed min / max", `${row.statistics?.min ?? "—"} / ${row.statistics?.max ?? "—"}`)}${fieldRow("Result hash", row.resultHash, { mono: true })}${fieldRow("Statistics", row.statistics)}${fieldRow("Integrity", verification?.valid ? "VERIFIED" : verification?.errors?.join("; ") || row.integrityStatus || "UNVERIFIED")}</div>` : '<div class="empty">Calibration detail unavailable.</div>';
       } catch (error) { toast(error.message); }
     });
   };
@@ -1268,13 +1326,15 @@ async function renderCalibration() {
   $("#runCal").onclick = async () => {
     if (!window.mip) return toast("Calibration requires the Electron application.");
     try {
-      const result = await window.mip.runCalibration({ provider: $("#calRng").value, samples: Number($("#calN").value) });
+      const outcomeSpace = requestedOutcomeSpace();
+      const result = await window.mip.runCalibration({ provider: $("#calRng").value, samples: Number($("#calN").value), outcomeSpace });
       const countTotal = Object.values(result.counts || {}).reduce((sum, count) => sum + Number(count || 0), 0);
       const statistics = result.statistics || {};
-      $("#calResult").innerHTML = `<div class="card"><h3>Persisted calibration result</h3><div class="review-row"><span>Provider</span><strong>${esc(result.provider)} · ${esc(result.providerVersion)}</strong></div><div class="review-row"><span>Samples</span><strong>${esc(result.samples ?? result.sampleCount ?? countTotal)}</strong></div><div class="review-row"><span>Outcome space / K</span><strong>${esc(statistics.outcomeSpace?.type || "UNKNOWN")} · ${esc(statistics.cardinality ?? "—")}</strong></div><div class="review-row"><span>Unique outcomes / duplicates</span><strong>${esc(statistics.uniqueCount ?? Object.keys(result.counts || {}).length)} / ${esc(statistics.duplicateCount ?? "—")}</strong></div><div class="review-row"><span>Numeric min / max</span><strong>${esc(statistics.min ?? "—")} / ${esc(statistics.max ?? "—")}</strong></div>${renderDistribution(result.counts)}<div class="review-row"><span>SHA-256</span><strong class="mono">${esc(result.resultHash)}</strong></div></div>`;
+      $("#calValidation").textContent = "";
+      $("#calResult").innerHTML = `<div class="card"><h3>Persisted calibration result</h3><div class="review-row"><span>Provider</span><strong>${esc(result.provider)} · ${esc(result.providerVersion)}</strong></div><div class="review-row"><span>Samples</span><strong>${esc(formatCount(result.samples ?? result.sampleCount ?? countTotal))}</strong></div><div class="review-row"><span>Outcome space</span><strong>${esc(formatSpace(statistics.outcomeSpace))}</strong></div><div class="review-row"><span>Cardinality K</span><strong>${esc(formatCount(statistics.cardinality))}</strong></div><div class="review-row"><span>Unique outcomes / duplicates</span><strong>${esc(formatCount(statistics.uniqueCount ?? Object.keys(result.counts || {}).length))} / ${esc(formatCount(statistics.duplicateCount))}</strong></div><div class="review-row"><span>Numeric min / max</span><strong>${esc(statistics.min ?? "—")} / ${esc(statistics.max ?? "—")}</strong></div><div class="review-row"><span>Observed buckets</span><strong>${esc(formatCount(statistics.bucketCount ?? Object.keys(result.counts || {}).length))}</strong></div>${renderDistribution(result.counts, { statistics })}<div class="review-row"><span>SHA-256</span><strong class="mono">${esc(result.resultHash)}</strong></div><div class="review-row"><span>Integrity</span><strong>${esc(result.integrityStatus || "UNVERIFIED")}</strong></div></div>`;
       toast("Calibration persisted in SQLite.");
       setTimeout(renderCalibration, 0);
-    } catch (error) { toast(error.message); }
+    } catch (error) { $("#calValidation").textContent = error.message; toast(error.message); }
   };
   drawHistory();
 }
