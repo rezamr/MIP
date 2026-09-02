@@ -14,6 +14,7 @@ const SAFE_PRE_REVEAL_PAYLOAD_KEYS = new Set([
   "deviation", "recoveryRequired", "recoveryReason", "source", "saved",
   "gate", "ownerAuthorizedReveal", "ownerConfirmedMemory", "timingDeviation",
   "audioFailed", "interrupted", "aborted", "reportDraft", "rawReportLocked",
+  "scheduledUtc", "actualUtc", "latenessMs", "toleranceMs", "noBackfill",
 ]);
 
 const PRE_REVEAL_TIMING_SENSITIVE_EVENTS = new Set([
@@ -22,6 +23,7 @@ const PRE_REVEAL_TIMING_SENSITIVE_EVENTS = new Set([
   "OUTPUT_MISSED",
   "FUTURE_TARGET_GENERATED",
   "FUTURE_TARGET_MISSED",
+  "MISSED_FUTURE_TARGET_GENERATION",
   "MACHINE_OUTPUT_FINALIZED",
 ]);
 

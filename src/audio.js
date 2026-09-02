@@ -13,6 +13,8 @@ import {
   validateRecipeProvenance,
   activeLayers,
   summarizeProvenance,
+  AUDIO_CORE_VERSION,
+  ENGINEERING_VERIFICATION_VERSION,
   lfsrNextState,
   lfsrPeriod,
   LFSR_SEQUENCE_PERIOD,
@@ -46,7 +48,7 @@ export const EXPERIMENTAL_PRESETS = Object.freeze(Object.fromEntries(Object.entr
   Object.freeze({ ...recipe, id, recipeId: id, version: recipe.version, recipeVersion: recipe.version, leftHz: recipe.leftHz, rightHz: recipe.rightHz, centerHz: recipe.centerHz, beatHz: recipe.beatHz }),
 ])));
 
-export { canonical, phasedPinkSample, pcmDigest, sha256Hex, validateRecipeProvenance, activeLayers, summarizeProvenance, lfsrNextState, lfsrPeriod, LFSR_SEQUENCE_PERIOD, LFSR_UPDATE_SEMANTICS };
+export { canonical, phasedPinkSample, pcmDigest, sha256Hex, validateRecipeProvenance, activeLayers, summarizeProvenance, lfsrNextState, lfsrPeriod, LFSR_SEQUENCE_PERIOD, LFSR_UPDATE_SEMANTICS, AUDIO_CORE_VERSION, ENGINEERING_VERIFICATION_VERSION };
 
 export function quickRecipe(centerHz, beatHz = 4) {
   const center = Number(centerHz);
@@ -103,10 +105,12 @@ export function quickRecipe(centerHz, beatHz = 4) {
     durationMode: "live",
     historicalStatus: "USER_DEFINED_EXPLORATORY",
     historicalExactness: "NOT_HISTORICALLY_EXACT",
+    formalEligibility: false,
+    formalEligibilityReason: "Unsaved QUICK_CUSTOM preview; save and validate an immutable version before formal use.",
     parameterProvenance: {
       "*": { provenanceClass: "USER_DEFINED", sourceRef: "Audio Lab owner input", sourceStatus: "Preview-only owner parameter" },
-      "carriers[0].leftHz": { provenanceClass: "PRIMARY_SOURCE_DERIVED", sourceRef: "Audio Lab center/beat inputs", inputValues: { centerHz: center, beatHz: beat }, derivationRule: "centerHz - beatHz / 2", derivedValue: center - beat / 2, derivationVersion: "QUICK_CUSTOM_V1" },
-      "carriers[0].rightHz": { provenanceClass: "PRIMARY_SOURCE_DERIVED", sourceRef: "Audio Lab center/beat inputs", inputValues: { centerHz: center, beatHz: beat }, derivationRule: "centerHz + beatHz / 2", derivedValue: center + beat / 2, derivationVersion: "QUICK_CUSTOM_V1" },
+      "carriers[0].leftHz": { provenanceClass: "USER_DEFINED", sourceRef: "Audio Lab owner input", inputValues: { centerHz: center, beatHz: beat }, derivationRule: "centerHz - beatHz / 2", derivedValue: center - beat / 2, derivationVersion: "QUICK_CUSTOM_V1", sourceStatus: "Owner-derived preview value; not a primary historical source" },
+      "carriers[0].rightHz": { provenanceClass: "USER_DEFINED", sourceRef: "Audio Lab owner input", inputValues: { centerHz: center, beatHz: beat }, derivationRule: "centerHz + beatHz / 2", derivedValue: center + beat / 2, derivationVersion: "QUICK_CUSTOM_V1", sourceStatus: "Owner-derived preview value; not a primary historical source" },
     },
   };
 }

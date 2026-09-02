@@ -174,8 +174,56 @@ export async function runElectronE2E(mainWindow, options = {}) {
       };
       if (!Object.values(output.layeredRecipePanels).every(Boolean)) throw new Error("Layered recipe panel E2E failed: " + JSON.stringify(output.layeredRecipePanels));
 
+      // Exercise the complete immutable recipe editor path through the real
+      // preload bridge and SQLite repository.  The guided controls must write
+      // canonical carriers/execution fields; aliases are only projections.
+      const runRecipeEditorFlow = async () => {
+        const base = await window.mip.getRecipe({ id: "A-U396-4", version: 1 });
+        const editedRecipeId = "E2E_RECIPE_EDIT_" + Date.now();
+        const duplicate = await window.mip.duplicateRecipe({ recipeId: "A-U396-4", version: 1, newId: editedRecipeId, activate: false });
+        const oldSnapshot = { leftHz: duplicate.carriers[0].leftHz, rightHz: duplicate.carriers[0].rightHz, configFingerprint: duplicate.configFingerprint, provenance: jsonSafe(duplicate.parameterProvenance) };
+        const edited = jsonSafe(duplicate);
+        edited.carriers = edited.carriers.map((carrier, index) => index === 0 ? { ...carrier, leftHz: 395, rightHz: 399 } : carrier);
+        delete edited.leftHz; delete edited.rightHz; delete edited.centerHz; delete edited.beatHz; delete edited.gain;
+        delete edited.mode; delete edited.durationMode; delete edited.targetFrames;
+        const draft = await window.mip.saveRecipeDraft({ recipe: edited, baseVersion: 1 });
+        if (!draft?.validation?.valid) throw new Error("Canonical guided recipe draft validation failed: " + JSON.stringify(draft?.validation));
+        const saved = await window.mip.saveRecipeVersion({ recipe: edited, parentVersion: 1, activate: false });
+        const reopened = await window.mip.getRecipe({ id: editedRecipeId, version: saved.version });
+        const oldAfter = await window.mip.getRecipe({ id: editedRecipeId, version: 1 });
+        const { renderOffline } = await import(new URL("./audio-core.js", location.href).href);
+        const originalPcm = renderOffline(duplicate, { targetFrames: 2048 }).digest;
+        const editedPcm = renderOffline(reopened, { targetFrames: 2048 }).digest;
+        const changedProvenance = ["carriers[0].leftHz", "carriers[0].rightHz"].map((pathName) => reopened.parameterProvenance?.[pathName]?.provenanceClass || "MISSING");
+        const editor = {
+          editedRecipeId,
+          draftValid: true,
+          savedVersion: saved.version,
+          canonicalCarriers: { leftHz: reopened.carriers[0].leftHz, rightHz: reopened.carriers[0].rightHz },
+          displayAliases: { leftHz: reopened.leftHz, rightHz: reopened.rightHz, centerHz: reopened.centerHz, beatHz: reopened.beatHz, gain: reopened.gain },
+          aliasesMatch: reopened.leftHz === reopened.carriers[0].leftHz && reopened.rightHz === reopened.carriers[0].rightHz && reopened.centerHz === (reopened.leftHz + reopened.rightHz) / 2 && reopened.beatHz === Math.abs(reopened.rightHz - reopened.leftHz) && reopened.gain === reopened.carriers[0].gainLeft,
+          configFingerprintChanged: oldSnapshot.configFingerprint !== reopened.configFingerprint,
+          pcmDigestChanged: originalPcm !== editedPcm,
+          oldVersionUnchanged: oldAfter.carriers[0].leftHz === oldSnapshot.leftHz && oldAfter.carriers[0].rightHz === oldSnapshot.rightHz && oldAfter.configFingerprint === oldSnapshot.configFingerprint && JSON.stringify(oldAfter.parameterProvenance) === JSON.stringify(oldSnapshot.provenance),
+          changedProvenance,
+          changedProvenanceSafe: changedProvenance.every((value) => !String(value).startsWith("PRIMARY_SOURCE_")),
+          engineeringVerification: reopened.engineeringVerification,
+          verificationStaleOrNotRun: ["STALE", "REFERENCE VERIFICATION NOT RUN", "NOT_RUN"].includes(String(reopened.engineeringVerification?.status || "").toUpperCase()),
+        };
+        const cosmeticRecipeId = "E2E_RECIPE_COSMETIC_" + Date.now();
+        const cosmeticDuplicate = await window.mip.duplicateRecipe({ recipeId: "A-U396-4", version: 1, newId: cosmeticRecipeId, activate: false });
+        const cosmetic = await window.mip.saveRecipeVersion({ recipe: { ...jsonSafe(cosmeticDuplicate), name: "Cosmetic owner label" }, parentVersion: 1, activate: false });
+        const cosmeticReopened = await window.mip.getRecipe({ id: cosmeticRecipeId, version: cosmetic.version });
+        editor.cosmeticProvenanceSurvives = JSON.stringify(cosmeticReopened.parameterProvenance) === JSON.stringify(cosmeticDuplicate.parameterProvenance);
+        editor.cosmeticMaterialDiffEmpty = JSON.stringify(cosmeticReopened.provenanceAudit?.changedMaterialPaths || []) === "[]";
+        if (!editor.aliasesMatch || !editor.configFingerprintChanged || !editor.pcmDigestChanged || !editor.oldVersionUnchanged || !editor.changedProvenanceSafe || !editor.verificationStaleOrNotRun || !editor.cosmeticProvenanceSurvives || !editor.cosmeticMaterialDiffEmpty)
+          throw new Error("Recipe editor/repository E2E failed: " + JSON.stringify(editor));
+        return editor;
+      };
+
       if (${JSON.stringify(phase)} === "restart") {
         const expected = ${JSON.stringify(options.expectedSessionId || null)};
+        const expectedRecipe = ${JSON.stringify(options.expectedRecipeId || null)};
         const sessions = await window.mip.listSessions();
         output.sessions = sessions;
         output.sessionPersisted = Boolean(sessions.find((session) => session.sessionId === expected));
@@ -183,6 +231,29 @@ export async function runElectronE2E(mainWindow, options = {}) {
         output.persistedReport = expected ? await window.mip.getRawReport({ id: expected }) : null;
         output.persistedOutputCount = expected ? (await window.mip.getOutput({ id: expected })).length : 0;
         output.audioHealthHistory = await window.mip.audioHealthHistory({});
+        if (expectedRecipe) {
+          const persistedRecipe = await window.mip.getRecipe({ id: expectedRecipe, version: 2 });
+          const persistedOldRecipe = await window.mip.getRecipe({ id: expectedRecipe, version: 1 });
+          const { renderOffline: renderPersistedOffline } = await import(new URL("./audio-core.js", location.href).href);
+          const persistedOldDigest = persistedOldRecipe ? renderPersistedOffline(persistedOldRecipe, { targetFrames: 2048 }).digest : null;
+          const persistedEditedDigest = persistedRecipe ? renderPersistedOffline(persistedRecipe, { targetFrames: 2048 }).digest : null;
+          output.recipeEditingPersistence = {
+            recipeId: expectedRecipe,
+            canonicalCarriers: { leftHz: persistedRecipe?.carriers?.[0]?.leftHz, rightHz: persistedRecipe?.carriers?.[0]?.rightHz },
+            aliasesMatch: Boolean(persistedRecipe && persistedRecipe.leftHz === persistedRecipe.carriers?.[0]?.leftHz && persistedRecipe.rightHz === persistedRecipe.carriers?.[0]?.rightHz),
+            configFingerprint: persistedRecipe?.configFingerprint || null,
+            oldConfigFingerprint: persistedOldRecipe?.configFingerprint || null,
+            configFingerprintChanged: Boolean(persistedOldRecipe && persistedRecipe && persistedOldRecipe.configFingerprint !== persistedRecipe.configFingerprint),
+            oldPcmDigest: persistedOldDigest,
+            pcmDigest: persistedEditedDigest,
+            pcmDigestChanged: Boolean(persistedOldDigest && persistedEditedDigest && persistedOldDigest !== persistedEditedDigest),
+            oldVersionUnchanged: Boolean(persistedOldRecipe && persistedOldRecipe.carriers?.[0]?.leftHz === 394 && persistedOldRecipe.carriers?.[0]?.rightHz === 398 && persistedOldRecipe.parameterProvenance?.["carriers[0].leftHz"]?.provenanceClass === "MIP_OPERATIONAL_DEFINED"),
+            provenance: persistedRecipe?.parameterProvenance?.["carriers[0].leftHz"]?.provenanceClass || null,
+            verificationStatus: persistedRecipe?.engineeringVerification?.status || null,
+          };
+          output.recipeEditingPersistence.ok = output.recipeEditingPersistence.canonicalCarriers.leftHz === 395 && output.recipeEditingPersistence.canonicalCarriers.rightHz === 399 && output.recipeEditingPersistence.aliasesMatch && output.recipeEditingPersistence.configFingerprintChanged && output.recipeEditingPersistence.pcmDigestChanged && output.recipeEditingPersistence.oldVersionUnchanged && !String(output.recipeEditingPersistence.provenance).startsWith("PRIMARY_SOURCE_") && ["STALE", "REFERENCE VERIFICATION NOT RUN", "NOT_RUN"].includes(String(output.recipeEditingPersistence.verificationStatus).toUpperCase());
+          if (!output.recipeEditingPersistence.ok) throw new Error("Recipe editor restart persistence failed: " + JSON.stringify(output.recipeEditingPersistence));
+        }
         document.querySelector('[data-page="reports"]')?.click();
         await sleep(300);
         output.reportNavigation = document.querySelector("#page-title")?.textContent || "";
@@ -202,6 +273,8 @@ export async function runElectronE2E(mainWindow, options = {}) {
         output.reportNavigation = document.querySelector("#page-title")?.textContent || "";
         return output;
       }
+
+      output.recipeEditing = await runRecipeEditorFlow();
 
       const session = await window.mip.createSession({
         profileId: "BASELINE_NOW_BINARY_V1",

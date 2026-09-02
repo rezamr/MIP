@@ -21,6 +21,8 @@
  */
 
 export const PROCESSOR_VERSION = "mip-audio-worklet-2.0";
+export const AUDIO_CORE_VERSION = "mip-audio-core-2.0";
+export const ENGINEERING_VERIFICATION_VERSION = "AUDIO_ENGINEERING_FIXTURES_V1";
 export const PCM_DIGEST_VERSION = "MIP_PCM_SHA256_V1";
 export const PCM_CANONICAL_FORMAT = Object.freeze({
   version: PCM_DIGEST_VERSION,
@@ -267,7 +269,9 @@ const FINGERPRINT_EXCLUDED_METADATA = new Set([
   "historicalExactness",
   "formalEligibility",
   "formalEligibilityReason",
+  "provenanceEligibility",
   "engineeringVerification",
+  "provenanceAudit",
   "activeLayers",
 ]);
 
@@ -350,13 +354,31 @@ export function summarizeProvenance(recipe) {
   const unknown = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "UNKNOWN_BLOCKED").map((entry) => entry.path);
   const reconstruction = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "MIP_RECONSTRUCTION_PARAMETER").map((entry) => entry.path);
   const sourceVerified = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "PRIMARY_SOURCE_VERIFIED").map((entry) => entry.path);
+  const provenanceEligible = unknown.length === 0;
+  let formalEligible = recipe?.formalEligibility === false ? false : provenanceEligible;
+  // A repository DTO carries the operational gates that a raw normalized
+  // recipe cannot know (immutable version, active status, and current
+  // engineering verification).  When those fields are present, require all
+  // of them instead of treating provenance completeness as formal eligibility.
+  const repositoryProjection = recipe && ["status", "isDraft", "isActive", "incomplete"].some((key) => Object.prototype.hasOwnProperty.call(recipe, key));
+  if (repositoryProjection) {
+    formalEligible = formalEligible &&
+      String(recipe.status || "").toUpperCase() === "ACTIVE" &&
+      recipe.isDraft !== true && recipe.isActive === true && recipe.incomplete !== true &&
+      String(recipe.engineeringVerification?.status || "").toUpperCase() === "PASS";
+  }
   return {
     classes,
     mixed: classes.length > 1,
     unknownBlocked: unknown,
     reconstruction,
     sourceVerified,
-    formalEligible: unknown.length === 0,
+    provenanceEligible,
+    // This field is deliberately conservative for unsaved previews.  The
+    // repository adds active/version/verification gates before a recipe is
+    // considered formally usable; a preview may never imply that state.
+    formalEligible,
+    formalOperationalEligible: formalEligible,
   };
 }
 
@@ -434,6 +456,22 @@ function firstDefined(primary, secondary) {
   return primary === undefined ? secondary : primary;
 }
 
+function sameNumericAlias(left, right) {
+  const a = Number(left);
+  const b = Number(right);
+  return Number.isFinite(a) && Number.isFinite(b) && a === b;
+}
+
+function sameTargetAlias(left, right) {
+  if (left === null || right === null) return left === right;
+  return sameNumericAlias(left, right);
+}
+
+function assertAliasAgreement(primary, alias, label, equal = sameNumericAlias) {
+  if (primary !== undefined && alias !== undefined && !equal(primary, alias))
+    throw new Error(`${label} aliases conflict`);
+}
+
 function pairValue(value, name, fallback = 0) {
   if (value === undefined) return { left: fallback, right: fallback };
   if (value && typeof value === "object" && !Array.isArray(value))
@@ -480,13 +518,18 @@ function normalizeModulation(value, name, type, aliases = {}, developmentFixture
 function component(source, name, { topGain, monaural = false, developmentFixture = false, modulation = true } = {}) {
   if (!source || typeof source !== "object" || Array.isArray(source))
     throw new Error(`${name} must be an object`);
-  let leftHz = source.leftHz ?? source.leftFrequencyHz;
-  let rightHz = source.rightHz ?? source.rightFrequencyHz;
-  if (source.frequencyHz !== undefined || source.hz !== undefined) {
-    const common = source.frequencyHz ?? source.hz;
-    leftHz = leftHz ?? common;
-    rightHz = rightHz ?? common;
+  assertAliasAgreement(source.leftHz, source.leftFrequencyHz, `${name}.leftHz`);
+  assertAliasAgreement(source.rightHz, source.rightFrequencyHz, `${name}.rightHz`);
+  assertAliasAgreement(source.frequencyHz, source.hz, `${name}.frequencyHz`);
+  const common = source.frequencyHz ?? source.hz;
+  if (common !== undefined) {
+    if (source.leftHz !== undefined || source.leftFrequencyHz !== undefined)
+      assertAliasAgreement(source.leftHz ?? source.leftFrequencyHz, common, `${name}.leftHz/frequencyHz`);
+    if (source.rightHz !== undefined || source.rightFrequencyHz !== undefined)
+      assertAliasAgreement(source.rightHz ?? source.rightFrequencyHz, common, `${name}.rightHz/frequencyHz`);
   }
+  let leftHz = source.leftHz ?? source.leftFrequencyHz ?? common;
+  let rightHz = source.rightHz ?? source.rightFrequencyHz ?? common;
   if (monaural && leftHz === undefined && rightHz === undefined) {
     leftHz = source.frequencyHz ?? source.hz;
     rightHz = leftHz;
@@ -505,9 +548,25 @@ function component(source, name, { topGain, monaural = false, developmentFixture
     if (source.fm === undefined && source.frequencyModulation === undefined)
       throw new Error(`${name}.fm must be explicitly configured (null is allowed)`);
   }
-  const gainInput = source.gain ?? topGain ?? (source.gainLeft !== undefined || source.gainRight !== undefined ? { left: source.gainLeft, right: source.gainRight } : undefined);
+  const sideGainDefined = source.gainLeft !== undefined || source.gainRight !== undefined;
+  if (source.gain !== undefined && sideGainDefined) {
+    const declaredGain = gainPair(source.gain, `${name}.gain`);
+    if (source.gainLeft !== undefined && !sameNumericAlias(source.gainLeft, declaredGain.left))
+      throw new Error(`${name}.gain conflicts with gainLeft`);
+    if (source.gainRight !== undefined && !sameNumericAlias(source.gainRight, declaredGain.right))
+      throw new Error(`${name}.gain conflicts with gainRight`);
+  }
+  const canonicalGainInput = source.gain ?? (sideGainDefined ? { left: source.gainLeft, right: source.gainRight } : undefined);
+  const gains = gainPair(canonicalGainInput ?? topGain, `${name}.gain`);
+  if (topGain !== undefined && canonicalGainInput !== undefined) {
+    const top = gainPair(topGain, `${name}.gain alias`);
+    const topIsPair = topGain && typeof topGain === "object" && !Array.isArray(topGain);
+    // The normalized top-level scalar is the first (left) carrier projection.
+    // Object aliases must agree with both canonical channel gains.
+    if (!sameNumericAlias(top.left, gains.left) || (topIsPair && !sameNumericAlias(top.right, gains.right)))
+      throw new Error(`${name}.gain conflicts with top-level gain`);
+  }
   const phaseInput = source.phase ?? source.initialPhase ?? (source.phaseLeft !== undefined || source.phaseRight !== undefined ? { left: source.phaseLeft, right: source.phaseRight } : undefined);
-  const gains = gainPair(gainInput, `${name}.gain`);
   const phases = pairValue(phaseInput, `${name}.phase`, 0);
   const waveform = String(source.waveform ?? "sine").toLowerCase();
   if (!["sine", "square", "saw", "triangle"].includes(waveform))
@@ -775,6 +834,23 @@ export function normalizeRecipe(input, options = {}) {
       if (value === undefined) throw new Error(`${field} must be explicitly configured (null or empty is allowed)`);
   }
   const executionSource = raw.execution && typeof raw.execution === "object" ? raw.execution : {};
+  // Development-only fixtures historically use `mode` as an explicit test
+  // override over a copied formal preset. Formal recipes must provide one
+  // authoritative synthesis mode and reject contradictory aliases.
+  if (!developmentFixture)
+    assertAliasAgreement(raw.mode, raw.synthesisMode, "mode/synthesisMode", (left, right) => String(left).trim().toUpperCase() === String(right).trim().toUpperCase());
+  const finiteProjectionOverride = String(raw.durationMode ?? "").trim().toLowerCase() === "finite" &&
+    String(executionSource.mode ?? "").trim().toLowerCase() === "live" &&
+    raw.targetFrames !== undefined && raw.targetFrames !== null &&
+    (executionSource.targetFrames === undefined || executionSource.targetFrames === null);
+  // A finite render request commonly starts from a normalized live recipe,
+  // whose `execution` projection is live/null. Treat the explicit finite
+  // duration+target pair as one atomic override; all other alias conflicts
+  // remain hard errors.
+  if (!finiteProjectionOverride)
+    assertAliasAgreement(raw.durationMode, executionSource.mode, "durationMode/execution.mode", (left, right) => String(left).trim().toLowerCase() === String(right).trim().toLowerCase());
+  if (!finiteProjectionOverride)
+    assertAliasAgreement(raw.targetFrames, executionSource.targetFrames, "targetFrames/execution.targetFrames", sameTargetAlias);
   const executionModeInput = raw.durationMode ?? executionSource.mode;
   if (executionModeInput === undefined && !developmentFixture) throw new Error("durationMode (or execution.mode) is required for a formal recipe");
   const durationMode = String(executionModeInput ?? (options.targetFrames !== undefined || raw.targetFrames !== undefined || raw.durationSeconds !== undefined || raw.durationSec !== undefined ? "finite" : "live")).toLowerCase();
@@ -797,10 +873,29 @@ export function normalizeRecipe(input, options = {}) {
     throw new Error(`Unsupported synthesisMode: ${synthesisMode}`);
   const relationsRaw = raw.binauralRelationships ?? [];
   const relations = array(relationsRaw, "binauralRelationships").map(normalizeRelation);
+  assertAliasAgreement(raw.leftHz, raw.leftFrequencyHz, "top-level leftHz/leftFrequencyHz");
+  assertAliasAgreement(raw.rightHz, raw.rightFrequencyHz, "top-level rightHz/rightFrequencyHz");
+  assertAliasAgreement(raw.frequencyHz, raw.hz, "top-level frequencyHz/hz");
+  const topCommonHz = raw.frequencyHz ?? raw.hz;
+  if (topCommonHz !== undefined) {
+    if (raw.leftHz !== undefined || raw.leftFrequencyHz !== undefined)
+      assertAliasAgreement(raw.leftHz ?? raw.leftFrequencyHz, topCommonHz, "top-level leftHz/frequencyHz");
+    if (raw.rightHz !== undefined || raw.rightFrequencyHz !== undefined)
+      assertAliasAgreement(raw.rightHz ?? raw.rightFrequencyHz, topCommonHz, "top-level rightHz/frequencyHz");
+  }
+  const topLeftHz = raw.leftHz ?? raw.leftFrequencyHz;
+  const topRightHz = raw.rightHz ?? raw.rightFrequencyHz;
   let carrierRaw = raw.carriers;
   if (carrierRaw === undefined || carrierRaw === null) {
-    if (raw.leftHz !== undefined || raw.rightHz !== undefined)
-      carrierRaw = [{ leftHz: raw.leftHz, rightHz: raw.rightHz, gain: raw.gain, phase: raw.phase, waveform: raw.waveform }];
+    if (topLeftHz !== undefined || topRightHz !== undefined || topCommonHz !== undefined)
+      carrierRaw = [{ leftHz: topLeftHz, rightHz: topRightHz, frequencyHz: topCommonHz, gain: raw.gain, phase: raw.phase, waveform: raw.waveform }];
+    else if (raw.centerHz !== undefined || raw.beatHz !== undefined) {
+      if (raw.centerHz === undefined || raw.beatHz === undefined)
+        throw new Error("centerHz and beatHz must be supplied together when carriers are omitted");
+      const center = positive(raw.centerHz, "centerHz");
+      const beat = number(raw.beatHz, "beatHz", { min: 0 });
+      carrierRaw = [{ leftHz: center - beat / 2, rightHz: center + beat / 2, gain: raw.gain, phase: raw.phase, waveform: raw.waveform }];
+    }
     else if (relations.length) carrierRaw = relations;
     else if (developmentFixture)
       carrierRaw = [{ leftHz: 440, rightHz: 440, gain: 0.1, phase: 0 }];
@@ -817,10 +912,29 @@ export function normalizeRecipe(input, options = {}) {
     fm: firstDefined(c.fm, firstDefined(c.frequencyModulation, globalFm)),
   });
   const normalizedCarriers = carriers.map((c, index) => component(applyGlobalModulation(c), `carriers[${index}]`, { topGain: carriers.length === 1 ? raw.gain : undefined, developmentFixture }));
-  if (raw.carriers && raw.leftHz !== undefined && Number(raw.leftHz) !== normalizedCarriers[0].leftHz)
+  if (raw.leftHz !== undefined && !sameNumericAlias(raw.leftHz, normalizedCarriers[0].leftHz))
     throw new Error("top-level leftHz conflicts with carriers[0].leftHz");
-  if (raw.carriers && raw.rightHz !== undefined && Number(raw.rightHz) !== normalizedCarriers[0].rightHz)
+  if (raw.rightHz !== undefined && !sameNumericAlias(raw.rightHz, normalizedCarriers[0].rightHz))
     throw new Error("top-level rightHz conflicts with carriers[0].rightHz");
+  if (normalizedCarriers.length) {
+    const primaryCarrier = normalizedCarriers[0];
+    const compareTop = (value, expected, label) => {
+      if (value !== undefined && !sameNumericAlias(value, expected))
+        throw new Error(`top-level ${label} conflicts with carriers[0].${label}`);
+    };
+    compareTop(raw.leftFrequencyHz, primaryCarrier.leftHz, "leftFrequencyHz");
+    compareTop(raw.rightFrequencyHz, primaryCarrier.rightHz, "rightFrequencyHz");
+    compareTop(raw.centerHz, (primaryCarrier.leftHz + primaryCarrier.rightHz) / 2, "centerHz");
+    compareTop(raw.beatHz, Math.abs(primaryCarrier.rightHz - primaryCarrier.leftHz), "beatHz");
+    if (topCommonHz !== undefined && (!sameNumericAlias(topCommonHz, primaryCarrier.leftHz) || !sameNumericAlias(topCommonHz, primaryCarrier.rightHz)))
+      throw new Error("top-level frequencyHz conflicts with carriers[0]");
+    if (raw.gain !== undefined) {
+      const topGain = gainPair(raw.gain, "top-level gain");
+      const topIsPair = raw.gain && typeof raw.gain === "object" && !Array.isArray(raw.gain);
+      if (!sameNumericAlias(topGain.left, primaryCarrier.gainLeft) || (topIsPair && !sameNumericAlias(topGain.right, primaryCarrier.gainRight)))
+        throw new Error("top-level gain conflicts with carriers[0].gain");
+    }
+  }
   const monauralRaw = raw.monauralLayers ?? raw.monaural ?? [];
   const monauralLayers = componentArray(monauralRaw, "monauralLayers", { gain: raw.monauralGain }).map((c, index) => component(applyGlobalModulation(c), `monauralLayers[${index}]`, { monaural: true, developmentFixture }));
   const septonRaw = raw.septon ?? raw.septonLayers ?? raw.septonComponents ?? [];
@@ -880,10 +994,15 @@ export function normalizeRecipe(input, options = {}) {
   );
   normalized.historicalStatus = String(raw.historicalStatus ?? "NOT_HISTORICALLY_EXACT");
   normalized.historicalExactness = String(raw.historicalExactness ?? "NOT_CLAIMED");
-  normalized.formalEligibility = summarizeProvenance(normalized).formalEligible;
+  const provenanceSummary = summarizeProvenance(normalized);
+  normalized.provenanceEligibility = provenanceSummary.provenanceEligible;
+  normalized.formalEligibility = raw.formalEligibility === false ? false : provenanceSummary.provenanceEligible;
   normalized.formalEligibilityReason = normalized.formalEligibility
-    ? "All material parameters have an explicit provenance class."
-    : `UNKNOWN_BLOCKED parameters: ${summarizeProvenance(normalized).unknownBlocked.join(", ")}`;
+    ? "Provenance is complete; repository/version/verification gates still apply."
+    : raw.formalEligibility === false
+      ? String(raw.formalEligibilityReason || "Preview-only recipe is not formally eligible.")
+      : `UNKNOWN_BLOCKED parameters: ${provenanceSummary.unknownBlocked.join(", ")}`;
+  normalized.provenanceAudit = clone(raw.provenanceAudit ?? null);
   normalized.engineeringVerification = clone(raw.engineeringVerification ?? null);
   normalized.leftHz = normalized.carriers[0].leftHz;
   normalized.rightHz = normalized.carriers[0].rightHz;
@@ -894,6 +1013,15 @@ export function normalizeRecipe(input, options = {}) {
   const fingerprintMaterial = clone(normalized);
   for (const key of FINGERPRINT_EXCLUDED_METADATA) delete fingerprintMaterial[key];
   normalized.configFingerprint = sha256Hex(canonical(fingerprintMaterial));
+  if (normalized.engineeringVerification) {
+    normalized.engineeringVerification = {
+      ...normalized.engineeringVerification,
+      configFingerprint: normalized.configFingerprint,
+      audioCoreVersion: normalized.engineeringVerification.audioCoreVersion || AUDIO_CORE_VERSION,
+      processorVersion: normalized.engineeringVerification.processorVersion || PROCESSOR_VERSION,
+      verificationVersion: normalized.engineeringVerification.verificationVersion || ENGINEERING_VERIFICATION_VERSION,
+    };
+  }
   return normalized;
 }
 
@@ -1715,7 +1843,15 @@ export function renderOffline(recipe, options = {}) {
   if (targetFrames === undefined && raw.durationSeconds !== undefined) targetFrames = Math.round(number(raw.durationSeconds, "durationSeconds", { min: 0 }) * Number(raw.sampleRate ?? 44100));
   if (targetFrames === undefined) throw new Error("renderOffline requires targetFrames or durationSeconds");
   targetFrames = number(targetFrames, "targetFrames", { integer: true, min: 0, max: Number.MAX_SAFE_INTEGER });
-  const engine = new AudioEngine({ ...raw, durationMode: "finite", targetFrames });
+  // Rendering is an explicit finite projection. Keep both public aliases
+  // synchronized so strict normalization never sees a contradictory request
+  // when a live recipe or a different finite frame count is rendered.
+  const engine = new AudioEngine({
+    ...raw,
+    durationMode: "finite",
+    targetFrames,
+    execution: { ...(raw.execution && typeof raw.execution === "object" ? raw.execution : {}), mode: "finite", targetFrames },
+  });
   const effective = engine.recipe;
   const left = new Float32Array(targetFrames);
   const right = new Float32Array(targetFrames);

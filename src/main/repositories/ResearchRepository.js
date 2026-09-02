@@ -203,7 +203,8 @@ export class ResearchRepository {
       throw new Error("future target cannot be generated before its scheduled anchor");
     if (generated && requestedStatus === "MISSED")
       throw new Error("A generated future target cannot be classified MISSED.");
-    if (!generated && requestedStatus !== "MISSED")
+    const missedGenerationStatus = ["MISSED", "MISSED_FUTURE_TARGET_GENERATION"].includes(requestedStatus);
+    if (!generated && !missedGenerationStatus)
       throw new Error("A future target event without a target must be explicitly classified MISSED.");
     // The scheduler may classify timing as ON_TIME/LATE, but persistence
     // needs one stable lifecycle vocabulary for the reveal gate. Keep the

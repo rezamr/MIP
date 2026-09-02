@@ -338,6 +338,10 @@ export function normalizeTemporalAnalysisPlan(value = {}, options = {}) {
   const intervalMs = value.intervalMs === undefined || value.intervalMs === null ? null : Number(value.intervalMs);
   if (intervalMs !== null && (!Number.isFinite(intervalMs) || intervalMs <= 0 || intervalMs > MAX_TEMPORAL_WINDOW_MS))
     fail(`intervalMs must be positive and <= ${MAX_TEMPORAL_WINDOW_MS} ms`);
+  const toleranceInput = value.toleranceMs ?? value.targetGenerationToleranceMs ?? value.generationToleranceMs;
+  const toleranceMs = toleranceInput === undefined || toleranceInput === null ? null : Number(toleranceInput);
+  if (toleranceMs !== null && (!Number.isFinite(toleranceMs) || toleranceMs < 0 || toleranceMs > MAX_TEMPORAL_WINDOW_MS))
+    fail(`toleranceMs must be non-negative and <= ${MAX_TEMPORAL_WINDOW_MS} ms`);
   const outputCadence = String(value.outputCadence || OUTPUT_CADENCES.FIXED_INTERVAL).toUpperCase();
   if (!Object.values(OUTPUT_CADENCES).includes(outputCadence)) fail(`Unsupported output cadence ${outputCadence}`);
   if (!windows.some((window) => window.id === (value.primaryWindowId || windows[0].id)))
@@ -349,6 +353,7 @@ export function normalizeTemporalAnalysisPlan(value = {}, options = {}) {
     windows: Object.freeze(windows),
     outputCadence,
     intervalMs,
+    toleranceMs,
     plannedBeforeCommit: options.plannedBeforeCommit !== false && value.plannedBeforeCommit !== false,
     exploratoryPostHoc: value.exploratoryPostHoc === true,
   });

@@ -436,6 +436,7 @@ export const profiles = {
     analysis: {
       primaryEndpoint: "FIXED_TIME_WINDOW",
       outputCadence: "FIXED_INTERVAL",
+      toleranceMs: 100,
       primaryWindow: { id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 },
       windows: [{ id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 }],
       version: "temporal-analysis-v1",

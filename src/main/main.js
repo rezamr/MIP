@@ -755,7 +755,7 @@ function createScheduler(runtime) {
           timingStatus: record.status,
         });
         if (research.mode === EXPERIMENT_MODES.FUTURE_TARGET && record.targetSlot)
-          db.research.updatePhases(runtime.id, { evidencePhaseStatus: record.status === "MISSED" ? "POST_TARGET_MONITORING" : "TARGET_OBSERVED" });
+          db.research.updatePhases(runtime.id, { evidencePhaseStatus: runtime.scheduler?.targetMissed ? "MISSED" : record.status === "MISSED" ? "POST_TARGET_MONITORING" : "TARGET_OBSERVED" });
         if (runtime.objective !== null && runtime.objective !== undefined) {
           for (const occurrence of findTargetOccurrences({ outputs: [record], target: runtime.objective, outcomeSpace: research.outcomeSpace || profile.outcomeSpace, window: research.temporalAnalysis?.windows?.[0] || {}, targetScheduledUtc: runtime.scheduler?.plan?.targetUtc, targetScheduledMonotonicNs: runtime.scheduler?.plan?.targetMonotonicNs })) {
             db.research.recordOccurrence(runtime.id, occurrence);
@@ -778,11 +778,18 @@ function createScheduler(runtime) {
         const priorOutputs = db.db.prepare("SELECT session_id,trial_id,output_seq,value_json,region,scheduled_utc,scheduled_monotonic_ns,actual_utc,actual_monotonic_ns,timing_status FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(runtime.id).map((row) => ({ sessionId: row.session_id, trialId: row.trial_id, sequence: row.output_seq, outputSeq: row.output_seq, value: parseStoredJson(row.value_json), region: row.region, scheduledUtc: row.scheduled_utc, scheduledMonotonicNs: row.scheduled_monotonic_ns, actualUtc: row.actual_utc, actualMonotonicNs: row.actual_monotonic_ns, status: row.timing_status }));
         for (const occurrence of findTargetOccurrences({ outputs: priorOutputs, target: event.target, outcomeSpace: runtime.researchDefinition?.outcomeSpace || runtime.profile.outcomeSpace, window: runtime.researchDefinition?.temporalAnalysis?.windows?.[0] || {}, targetScheduledUtc: event.scheduledUtc, targetScheduledMonotonicNs: event.scheduledMonotonicNs })) db.research.recordOccurrence(runtime.id, occurrence);
       },
+      onTargetMissed: (event) => {
+        db.research.recordTargetGeneration(runtime.id, event);
+        db.research.updatePhases(runtime.id, { evidencePhaseStatus: "MISSED", revealStatus: "BLOCKED" });
+        try { powerManager?.stop(); } catch (error) {
+          try { db.evidence.appendEvent(runtime.id, runtime.trialId, "POWER_BLOCKER_STOP_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" }); } catch {}
+        }
+      },
       onParticipantPhase: (phase) => db.research.updatePhases(runtime.id, { participantPhaseStatus: phase.participantPhase }),
       onEvidence: (event) => db.evidence.appendEvent(runtime.id, runtime.trialId, event.type, jsonSafe(event.payload)),
       onComplete: (result) => {
         runtime.schedulerResult = clone(result);
-        db.research.updatePhases(runtime.id, { evidencePhaseStatus: "COMPLETE" });
+        db.research.updatePhases(runtime.id, { evidencePhaseStatus: result.targetMissed ? "MISSED" : "COMPLETE", revealStatus: result.targetMissed ? "BLOCKED" : undefined });
         db.evidence.appendEvent(runtime.id, runtime.trialId, "SCHEDULER_COMPLETE", jsonSafe(result));
         // The power-save blocker belongs to the evidence lifecycle, not the
         // participant/audio lifecycle.  Keep it active after participant
@@ -1449,6 +1456,8 @@ function registerSessionHandlers() {
     if (!recipeValidation.valid) throw new Error(`Audio recipe validation failed: ${recipeValidation.errors.join("; ")}`);
     if (recipe.isDraft || recipe.status !== "ACTIVE" || recipe.isActive !== true || recipe.incomplete)
       throw new Error(`Formal session requires an active, complete recipe: ${recipe.recipeId} v${recipe.version}.`);
+    if (recipe.formalEligibility !== true)
+      throw new Error(`Formal session requires a currently verified audio recipe: ${recipe.recipeId} v${recipe.version}. ${recipe.formalEligibilityReason || "Engineering verification is not current."}`);
     // RNG provider is part of the effective (session > profile > app)
     // research definition.  Reading only the profile silently ignored a
     // deliberate session/application override and could make the persisted
@@ -2630,11 +2639,13 @@ async function recoverIncompleteSessions(reason = "application startup") {
           scheduledMonotonicNs: researchTarget.scheduledMonotonicNs,
           actualUtc: new Date().toISOString(),
           actualMonotonicNs: process.hrtime.bigint().toString(),
-          status: "MISSED",
+          status: "MISSED_FUTURE_TARGET_GENERATION",
         });
-        db.evidence.appendEvent(id, trialIdFor(id), "FUTURE_TARGET_MISSED", {
+        db.evidence.appendEvent(id, trialIdFor(id), "MISSED_FUTURE_TARGET_GENERATION", {
           classification: "TARGET_MISSED_DURING_APPLICATION_UNAVAILABLE",
           scheduledUtc: researchTarget.scheduledUtc,
+          actualUtc: new Date().toISOString(),
+          toleranceMs: researchDefinition?.temporalAnalysis?.toleranceMs ?? null,
           noBackfill: true,
         });
         db.research.updatePhases(id, { evidencePhaseStatus: "MISSED" });
@@ -2683,7 +2694,11 @@ async function recoverIncompleteSessions(reason = "application startup") {
         if (temporal) {
           db.research?.updatePhases(id, {
             sessionLifecycle: "RECOVERY_REQUIRED",
-            evidencePhaseStatus: "INCOMPLETE",
+            // A future-target generation miss is a terminal, explicit
+            // evidence classification. Preserve MISSED through the restart
+            // interruption instead of relabelling it as an indeterminate
+            // incomplete run.
+            evidencePhaseStatus: evidencePhaseAfterClockCheck === "MISSED" ? "MISSED" : "INCOMPLETE",
             revealStatus: "BLOCKED",
             integrityStatus: integrity.valid ? "VERIFIED" : "FAILED",
           });
@@ -2869,6 +2884,7 @@ if (!singleInstance) {
         resultPath: process.env.MIP_E2E_RESULT,
         phase: process.env.MIP_E2E_PHASE || "initial",
         expectedSessionId: process.env.MIP_E2E_EXPECT_SESSION || null,
+        expectedRecipeId: process.env.MIP_E2E_EXPECT_RECIPE || null,
       }).catch((error) => {
         console.error("Electron E2E failed", error);
       }).finally(() => app.quit());

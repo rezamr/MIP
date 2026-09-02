@@ -2,11 +2,60 @@ import { canonical, sha256 } from "../../engine.js";
 import { clone, json, now, recipeDto } from "../database/db.js";
 import { validateRecipe } from "../../audio.js";
 import { validateRecipeProvenance } from "../../../public/audio-core.js";
+import {
+  applyMaterialProvenancePolicy,
+  bindEngineeringVerification,
+  materialDiff as authoritativeMaterialDiff,
+} from "./AudioRecipeVersionPolicy.js";
 
 const DTO_KEYS = new Set(["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance"]);
 
 function material(value) {
   return Object.fromEntries(Object.entries(clone(value || {})).filter(([key]) => !DTO_KEYS.has(key)));
+}
+
+function gainAliasPair(value) {
+  if (value && typeof value === "object" && !Array.isArray(value))
+    return { left: Number(value.left ?? value.l), right: Number(value.right ?? value.r) };
+  const n = Number(value);
+  return { left: n, right: n };
+}
+
+function sameGainPair(left, right) {
+  return Number.isFinite(left?.left) && Number.isFinite(left?.right) &&
+    Number.isFinite(right?.left) && Number.isFinite(right?.right) &&
+    left.left === right.left && left.right === right.right;
+}
+
+/** Translate the legacy repository `{ gain }` patch to canonical carrier data. */
+function canonicalizeLegacyGain(value, parent) {
+  const draft = clone(value || {});
+  const carrier = Array.isArray(draft.carriers) ? draft.carriers[0] : null;
+  if (!carrier || draft.gain === undefined) return draft;
+  const canonicalPair = gainAliasPair(
+    carrier.gain ?? (carrier.gainLeft !== undefined || carrier.gainRight !== undefined
+      ? { left: carrier.gainLeft, right: carrier.gainRight }
+      : undefined),
+  );
+  if (!Number.isFinite(canonicalPair.left) || !Number.isFinite(canonicalPair.right)) return draft;
+  const parentCarrier = Array.isArray(parent?.carriers) ? parent.carriers[0] : null;
+  const parentPair = parentCarrier
+    ? gainAliasPair(parentCarrier.gain ?? { left: parentCarrier.gainLeft, right: parentCarrier.gainRight })
+    : null;
+  const aliasPair = gainAliasPair(draft.gain);
+  const aliasChanged = !parentPair || !sameGainPair(aliasPair, parentPair);
+  const canonicalChanged = !parentPair || !sameGainPair(canonicalPair, parentPair);
+  if (aliasChanged && !canonicalChanged && (carrier.gainLeft !== undefined || carrier.gainRight !== undefined)) {
+    carrier.gainLeft = aliasPair.left;
+    carrier.gainRight = aliasPair.right;
+    delete carrier.gain;
+    delete draft.gain;
+  } else if (!aliasChanged || sameGainPair(aliasPair, canonicalPair)) {
+    // The top-level field is only a projection; drop an agreeing alias before
+    // strict normalization so it cannot become a second source of truth.
+    delete draft.gain;
+  }
+  return draft;
 }
 
 export class AudioRecipeRepository {
@@ -60,7 +109,8 @@ export class AudioRecipeRepository {
     const row = this.db.prepare("SELECT draft_json,base_version FROM audio_recipe_drafts WHERE recipe_id=?").get(id);
     const current = row ? json(row.draft_json, {}) : this.get(id);
     if (!current) throw new Error(`Recipe not found: ${id}`);
-    return this.createDraft({ ...clone(current), ...patch, recipeId: id, id }, { baseVersion: row?.base_version ?? current.version, provenance: current.provenance });
+    const proposed = canonicalizeLegacyGain({ ...clone(current), ...patch, recipeId: id, id }, current);
+    return this.createDraft(proposed, { baseVersion: row?.base_version ?? current.version, provenance: current.provenance });
   }
 
   validateDraft(id) {
@@ -69,19 +119,53 @@ export class AudioRecipeRepository {
   }
 
   saveNewVersion(recipe, options = {}) {
-    const submitted = material(recipe);
+    const rawRecipe = clone(recipe || {});
+    const submittedId = rawRecipe.recipeId || rawRecipe.id;
+    const latestBefore = submittedId
+      ? this.db.prepare("SELECT MAX(version) AS version FROM audio_recipe_versions WHERE recipe_id=?").get(submittedId)?.version
+      : null;
+    const parentVersion = options.parentVersion ?? latestBefore ?? null;
+    const parentRecipe = options.parentRecipe || (submittedId && parentVersion
+      ? this.get(submittedId, parentVersion)
+      : null);
+    const submitted = material(canonicalizeLegacyGain(rawRecipe, parentRecipe));
     const initialValidation = validateRecipe(submitted);
-    const value = material(initialValidation.recipe || submitted);
+    let value = material(initialValidation.recipe || submitted);
     value.recipeId = value.recipeId || value.id;
     value.id = value.recipeId;
     if (!value.recipeId) throw new Error("recipeId is required");
-    const validation = validateRecipe(value);
-    const provenanceValidation = validateRecipeProvenance(validation.recipe || value);
+    const policy = applyMaterialProvenancePolicy({
+      parentRecipe,
+      proposedRecipe: value,
+      submittedRecipe: submitted,
+      parentVersion,
+    });
+    const validation = validateRecipe(policy.recipe);
+    const normalizedValue = material(validation.recipe || policy.recipe);
+    const provenanceValidation = validateRecipeProvenance(validation.recipe || normalizedValue);
     validation.provenance = provenanceValidation;
-    const provenanceIncomplete = !provenanceValidation.valid || provenanceValidation.summary.formalEligible !== true;
-    const incomplete = options.incomplete === true || options.allowIncomplete === true || !validation.valid || provenanceIncomplete;
-    if ((!validation.valid || !provenanceValidation.valid) && !options.allowIncomplete && !options.incomplete) throw new Error(`Recipe validation failed: ${[...(validation.errors || []), ...(provenanceValidation.errors || [])].join("; ")}`);
-    const latest = this.db.prepare("SELECT MAX(version) AS version FROM audio_recipe_versions WHERE recipe_id=?").get(value.recipeId)?.version;
+    const verification = bindEngineeringVerification(
+      normalizedValue,
+      normalizedValue.engineeringVerification,
+      {
+        materialChanged: policy.changes.length > 0,
+        valid: validation.valid && provenanceValidation.valid && policy.errors.length === 0,
+      },
+    );
+    normalizedValue.engineeringVerification = verification;
+    normalizedValue.formalEligibility = verification.status === "PASS" && provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true;
+    normalizedValue.formalEligibilityReason = normalizedValue.formalEligibility
+      ? "Immutable version, active policy, provenance, and current reference verification gates passed."
+      : verification.status === "STALE"
+        ? "Engineering verification is stale after a material recipe change."
+        : verification.status === "PASS"
+          ? "Version is valid but remains subject to repository activation and session policy."
+          : "Current reference verification has not been run for this effective recipe.";
+    value = normalizedValue;
+    const provenanceIncomplete = !provenanceValidation.valid || provenanceValidation.summary.provenanceEligible !== true;
+    const incomplete = options.incomplete === true || options.allowIncomplete === true || !validation.valid || provenanceIncomplete || policy.errors.length > 0;
+    if ((!validation.valid || !provenanceValidation.valid || policy.errors.length) && !options.allowIncomplete && !options.incomplete) throw new Error(`Recipe validation failed: ${[...(validation.errors || []), ...(provenanceValidation.errors || []), ...policy.errors].join("; ")}`);
+    const latest = latestBefore;
     const version = Number(options.version ?? (latest || 0) + 1);
     if (this.db.prepare("SELECT 1 FROM audio_recipe_versions WHERE recipe_id=? AND version=?").get(value.recipeId, version)) throw new Error(`Audio recipe version already exists: ${value.recipeId} v${version}`);
     if (latest !== null && latest !== undefined && version <= Number(latest)) throw new Error(`Audio recipe version must increase beyond v${latest}`);
@@ -90,10 +174,13 @@ export class AudioRecipeRepository {
       throw new Error(`Cannot activate a mixed-provenance recipe as PRIMARY_SOURCE_VERIFIED: ${value.recipeId}`);
     this._ensureRecipe(value.recipeId, options.provenance || value.provenance || "USER");
     const createdUtc = now();
-    const stored = { ...value, version };
+    // The immutable row version and the recipe's canonical version alias are
+    // one identity. Persist both together so reopening v2 cannot normalize
+    // the config back to a stale recipeVersion carried by the editor draft.
+    const stored = { ...value, version, recipeVersion: version };
     const tx = this.db.transaction(() => {
       this.db.prepare("INSERT INTO audio_recipe_versions(recipe_id,version,config_json,config_hash,created_utc,immutable) VALUES(?,?,?,?,?,1)").run(value.recipeId, version, JSON.stringify(stored), sha256(canonical(stored)), createdUtc);
-      this.db.prepare("INSERT INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,incomplete,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(value.recipeId, version, value.recipeId, JSON.stringify({ recipeProvenance: options.provenance || value.provenance || {}, parameterProvenance: value.parameterProvenance || {}, historicalStatus: value.historicalStatus, historicalExactness: value.historicalExactness, engineeringVerification: value.engineeringVerification }), options.activate ? "ACTIVE" : "DRAFT", options.activate ? 0 : 1, options.activate ? 1 : 0, incomplete ? 1 : 0, options.parentVersion ?? latest ?? null, JSON.stringify(validation), createdUtc);
+      this.db.prepare("INSERT INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,incomplete,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(value.recipeId, version, value.recipeId, JSON.stringify({ recipeProvenance: options.provenance || value.provenance || {}, parameterProvenance: value.parameterProvenance || {}, historicalStatus: value.historicalStatus, historicalExactness: value.historicalExactness, engineeringVerification: value.engineeringVerification, provenanceAudit: value.provenanceAudit || null }), options.activate ? "ACTIVE" : "DRAFT", options.activate ? 0 : 1, options.activate ? 1 : 0, incomplete ? 1 : 0, parentVersion, JSON.stringify(validation), createdUtc);
       if (options.activate) this.activate(value.recipeId, version);
     });
     tx();
@@ -109,7 +196,7 @@ export class AudioRecipeRepository {
     const copyId = newId || `${id}_COPY_${Date.now()}`;
     const copy = { ...clone(source), id: copyId, recipeId: copyId, version: 1, provenance: options.provenance || "USER_DUPLICATE" };
     delete copy.configHash; delete copy.isDraft; delete copy.isActive; delete copy.status;
-    return this.saveNewVersion(copy, { ...options, version: 1, parentVersion: source.version });
+    return this.saveNewVersion(copy, { ...options, version: 1, parentVersion: source.version, parentRecipe: source });
   }
 
   activate(id, version) {
@@ -118,8 +205,9 @@ export class AudioRecipeRepository {
     if (!row) throw new Error(`Audio recipe version not found: ${id} v${version}`);
     const config = json(row.config_json, {});
     const validation = validateRecipe(config);
-    const provenanceValidation = validateRecipeProvenance(validation.recipe || config);
-    if (row.incomplete || !validation.valid || !provenanceValidation.valid || !provenanceValidation.summary.formalEligible || json(row.validation_json, {})?.valid === false)
+    const effective = validation.recipe || config;
+    const provenanceValidation = validateRecipeProvenance(effective);
+    if (row.incomplete || !validation.valid || !provenanceValidation.valid || !provenanceValidation.summary.provenanceEligible || json(row.validation_json, {})?.valid === false)
       throw new Error(`Cannot activate incomplete audio recipe: ${id} v${version}`);
     if (String(config.provenance || "").toUpperCase().includes("PRIMARY_SOURCE_VERIFIED") && provenanceValidation.summary.mixed)
       throw new Error(`Cannot activate a mixed-provenance recipe as PRIMARY_SOURCE_VERIFIED: ${id} v${version}`);
@@ -134,9 +222,11 @@ export class AudioRecipeRepository {
   materialDiff(id, leftVersion, rightVersion) {
     const left = this.get(id, leftVersion), right = this.get(id, rightVersion);
     if (!left || !right) throw new Error("Both audio recipe versions are required");
-    const leftMaterial = material(left);
-    const rightMaterial = material(right);
-    const keys = new Set([...Object.keys(leftMaterial), ...Object.keys(rightMaterial)]);
-    return [...keys].sort().filter((key) => JSON.stringify(leftMaterial[key]) !== JSON.stringify(rightMaterial[key])).map((key) => ({ field: key, before: leftMaterial[key], after: rightMaterial[key] }));
+    return authoritativeMaterialDiff(left, right).map((change) => ({
+      field: change.path,
+      path: change.path,
+      before: change.before,
+      after: change.after,
+    }));
   }
 }

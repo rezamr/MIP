@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { sha256, canonical, profiles, APP_VERSION, ENGINE_VERSION, normalizeTemporalAnalysisPlan } from "../../engine.js";
-import { PRESETS, EXPERIMENTAL_PRESETS, AUDIO_VERSION } from "../../audio.js";
-import { activeLayers } from "../../../public/audio-core.js";
+import { PRESETS, EXPERIMENTAL_PRESETS, AUDIO_VERSION, validateRecipe } from "../../audio.js";
+import { activeLayers, validateRecipeProvenance, normalizeRecipe } from "../../../public/audio-core.js";
 import { IntegrityService } from "../integrity/IntegrityService.js";
 import { SessionRepository } from "../repositories/SessionRepository.js";
 import { EvidenceRepository } from "../repositories/EvidenceRepository.js";
@@ -17,6 +17,10 @@ import { LegacyImporter } from "../import/LegacyImporter.js";
 import { SessionExporter } from "../export/SessionExporter.js";
 import { SessionController } from "../sessions/session-controller.js";
 import { ResearchRepository } from "../repositories/ResearchRepository.js";
+import {
+  resolveEngineeringVerification,
+  bindEngineeringVerification,
+} from "../repositories/AudioRecipeVersionPolicy.js";
 
 export const CURRENT_SCHEMA_VERSION = 14;
 
@@ -990,8 +994,44 @@ function profileDto(row, includeConfig = true) {
 function recipeDto(row, includeConfig = true) {
   const config = json(row.config_json, {});
   const versionMetadata = json(row.provenance_json, {});
+  let effective = config;
+  try {
+    effective = normalizeRecipe(config);
+  } catch {
+    // Preserve a redacted/inspectable DTO for legacy rows that predate the
+    // complete recipe contract; validation gates below remain conservative.
+    try { effective = normalizeRecipe(config, { developmentFixture: true }); }
+    catch { effective = config; }
+  }
+  const validation = (() => {
+    try { return validateRecipe(effective); } catch { return { valid: false, errors: ["recipe normalization failed"] }; }
+  })();
+  const provenanceValidation = (() => {
+    try { return validateRecipeProvenance(effective); } catch { return { valid: false, errors: ["recipe provenance validation failed"], summary: { provenanceEligible: false } }; }
+  })();
+  const metadataValidation = json(row.validation_json, {}) || {};
+  const engineeringVerification = resolveEngineeringVerification(
+    effective,
+    config.engineeringVerification || versionMetadata.engineeringVerification,
+    { valid: validation.valid && provenanceValidation.valid && metadataValidation.valid !== false },
+  );
+  const repositoryActive = String(row.status || "ACTIVE").toUpperCase() === "ACTIVE" && Boolean(row.is_active) && !Boolean(row.is_draft);
+  const formalEligible = repositoryActive && !Boolean(row.incomplete) && validation.valid && provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true && effective.formalEligibility !== false && engineeringVerification.status === "PASS";
+  const formalEligibilityReason = formalEligible
+    ? "Immutable active version, valid configuration, complete provenance, and current reference verification gates passed."
+    : !repositoryActive
+      ? "Version is not active; formal sessions require an active immutable version."
+      : row.incomplete || !validation.valid
+        ? "Recipe is incomplete or failed configuration validation."
+        : !provenanceValidation.valid || provenanceValidation.summary.provenanceEligible !== true
+          ? "Recipe provenance is invalid or contains UNKNOWN_BLOCKED parameters."
+          : engineeringVerification.status === "STALE"
+            ? "Engineering verification is stale after a material recipe change."
+            : engineeringVerification.status !== "PASS"
+              ? "Current reference verification has not been run for this effective recipe."
+              : effective.formalEligibilityReason || "Formal use is blocked by repository policy.";
   return {
-    ...(includeConfig ? config : {}),
+    ...(includeConfig ? effective : {}),
     recipeId: row.recipe_id,
     id: row.recipe_id,
     version: row.version,
@@ -1005,13 +1045,15 @@ function recipeDto(row, includeConfig = true) {
     isActive: Boolean(row.is_active),
     incomplete: Boolean(row.incomplete),
     configHash: row.config_hash,
-    parameterProvenance: config.parameterProvenance || versionMetadata.parameterProvenance || {},
-    historicalStatus: config.historicalStatus || "NOT_HISTORICALLY_EXACT",
-    historicalExactness: config.historicalExactness || "NOT_CLAIMED",
-    formalEligibility: config.formalEligibility !== false && !Boolean(row.incomplete),
-    formalEligibilityReason: config.formalEligibilityReason || (row.incomplete ? "Recipe is incomplete or failed validation." : "All persisted validation gates passed."),
-    activeLayers: activeLayers(config),
-    engineeringVerification: config.engineeringVerification || versionMetadata.engineeringVerification || null,
+    parameterProvenance: effective.parameterProvenance || versionMetadata.parameterProvenance || {},
+    provenanceEligibility: provenanceValidation.summary?.provenanceEligible === true,
+    provenanceAudit: effective.provenanceAudit || versionMetadata.provenanceAudit || null,
+    historicalStatus: effective.historicalStatus || "NOT_HISTORICALLY_EXACT",
+    historicalExactness: effective.historicalExactness || "NOT_CLAIMED",
+    formalEligibility: formalEligible,
+    formalEligibilityReason,
+    activeLayers: activeLayers(effective),
+    engineeringVerification,
   };
 }
 
@@ -1094,10 +1136,16 @@ export class MipDatabase {
     const insertMeta = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?)");
     for (const recipe of [...Object.values(PRESETS), ...Object.values(EXPERIMENTAL_PRESETS)]) {
       const config = { ...clone(recipe), recipeId: recipe.id };
+      const recipeValidation = validateRecipe(config);
+      config.engineeringVerification = bindEngineeringVerification(
+        recipeValidation.recipe || config,
+        config.engineeringVerification,
+        { valid: recipeValidation.valid },
+      );
       insertRecipe.run(recipe.id, recipe.provenance || "MIP built-in");
       insertIdentity.run(recipe.id, recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "EXPERIMENTAL_FIXTURE" : "BUILT_IN", recipe.name || recipe.id, JSON.stringify({ source: recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS", historicalStatus: recipe.historicalStatus, parameterProvenance: recipe.parameterProvenance }), recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "MIP_RECONSTRUCTION" : "BUILT_IN", recipe.id, now());
       insertVersion.run(recipe.id, recipe.version, JSON.stringify(config), sha256(canonical(config)), now());
-      insertMeta.run(recipe.id, recipe.version, recipe.id, JSON.stringify({ source: recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS", parameterProvenance: recipe.parameterProvenance, engineeringVerification: recipe.engineeringVerification }), "ACTIVE", 0, 1, null, JSON.stringify({ valid: true, errors: [] }), now());
+      insertMeta.run(recipe.id, recipe.version, recipe.id, JSON.stringify({ source: recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS", parameterProvenance: config.parameterProvenance, engineeringVerification: config.engineeringVerification }), "ACTIVE", 0, 1, null, JSON.stringify({ valid: recipeValidation.valid, errors: recipeValidation.errors || [] }), now());
     }
   }
 

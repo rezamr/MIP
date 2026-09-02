@@ -14,7 +14,7 @@ const electronBinary = process.platform === "win32"
   ? path.join(electronPackage, "dist", "electron.exe")
   : path.join(electronPackage, "dist", "electron");
 
-function launchE2E(root, phase, expectedSessionId = null) {
+function launchE2E(root, phase, expectedSessionId = null, expectedRecipeId = null) {
   const resultPath = path.join(root, `${phase}.json`);
   const userData = path.join(root, "user-data");
   const environment = {
@@ -23,6 +23,7 @@ function launchE2E(root, phase, expectedSessionId = null) {
     MIP_E2E_USER_DATA: userData,
     MIP_E2E_PHASE: phase,
     ...(expectedSessionId ? { MIP_E2E_EXPECT_SESSION: expectedSessionId } : {}),
+    ...(expectedRecipeId ? { MIP_E2E_EXPECT_RECIPE: expectedRecipeId } : {}),
     ELECTRON_DISABLE_SECURITY_WARNINGS: "true",
   };
   return new Promise((resolve, reject) => {
@@ -80,6 +81,17 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.deepEqual(initial.audioLabPanels, { pureRecipeDetails: true, sourceProvenance: true, engineeringVerification: true, activeLayers: true, masterGainText: true });
     assert.deepEqual(initial.layeredRecipePanels, { repositoryBacked: true, activeLayers: true, sourceClasses: true, engineeringVerification: true });
     assert.deepEqual(initial.audioControlSmoke, { doublePlay: true, play: true, rerender: true, pause: true, resume: true, gain: true, stop: true });
+    assert.equal(initial.recipeEditing.draftValid, true);
+    assert.equal(initial.recipeEditing.savedVersion, 2);
+    assert.deepEqual(initial.recipeEditing.canonicalCarriers, { leftHz: 395, rightHz: 399 });
+    assert.equal(initial.recipeEditing.aliasesMatch, true);
+    assert.equal(initial.recipeEditing.configFingerprintChanged, true);
+    assert.equal(initial.recipeEditing.pcmDigestChanged, true);
+    assert.equal(initial.recipeEditing.oldVersionUnchanged, true);
+    assert.equal(initial.recipeEditing.changedProvenanceSafe, true);
+    assert.equal(initial.recipeEditing.verificationStaleOrNotRun, true);
+    assert.equal(initial.recipeEditing.cosmeticProvenanceSurvives, true);
+    assert.equal(initial.recipeEditing.cosmeticMaterialDiffEmpty, true);
     assert.ok(initial.settings.schemaVersion >= 12);
     assert.ok(initial.profiles.length > 0);
     assert.ok(initial.recipes.length >= 3);
@@ -117,13 +129,14 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.ok(initial.afterRestore.actualEndUtc);
     assert.match(initial.reportNavigation, /Sessions/i);
 
-    const restarted = await launchE2E(root, "restart", initial.sessionId);
+    const restarted = await launchE2E(root, "restart", initial.sessionId, initial.recipeEditing.editedRecipeId);
     assert.equal(restarted.ok, true);
     assert.equal(restarted.sessionPersisted, true);
     assert.equal(restarted.schemaVersion, initial.settings.schemaVersion);
     assert.equal(restarted.persistedReport.locked, true);
     assert.ok(restarted.persistedOutputCount > 0);
     assert.ok(restarted.audioHealthHistory.some((row) => row.diagnosticId === initial.audioHealth.diagnosticId));
+    assert.equal(restarted.recipeEditingPersistence.ok, true, JSON.stringify(restarted.recipeEditingPersistence));
     assert.match(restarted.reportNavigation, /Sessions/i);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

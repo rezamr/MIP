@@ -108,10 +108,10 @@ cues, delay, or comb is not a claim that the selected recipe activates them.
 Changing Audio Lab Master gain only changes the preview PCM through a ramp; it
 never rewrites a committed formal configuration.
 
-**Acceptance test.** Audition `PURE_394_398`, select the detail panels, change
-Master gain, Pause, Resume, and Stop.  Confirm generated frames stop changing
-after Stop.  Record an Audio Health owner observation separately if an acoustic
-artifact is heard.
+**Acceptance test.** Audition `A-U396-4`, `A-P100-104`, or `A-SHAM-0`, select
+the detail panels, change Master gain, Pause, Resume, and Stop.  Confirm
+generated frames stop changing after Stop.  Record an Audio Health owner
+observation separately if an acoustic artifact is heard.
 
 ### Experiment Profiles
 

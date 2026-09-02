@@ -78,12 +78,21 @@ export class TemporalEvidenceScheduler {
     this.onOutput = dependencies.onOutput;
     this.onEvidence = dependencies.onEvidence;
     this.onTargetGenerated = dependencies.onTargetGenerated;
+    this.onTargetMissed = dependencies.onTargetMissed;
     this.onFailure = dependencies.onFailure;
     this.onComplete = dependencies.onComplete;
     this.onParticipantPhase = dependencies.onParticipantPhase;
     this.sessionId = dependencies.sessionId || config.sessionId || null;
     this.trialId = dependencies.trialId || config.trialId || null;
-    this.toleranceMs = asMs(dependencies.toleranceMs ?? config.toleranceMs, 100);
+    const defaultTolerance = this.mode === EXPERIMENT_MODES.FUTURE_TARGET ? 0 : 100;
+    this.toleranceMs = asMs(dependencies.toleranceMs ?? this.analysisPlan.toleranceMs ?? config.toleranceMs, defaultTolerance);
+    this.toleranceSource = dependencies.toleranceMs !== undefined
+      ? "dependency"
+      : this.analysisPlan.toleranceMs !== null
+        ? "temporalAnalysis.toleranceMs"
+        : config.toleranceMs !== undefined
+          ? "config.toleranceMs"
+          : this.mode === EXPERIMENT_MODES.FUTURE_TARGET ? "strict_default_zero" : "legacy_temporal_default";
     this.status = "PLANNED";
     this.participantPhase = PARTICIPANT_PHASES.PRECOMMIT;
     this.evidencePhase = EVIDENCE_PHASES.NOT_STARTED;
@@ -183,6 +192,8 @@ export class TemporalEvidenceScheduler {
       targetScheduledUtc: this.plan.targetUtc,
       target: revealed ? this.target : undefined,
       targetGenerated: this.targetGenerated,
+      targetMissed: this.targetMissed,
+      targetGenerationToleranceMs: this.toleranceMs,
       targetGeneration: revealed ? this.targetGeneration : undefined,
       targetPrediction: revealed ? this.targetPrediction : undefined,
       generatedCount: this.outputs.length,
@@ -249,12 +260,27 @@ export class TemporalEvidenceScheduler {
   }
 
   markFutureTargetMissed(reason = "application_unavailable_at_target_anchor") {
-    if (this.mode !== EXPERIMENT_MODES.FUTURE_TARGET || this.targetGenerated) return false;
+    if (this.mode !== EXPERIMENT_MODES.FUTURE_TARGET || this.targetGenerated || this.targetMissed || this.status === "ABORTED") return false;
     this.targetMissed = true;
     this.evidencePhase = EVIDENCE_PHASES.MISSED;
     this.status = "ABORTED";
     this._clearTimer();
-    this._emit("FUTURE_TARGET_MISSED", { reason, scheduledUtc: this.plan.targetUtc, noBackfill: true });
+    this.targetGeneration = {
+      prediction: this.targetPrediction,
+      scheduledUtc: this.plan.targetUtc,
+      scheduledMonotonicNs: this.plan.targetMonotonicNs.toString(),
+      actualUtc: iso(clockUtcMs(this.clock)),
+      actualMonotonicNs: clockMonoNs(this.clock).toString(),
+      latenessMs: null,
+      toleranceMs: this.toleranceMs,
+      status: "MISSED_FUTURE_TARGET_GENERATION",
+      target: null,
+      rng: null,
+      reason,
+      noBackfill: true,
+    };
+    this._emit("MISSED_FUTURE_TARGET_GENERATION", this.targetGeneration);
+    if (typeof this.onTargetMissed === "function") void promiseResult(this.onTargetMissed({ ...this.targetGeneration }));
     return true;
   }
 
@@ -288,11 +314,32 @@ export class TemporalEvidenceScheduler {
   async _generateTargetIfDue(observed) {
     if (this.mode !== EXPERIMENT_MODES.FUTURE_TARGET || this.targetGenerated || this.targetMissed) return;
     if (observed.monotonicNs < this.plan.targetMonotonicNs) return;
+    const latenessMs = Number(observed.monotonicNs - this.plan.targetMonotonicNs) / 1e6;
+    if (latenessMs > this.toleranceMs) {
+      this.targetMissed = true;
+      this.evidencePhase = EVIDENCE_PHASES.MISSED;
+      this.targetGeneration = {
+        prediction: this.targetPrediction,
+        scheduledUtc: this.plan.targetUtc,
+        scheduledMonotonicNs: this.plan.targetMonotonicNs.toString(),
+        actualUtc: iso(observed.utcMs),
+        actualMonotonicNs: observed.monotonicNs.toString(),
+        latenessMs,
+        toleranceMs: this.toleranceMs,
+        status: "MISSED_FUTURE_TARGET_GENERATION",
+        target: null,
+        rng: null,
+        noBackfill: true,
+      };
+      this._emit("MISSED_FUTURE_TARGET_GENERATION", this.targetGeneration);
+      if (typeof this.onTargetMissed === "function") await promiseResult(this.onTargetMissed({ ...this.targetGeneration }));
+      return;
+    }
     if (!this.randomSource) throw new Error("FUTURE_TARGET requires an OS_CSPRNG target random source");
     this.target = sampleOutcome(this.outcomeSpace, this.randomSource);
     this.targetGenerated = true;
     this.evidencePhase = EVIDENCE_PHASES.TARGET_GENERATED;
-    this.targetGeneration = { prediction: this.targetPrediction, scheduledUtc: this.plan.targetUtc, scheduledMonotonicNs: this.plan.targetMonotonicNs.toString(), actualUtc: iso(observed.utcMs), actualMonotonicNs: observed.monotonicNs.toString(), status: observed.monotonicNs === this.plan.targetMonotonicNs ? "ON_TIME" : "LATE", target: this.target, rng: typeof this.randomSource.metadata === "function" ? this.randomSource.metadata() : null };
+    this.targetGeneration = { prediction: this.targetPrediction, scheduledUtc: this.plan.targetUtc, scheduledMonotonicNs: this.plan.targetMonotonicNs.toString(), actualUtc: iso(observed.utcMs), actualMonotonicNs: observed.monotonicNs.toString(), latenessMs, toleranceMs: this.toleranceMs, status: observed.monotonicNs === this.plan.targetMonotonicNs ? "ON_TIME" : "LATE_WITHIN_TOLERANCE", target: this.target, rng: typeof this.randomSource.metadata === "function" ? this.randomSource.metadata() : null };
     this._emit("FUTURE_TARGET_GENERATED", { ...this.targetGeneration, target: this.target });
     if (typeof this.onTargetGenerated === "function") await promiseResult(this.onTargetGenerated({ ...this.targetGeneration, target: this.target }));
   }
@@ -325,6 +372,16 @@ export class TemporalEvidenceScheduler {
       this.records.push(record);
       if (typeof this.onOutput === "function") await promiseResult(this.onOutput({ ...record }));
       this._emit("OUTPUT_RECORDED", { sequence: slot.sequence, region: slot.region, status: record.status });
+    }
+    if (this.targetMissed) {
+      // A late future-target callback is terminal for this evidence run. The
+      // overdue slots above are retained as timing evidence, but the run must
+      // never transition to COMPLETE or imply that a replacement target was
+      // observed.
+      this._clearTimer();
+      this.status = "ABORTED";
+      this.evidencePhase = EVIDENCE_PHASES.MISSED;
+      return;
     }
     if (!this.plan.outputs[this.nextSequence]) this._finish();
     else {

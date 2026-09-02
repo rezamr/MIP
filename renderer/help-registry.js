@@ -28,7 +28,7 @@ export const PAGE_HELP = Object.freeze({
     "Component gain, noise gain, effect mix, envelope, headroom, Master gain, and OS volume are different stages. Stop ramps to zero, finalizes, disconnects, and closes the context.",
     "PASS is a software fixture/telemetry result. Owner observations are Clean, Artifact heard, Left-right issue, or Uncertain and remain separate.",
     "A correct PCM digest cannot prove Bluetooth/wired/DAC/headphone output or the waveform at the eardrum.",
-    "Audition PURE_394_398, change Master gain, Pause, Resume, Stop, and confirm generated frames no longer increase.",
+    "Audition A-U396-4, A-P100-104, or A-SHAM-0, change Master gain, Pause, Resume, Stop, and confirm generated frames no longer increase.",
   ),
   profiles: page(
     "Experiment Profiles",

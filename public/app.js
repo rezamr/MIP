@@ -43,6 +43,37 @@ const esc = (x) =>
       ],
   );
 const jsonSafe = (value) => JSON.parse(JSON.stringify(value, (_key, child) => typeof child === "bigint" ? child.toString() : child));
+function canonicalRecipeEditorDraft(recipe) {
+  const draft = jsonSafe(recipe || {});
+  if (Array.isArray(draft.carriers) && draft.carriers[0])
+    for (const key of ["leftHz", "rightHz", "leftFrequencyHz", "rightFrequencyHz", "frequencyHz", "hz", "centerHz", "beatHz", "gain"]) delete draft[key];
+  if (draft.execution && typeof draft.execution === "object") {
+    delete draft.durationMode;
+    delete draft.targetFrames;
+  }
+  if (draft.synthesisMode !== undefined) delete draft.mode;
+  return draft;
+}
+function setCanonicalRecipePath(root, pathName, value) {
+  const keys = String(pathName).match(/[^.[\]]+/g) || [];
+  if (!keys.length) return;
+  let target = root;
+  for (const key of keys.slice(0, -1)) {
+    const next = target[key];
+    if (!next || typeof next !== "object") target[key] = /^\d+$/.test(key) ? [] : {};
+    target = target[key];
+  }
+  target[keys.at(-1)] = value;
+  if (pathName === "execution.mode" && value === "live" && root.execution)
+    root.execution.targetFrames = null;
+  if (Array.isArray(root.carriers) && root.carriers[0])
+    for (const key of ["leftHz", "rightHz", "leftFrequencyHz", "rightFrequencyHz", "frequencyHz", "hz", "centerHz", "beatHz", "gain"]) delete root[key];
+  if (root.execution && typeof root.execution === "object") {
+    delete root.durationMode;
+    delete root.targetFrames;
+  }
+  if (root.synthesisMode !== undefined) delete root.mode;
+}
 const LAYER_LABELS = Object.freeze([
   ["primaryCarrier", "Primary carrier"],
   ["additionalCarriers", "Additional carriers"],
@@ -71,7 +102,7 @@ function provenanceProjection(recipe) {
 }
 function verificationProjection(recipe) {
   const verification = recipe?.engineeringVerification || {};
-  const rows = ["configurationValidation", "deterministicFixture", "channelAssignment", "carrierVerification", "noiseVerification", "sweepVerification", "amVerification", "fmVerification", "continuity", "clipping", "pcmDigestFixture"];
+  const rows = ["status", "configurationValidation", "deterministicFixture", "channelAssignment", "carrierVerification", "noiseVerification", "sweepVerification", "amVerification", "fmVerification", "continuity", "clipping", "pcmDigestFixture", "configFingerprint", "fixtureId"];
   return `<div class="verification-panel"><h4>Engineering verification</h4>${rows.map((key) => `<div class="review-row"><span>${esc(key.replace(/[A-Z]/g, (m) => ` ${m}`).replace(/^./, (m) => m.toUpperCase()))}</span><strong>${esc(verification[key] || "NOT RECORDED")}</strong></div>`).join("")}<p class="subtle">Software verification is separate from the owner's physical listening observation.</p></div>`;
 }
 function recipeDetailProjection(recipe) {
@@ -957,25 +988,38 @@ async function renderRecipes() {
       try {
         if (!window.mip) throw new Error("Recipe editing requires the packaged Electron application.");
         const recipe = await window.mip.getRecipe({ id: button.dataset.editRecipe, version: Number(button.dataset.version) });
-        const draft = JSON.parse(JSON.stringify(recipe));
+        const draft = canonicalRecipeEditorDraft(recipe);
         const setPath = (path, raw, numeric = false) => {
-          const keys = path.split(".");
-          let target = draft;
-          for (const key of keys.slice(0, -1)) target[key] = target[key] || {};
-          target[keys.at(-1)] = numeric && raw !== "" ? Number(raw) : raw;
+          setCanonicalRecipePath(draft, path, numeric && raw !== "" ? Number(raw) : raw);
           $("#recipeJson").value = JSON.stringify(draft, null, 2);
         };
-        editor.innerHTML = `<div class="card"><h3>Guided audio recipe editor · ${esc(recipe.recipeId)} v${esc(recipe.version)}</h3><p class="subtle">Material fields are edited explicitly; the main-process repository validates the complete immutable recipe before saving.</p><fieldset><legend>Identity &amp; synthesis</legend><div class="form-grid"><div class="field"><label for="recipeName">Name</label><input id="recipeName" value="${esc(draft.name || "")}"></div><div class="field"><label for="recipeProvenance">Provenance</label><input id="recipeProvenance" value="${esc(draft.provenance || "")}"></div><div class="field"><label for="recipeSynthesisMode">Synthesis mode</label><input id="recipeSynthesisMode" value="${esc(draft.synthesisMode || draft.mode || "")}"></div><div class="field"><label for="recipeSampleRate">Sample rate</label><input id="recipeSampleRate" type="number" min="8000" max="192000" value="${esc(draft.sampleRate || 44100)}"></div><div class="field"><label for="recipeLeftHz">Left carrier (Hz)</label><input id="recipeLeftHz" type="number" min="0" step="0.01" value="${esc(draft.leftHz ?? "")}"></div><div class="field"><label for="recipeRightHz">Right carrier (Hz)</label><input id="recipeRightHz" type="number" min="0" step="0.01" value="${esc(draft.rightHz ?? "")}"></div><div class="field"><label for="recipeMasterGain">Master gain</label><input id="recipeMasterGain" type="number" min="0" max="1" step="0.01" value="${esc(draft.masterGain ?? 0.8)}"></div><div class="field"><label for="recipeDurationMode">Execution mode</label><select id="recipeDurationMode"><option value="live">live</option><option value="finite">finite</option></select></div><div class="field"><label for="recipeTargetFrames">Target frames (finite only)</label><input id="recipeTargetFrames" type="number" min="1" value="${esc(draft.targetFrames || draft.execution?.targetFrames || "")}"></div></div></fieldset><details style="margin-top:14px"><summary>Expert JSON view (read-only)</summary><textarea id="recipeJson" readonly style="min-height:360px;width:100%;font-family:monospace">${esc(JSON.stringify(draft, null, 2))}</textarea></details><div class="actions" style="margin-top:12px"><button class="button" id="validateRecipeDraft">Validate draft</button><button class="button" id="diffRecipeDraft">Show material diff</button><button class="button primary" id="saveRecipeVersion">Save immutable version</button><label class="check"><input type="checkbox" id="activateRecipe"> Activate new version</label></div><div id="recipeValidation" class="callout" role="status" aria-live="polite" style="margin-top:12px"></div></div>`;
-        $("#recipeDurationMode").value = draft.durationMode || draft.execution?.mode || "live";
-        const bindings = [["#recipeName", "name"], ["#recipeProvenance", "provenance"], ["#recipeSynthesisMode", "synthesisMode"], ["#recipeSampleRate", "sampleRate"], ["#recipeLeftHz", "leftHz"], ["#recipeRightHz", "rightHz"], ["#recipeMasterGain", "masterGain"], ["#recipeDurationMode", "durationMode"], ["#recipeTargetFrames", "targetFrames"]];
-        bindings.forEach(([selector, path]) => $(selector).addEventListener("input", (event) => setPath(path, event.target.value, /sampleRate|Hz|Gain|Frames/i.test(path))));
+        editor.innerHTML = `<div class="card"><h3>Guided audio recipe editor · ${esc(recipe.recipeId)} v${esc(recipe.version)}</h3><p class="subtle">Material fields are edited explicitly; canonical carrier and execution fields are authoritative. Convenience aliases are derived by normalization and are never edited independently.</p><fieldset><legend>Identity &amp; synthesis</legend><div class="form-grid"><div class="field"><label for="recipeName">Name</label><input id="recipeName" value="${esc(draft.name || "")}"></div><div class="field"><label for="recipeProvenance">Provenance</label><input id="recipeProvenance" value="${esc(draft.provenance || "")}"></div><div class="field"><label for="recipeSynthesisMode">Synthesis mode</label><input id="recipeSynthesisMode" value="${esc(draft.synthesisMode || "")}"></div><div class="field"><label for="recipeSampleRate">Sample rate</label><input id="recipeSampleRate" type="number" min="8000" max="192000" value="${esc(draft.sampleRate || 44100)}"></div><div class="field"><label for="recipeLeftHz">Left carrier (Hz)</label><input id="recipeLeftHz" type="number" min="0" step="0.01" value="${esc(draft.carriers?.[0]?.leftHz ?? "")}"></div><div class="field"><label for="recipeRightHz">Right carrier (Hz)</label><input id="recipeRightHz" type="number" min="0" step="0.01" value="${esc(draft.carriers?.[0]?.rightHz ?? "")}"></div><div class="field"><label for="recipeMasterGain">Master gain</label><input id="recipeMasterGain" type="number" min="0" max="1" step="0.01" value="${esc(draft.masterGain ?? 0.8)}"></div><div class="field"><label for="recipeDurationMode">Execution mode</label><select id="recipeDurationMode"><option value="live">live</option><option value="finite">finite</option></select></div><div class="field"><label for="recipeTargetFrames">Target frames (finite only)</label><input id="recipeTargetFrames" type="number" min="1" value="${esc(draft.execution?.targetFrames ?? "")}"></div></div></fieldset><details style="margin-top:14px"><summary>Expert JSON view (read-only)</summary><textarea id="recipeJson" readonly style="min-height:360px;width:100%;font-family:monospace">${esc(JSON.stringify(draft, null, 2))}</textarea></details><div class="actions" style="margin-top:12px"><button class="button" id="validateRecipeDraft">Validate draft</button><button class="button" id="diffRecipeDraft">Show material diff</button><button class="button primary" id="saveRecipeVersion">Save immutable version</button><label class="check"><input type="checkbox" id="activateRecipe"> Activate new version</label></div><div id="recipeValidation" class="callout" role="status" aria-live="polite" style="margin-top:12px"></div></div>`;
+        $("#recipeDurationMode").value = draft.execution?.mode || "live";
+        const bindings = [["#recipeName", "name"], ["#recipeProvenance", "provenance"], ["#recipeSynthesisMode", "synthesisMode"], ["#recipeSampleRate", "sampleRate"], ["#recipeLeftHz", "carriers[0].leftHz"], ["#recipeRightHz", "carriers[0].rightHz"], ["#recipeMasterGain", "masterGain"], ["#recipeDurationMode", "execution.mode"], ["#recipeTargetFrames", "execution.targetFrames"]];
+        bindings.forEach(([selector, path]) => {
+          const element = $(selector);
+          const update = (event) => {
+            const raw = event.target.value;
+            const numeric = /sampleRate|Hz|Gain|targetFrames/i.test(path);
+            // A blank finite-only target is an intentional null projection;
+            // other blank numeric fields remain invalid and are reported by
+            // the repository validator rather than becoming an implicit zero.
+            const next = numeric && raw === "" && path === "execution.targetFrames"
+              ? null
+              : numeric && raw !== "" ? Number(raw) : raw;
+            setCanonicalRecipePath(draft, path, next);
+            $("#recipeJson").value = JSON.stringify(draft, null, 2);
+          };
+          element.addEventListener("input", update);
+          element.addEventListener("change", update);
+        });
         $("#validateRecipeDraft").onclick = async () => {
           try {
             const result = await window.mip.saveRecipeDraft({ recipe: draft, baseVersion: Number(button.dataset.version) });
             $("#recipeValidation").textContent = result?.validation?.valid ? "Draft is valid." : `Draft invalid: ${(result?.validation?.errors || []).join("; ")}`;
           } catch (error) { $("#recipeValidation").textContent = error.message; }
         };
-        $("#diffRecipeDraft").onclick = () => { const changed = Object.keys(draft).filter((key) => JSON.stringify(draft[key]) !== JSON.stringify(recipe[key])); $("#recipeValidation").textContent = changed.length ? `Material fields changed: ${changed.join(", ")}` : "No material changes against the selected base version."; };
+        $("#diffRecipeDraft").onclick = () => { const changed = ["sampleRate", "channels", "synthesisMode", "carriers", "monauralLayers", "septon", "binauralRelationships", "envelope", "noise", "delay", "comb", "lowFrequencySweep", "cues", "protocolCues", "voiceReferences", "masterGain", "headroomDb", "rampSeconds", "execution"].filter((key) => JSON.stringify(draft[key] ?? null) !== JSON.stringify(recipe[key] ?? null)); $("#recipeValidation").textContent = changed.length ? `Material fields changed: ${changed.join(", ")}` : "No material changes against the selected base version."; };
         $("#saveRecipeVersion").onclick = async () => {
           try {
             await window.mip.saveRecipeVersion({ recipe: draft, parentVersion: Number(button.dataset.version), activate: $("#activateRecipe").checked });

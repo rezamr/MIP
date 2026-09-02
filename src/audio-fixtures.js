@@ -50,6 +50,10 @@ function finiteRecipe(source, fixtureId, overrides = {}, targetFrames = 1024) {
       deterministicFixture: "PASS",
     },
   };
+  // Carrier overrides are authoritative.  Remove inherited convenience
+  // projections so a fixture cannot accidentally submit stale aliases.
+  if (overrides.carriers !== undefined)
+    for (const key of ["leftHz", "rightHz", "leftFrequencyHz", "rightFrequencyHz", "frequencyHz", "hz", "centerHz", "beatHz", "gain"]) delete input[key];
   delete input.configFingerprint;
   return Object.freeze(normalizeRecipe(input));
 }
