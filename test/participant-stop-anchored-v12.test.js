@@ -205,6 +205,54 @@ test("execution window is optional while local calendar scheduling still require
   assert.throws(() => normalizeExecutionWindow({ startLocal: "2026-01-01T10:00", endLocal: "2026-01-01T11:00" }), /timezone is required/);
 });
 
+test("disabled execution window ignores stale blank fields and overrides a profile default", () => {
+  const profile = {
+    ...profiles.STOP_ANCHORED_INTEGER_RANGE_V1,
+    timing: {
+      ...profiles.STOP_ANCHORED_INTEGER_RANGE_V1.timing,
+      executionWindow: {
+        startUtc: "2026-01-01T10:00:00Z",
+        endUtc: "2026-01-01T11:00:00Z",
+        timezone: "UTC",
+      },
+    },
+  };
+  const targetDefinition = { anchor: "PARTICIPANT_STOP_RETURN", targetOffsetMs: -600_000 };
+  const disabled = resolveEffectiveConfiguration({
+    profile,
+    session: {
+      targetDefinition,
+      // These values model stale date/time controls in the unchecked UI.
+      executionWindow: { enabled: false, startLocal: "", endLocal: "", timezone: "Not/AZone" },
+    },
+  });
+  const omitted = resolveEffectiveConfiguration({ profile, session: { targetDefinition, executionWindow: null } });
+  assert.equal(normalizeExecutionWindow(null), null);
+  assert.equal(normalizeExecutionWindow(false), null);
+  assert.equal(disabled.executionWindow, null);
+  assert.equal(omitted.executionWindow, null);
+  assert.equal(disabled.targetDefinition.targetOffsetMs, -600_000);
+  assert.equal(disabled.targetDefinition.scheduledUtc, null);
+  assert.equal(disabled.targetDefinition.scheduledMonotonicNs, null);
+});
+
+test("execution window validates boundaries only when explicitly enabled", () => {
+  const valid = normalizeExecutionWindow({
+    enabled: true,
+    startUtc: "2026-01-01T10:00:00Z",
+    endUtc: "2026-01-01T11:00:00Z",
+    timezone: "UTC",
+  });
+  assert.deepEqual(valid, {
+    startUtc: "2026-01-01T10:00:00.000Z",
+    endUtc: "2026-01-01T11:00:00.000Z",
+    timezone: "UTC",
+  });
+  assert.throws(() => normalizeExecutionWindow({ enabled: true, startUtc: "", endUtc: "2026-01-01T11:00:00Z", timezone: "UTC" }), /executionWindow\.startUtc/);
+  assert.throws(() => normalizeExecutionWindow({ enabled: true, startUtc: "2026-01-01T10:00:00Z", endUtc: "not-a-date", timezone: "UTC" }), /executionWindow\.endUtc/);
+  assert.throws(() => normalizeExecutionWindow({ enabled: true, startLocal: "2026-01-01T10:00", endLocal: "2026-01-01T11:00" }), /timezone is required/);
+});
+
 test("participant-paced protocol has no automatic return cue", () => {
   const controller = new ProtocolStageController({ inductionSeconds: 0, settleSeconds: 0, requestSeconds: 0, releaseSeconds: 0, neutralSeconds: 0, returnSeconds: 1, participantPaced: true }, { timer: { setTimeout: () => 0, clearTimeout: () => {} } });
   assert.equal(controller.stages.some((stage) => stage.stageType === "RETURN_CUE"), false);

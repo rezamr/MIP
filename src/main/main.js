@@ -431,7 +431,7 @@ function assertParticipantStopExecutionWindow(runtime) {
   // An execution window is administrative metadata, not the target anchor.
   // It is optional; when supplied, START must remain inside its committed UTC
   // bounds.  With no window the owner may start whenever appropriate.
-  if (!window) return;
+  if (!window || window.enabled === false || window.disabled === true) return;
   const nowMs = Date.now();
   const startMs = Date.parse(window.startUtc);
   const endMs = Date.parse(window.endUtc);
@@ -1547,9 +1547,16 @@ function registerSessionHandlers() {
       }
     }
     let executionWindow = null;
+    const hasExecutionWindowOverride = Object.prototype.hasOwnProperty.call(value, "executionWindow");
     if (stopAnchored) {
       try {
-        executionWindow = normalizeExecutionWindow(value.executionWindow || profile.timing?.executionWindow);
+        // An explicit null/disabled value must override any profile default;
+        // truthiness-based fallback would accidentally resurrect the profile
+        // window and could validate stale blank renderer fields.
+        const suppliedExecutionWindow = hasExecutionWindowOverride
+          ? value.executionWindow
+          : profile.timing?.executionWindow;
+        executionWindow = normalizeExecutionWindow(suppliedExecutionWindow);
       } catch (error) {
         throw new Error(`Participant-stop execution window is invalid: ${error.message}`);
       }

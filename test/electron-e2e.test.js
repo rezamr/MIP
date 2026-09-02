@@ -107,6 +107,28 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.deepEqual(initial.guidedEditorDom.canonicalCarriers, { leftHz: 396, rightHz: 400 });
     assert.equal(initial.guidedEditorDom.aliasesMatch, true);
     assert.equal(initial.guidedEditorDom.aliasConflict, false);
+    assert.deepEqual(initial.optionalExecutionWindow.off, {
+      created: true,
+      readiness: true,
+      executionWindow: null,
+      persistedExecutionWindow: null,
+      committedExecutionWindow: null,
+      targetUtcUnknownBeforeStop: true,
+      targetOffsetMs: -600000,
+    });
+    assert.deepEqual(initial.optionalExecutionWindow.staleDisabled, {
+      created: true,
+      readiness: true,
+      executionWindow: null,
+    });
+    assert.equal(initial.optionalExecutionWindow.on.created, true);
+    assert.equal(initial.optionalExecutionWindow.on.readiness, true);
+    assert.deepEqual(initial.optionalExecutionWindow.on.executionWindow, {
+      startUtc: "2099-01-01T00:00:00.000Z",
+      endUtc: "2099-01-01T01:00:00.000Z",
+      timezone: "UTC",
+    });
+    assert.deepEqual(initial.optionalExecutionWindow.rejected, { missingStart: true, invalidEnd: true });
     assert.equal(initial.customFormalRecipe.referenceStatus, "NOT_APPLICABLE");
     assert.equal(initial.customFormalRecipe.configurationStatus, "PASS");
     assert.equal(initial.customFormalRecipe.runtimeCompatibility, "PASS");

@@ -382,13 +382,20 @@ async function renderPre() {
           return offset;
         })()
         : undefined;
-      const executionWindow = stopAnchoredProfile && $("#executionWindowEnabled")?.checked
-        ? {
-          startLocal: `${$("#executionDate").value}T${$("#executionStart").value}`,
-          endLocal: `${$("#executionDate").value}T${$("#executionEnd").value}`,
-          timezone: $("#executionTimezone").value.trim(),
-        }
-        : undefined;
+      // Keep the optional window explicitly disabled when its checkbox is
+      // off. Do not serialize the disabled date/time controls: stale blank
+      // DOM values are not an execution-window request and must never reach
+      // domain datetime validation.
+      const executionWindow = stopAnchoredProfile
+        ? $("#executionWindowEnabled")?.checked === true
+          ? {
+            enabled: true,
+            startLocal: `${$("#executionDate").value}T${$("#executionStart").value}`,
+            endLocal: `${$("#executionDate").value}T${$("#executionEnd").value}`,
+            timezone: $("#executionTimezone").value.trim(),
+          }
+          : null
+        : null;
       currentSession = await api("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
@@ -397,7 +404,7 @@ async function renderPre() {
           ...(requestedSpace ? { outcomeSpace: requestedSpace } : {}),
           ...(stopAnchoredProfile ? { targetOffsetMs } : {}),
           temporalAnalysis,
-          ...(executionWindow ? { executionWindow } : {}),
+          ...(stopAnchoredProfile ? { executionWindow } : {}),
           prediction: $("#prediction").value.trim() || null,
           targetDelayMs: mode === "FUTURE_TARGET" ? Number($("#futureDelayMinutes").value || 1440) * 60_000 : undefined,
           participantLabel: $("#participant").value,

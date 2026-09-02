@@ -104,6 +104,16 @@ export const MAX_SCHEDULED_OUTPUTS = 1_000_000;
  * IANA timezone is retained solely as display/audit metadata.
  */
 export function normalizeExecutionWindow(value = {}, options = {}) {
+  // The window is an optional administrative restriction. Treat explicit
+  // disabled sentinels as "no restriction" before inspecting any boundary,
+  // timezone, or local-calendar fields. This also protects against stale
+  // blank date controls remaining in the renderer DOM while the checkbox is
+  // off.
+  if (
+    value === false ||
+    (value && typeof value === "object" && !Array.isArray(value) &&
+      (value.enabled === false || value.disabled === true))
+  ) return null;
   if (value === null || value === undefined || value === "") {
     if (options.required === true) fail("executionWindow is required");
     return null;

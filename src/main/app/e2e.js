@@ -389,6 +389,124 @@ export async function runElectronE2E(mainWindow, options = {}) {
       };
       output.guidedEditorDom = await runGuidedEditorDomFlow();
 
+      // Exercise the participant-stop pre-session execution-window contract
+      // through the real preload bridge. The checkbox-off path deliberately
+      // sends stale blank controls inside an explicit disabled sentinel to
+      // prove that neither renderer nor main-process validation treats them
+      // as a required date range. No participant/audio phase is started.
+      const runOptionalExecutionWindowFlow = async () => {
+        const stopProfileId = "STOP_ANCHORED_INTEGER_RANGE_V1";
+        const base = {
+          profileId: stopProfileId,
+          mode: "INFLUENCE",
+          targetOffsetMs: -600000,
+          recordType: "dry",
+          participantLabel: "Electron optional execution-window fixture",
+          deferCommit: true,
+        };
+        const off = await window.mip.createSession({
+          ...base,
+          executionWindow: null,
+        });
+        const offDefinition = await window.mip.getResearchDefinition({ id: off.sessionId });
+        const offCommit = await window.mip.commitSession({
+          id: off.sessionId,
+          memoryConfirmed: true,
+          safetyConfirmed: true,
+          safetyNote: "Automated optional-window-off readiness fixture.",
+        });
+        const offAfterCommit = await window.mip.getResearchDefinition({ id: off.sessionId });
+        const staleDisabled = await window.mip.createSession({
+          ...base,
+          participantLabel: "Electron stale-disabled execution-window fixture",
+          executionWindow: {
+            enabled: false,
+            startLocal: "",
+            endLocal: "",
+            timezone: "Not/AZone",
+          },
+        });
+        const staleCommit = await window.mip.commitSession({
+          id: staleDisabled.sessionId,
+          memoryConfirmed: true,
+          safetyConfirmed: true,
+          safetyNote: "Automated stale-disabled readiness fixture.",
+        });
+        const on = await window.mip.createSession({
+          ...base,
+          participantLabel: "Electron optional execution-window-on fixture",
+          executionWindow: {
+            enabled: true,
+            startUtc: "2099-01-01T00:00:00Z",
+            endUtc: "2099-01-01T01:00:00Z",
+            timezone: "UTC",
+          },
+        });
+        const onCommit = await window.mip.commitSession({
+          id: on.sessionId,
+          memoryConfirmed: true,
+          safetyConfirmed: true,
+          safetyNote: "Automated optional-window-on readiness fixture.",
+        });
+        const rejected = {};
+        try {
+          await window.mip.createSession({
+            ...base,
+            participantLabel: "Electron missing-start execution-window fixture",
+            executionWindow: { enabled: true, startUtc: "", endUtc: "2099-01-01T01:00:00Z", timezone: "UTC" },
+          });
+          rejected.missingStart = false;
+        } catch (error) {
+          rejected.missingStart = /executionWindow\.startUtc/.test(String(error?.message || error));
+        }
+        try {
+          await window.mip.createSession({
+            ...base,
+            participantLabel: "Electron invalid-end execution-window fixture",
+            executionWindow: { enabled: true, startUtc: "2099-01-01T00:00:00Z", endUtc: "not-a-date", timezone: "UTC" },
+          });
+          rejected.invalidEnd = false;
+        } catch (error) {
+          rejected.invalidEnd = /executionWindow\.endUtc/.test(String(error?.message || error));
+        }
+        // A draft/committed fixture must not remain half-open in the shared
+        // E2E database: integrity verification quite correctly flags a draft
+        // without a commitment. Preparing then explicitly failing audio moves
+        // each fixture to a closed, auditable terminal state without starting
+        // a participant or an AudioWorklet.
+        const closeWithoutStartingAudio = async (draft) => {
+          await window.mip.prepareAudio({ id: draft.sessionId });
+          await window.mip.audioFailed({ id: draft.sessionId, error: "Automated optional execution-window fixture cleanup." });
+        };
+        await closeWithoutStartingAudio(off);
+        await closeWithoutStartingAudio(staleDisabled);
+        await closeWithoutStartingAudio(on);
+        const offTarget = off.researchDefinition?.targetDefinition || {};
+        const offPersistedTarget = offDefinition?.targetDefinition || {};
+        const offCommittedTarget = offAfterCommit?.targetDefinition || {};
+        return {
+          off: {
+            created: off.status === "DRAFT",
+            readiness: offCommit.status === "COMMITTED",
+            executionWindow: off.researchDefinition?.executionWindow ?? null,
+            persistedExecutionWindow: offDefinition?.executionWindow ?? null,
+            committedExecutionWindow: offAfterCommit?.executionWindow ?? null,
+            targetUtcUnknownBeforeStop: offTarget.scheduledUtc == null && offTarget.scheduledMonotonicNs == null && offPersistedTarget.scheduledUtc == null && offCommittedTarget.scheduledUtc == null,
+            targetOffsetMs: offTarget.targetOffsetMs,
+          },
+          staleDisabled: {
+            created: staleDisabled.status === "DRAFT",
+            readiness: staleCommit.status === "COMMITTED",
+            executionWindow: staleDisabled.researchDefinition?.executionWindow ?? null,
+          },
+          on: {
+            created: on.status === "DRAFT",
+            readiness: onCommit.status === "COMMITTED",
+            executionWindow: on.researchDefinition?.executionWindow ?? null,
+          },
+          rejected,
+        };
+      };
       const session = await window.mip.createSession({
         profileId: "BASELINE_NOW_BINARY_V1",
         recordType: "dry",
@@ -524,6 +642,10 @@ export async function runElectronE2E(mainWindow, options = {}) {
       const restored = await window.mip.restoreBackup({ backupId: output.backup.backupId, sha256: output.backup.sha256 });
       output.restore = { restored: restored.restored, schemaVersion: restored.schemaVersion, postRestore: restored.postRestore };
       output.afterRestore = await window.mip.getSession({ id: session.sessionId });
+      // Keep these administrative acceptance fixtures out of the backup and
+      // restore gate itself. They are intentionally closed later in this
+      // flow and do not represent a participant session.
+      output.optionalExecutionWindow = await runOptionalExecutionWindowFlow();
 
       // Prove the independent formal-operational path with a genuinely custom
       // identity.  This is deliberately last because the dry fixture is
