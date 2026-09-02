@@ -1,6 +1,7 @@
 import { canonical, sha256, APP_VERSION, ENGINE_VERSION } from "../../engine.js";
 import { AUDIO_VERSION } from "../../audio.js";
 import { json, now } from "../database/db.js";
+import { normalizeOutcomeSpace, createCompatibilityFingerprint } from "../../domain/research-model.js";
 
 const component = (valid, details = {}, errors = []) => ({ valid: Boolean(valid), ...details, errors });
 const safeJson = (value, fallback = null) => {
@@ -195,6 +196,81 @@ export class IntegrityService {
     return component(audioErrors.length === 0, { commitPresent: Boolean(commit), configHash: commit?.config_hash || null, configHashValid, configFingerprint: committedFingerprint || null, configFingerprintPresent, configFingerprintValid, recipeId: commit?.recipe_id || null, recipeVersion: commit?.recipe_version ?? null, finalizationPresent: Boolean(finalization), finalStreamDigest: finalization?.final_stream_digest || null, finalStreamDigestPresent: digestPresent, finalStreamFormat: format, finalStreamFormatPresent: formatPresent }, audioErrors);
   }
 
+  _verifyResearch(sessionId, errors) {
+    const definition = this.db.prepare("SELECT * FROM research_definitions WHERE session_id=?").get(sessionId);
+    const definitionErrors = [];
+    if (definition) {
+      const value = json(definition.definition_json, undefined);
+      if (value === undefined || sha256(canonical(value)) !== definition.config_hash)
+        definitionErrors.push("Research definition hash mismatch");
+      try {
+        const expectedFingerprint = createCompatibilityFingerprint(value || {});
+        if (definition.compatibility_fingerprint !== expectedFingerprint)
+          definitionErrors.push("Research compatibility fingerprint mismatch");
+        const space = normalizeOutcomeSpace(json(definition.outcome_space_json, null));
+        const cardinality = space.type === "INTEGER_RANGE"
+          ? Number(BigInt(space.maxInclusive) - BigInt(space.minInclusive) + 1n)
+          : space.values.length;
+        if (cardinality !== Number(definition.cardinality)) definitionErrors.push("Research outcome cardinality mismatch");
+      } catch (error) {
+        definitionErrors.push(`Research definition is invalid: ${error.message}`);
+      }
+    }
+    const occurrenceErrors = [];
+    const occurrences = this.db.prepare("SELECT * FROM target_occurrences WHERE session_id=? ORDER BY output_seq,occurrence_id").all(sessionId);
+    for (const row of occurrences) {
+      const value = json(row.value_json, undefined);
+      const core = {
+        sessionId: row.session_id,
+        trialId: row.trial_id || null,
+        outputSeq: row.output_seq,
+        value,
+        region: row.region || null,
+        scheduledUtc: row.scheduled_utc || null,
+        scheduledMonotonicNs: row.scheduled_monotonic_ns === null ? null : String(row.scheduled_monotonic_ns),
+        actualUtc: row.actual_utc || null,
+        actualMonotonicNs: row.actual_monotonic_ns === null ? null : String(row.actual_monotonic_ns),
+        scheduledLatencyMs: row.scheduled_latency_ms ?? null,
+        signedLatencyMs: row.signed_latency_ms ?? null,
+        timingClassification: row.timing_classification || null,
+      };
+      if (value === undefined || sha256(canonical(core)) !== row.record_hash)
+        occurrenceErrors.push(`Target occurrence ${row.occurrence_id} hash mismatch`);
+    }
+    const futureErrors = [];
+    const future = this.db.prepare("SELECT * FROM future_target_events WHERE session_id=?").get(sessionId);
+    if (future) {
+      const payload = {
+        sessionId: future.session_id,
+        prediction: json(future.prediction_json, null),
+        target: json(future.target_json, null),
+        scheduledUtc: future.scheduled_utc || null,
+        scheduledMonotonicNs: future.scheduled_monotonic_ns === null ? null : String(future.scheduled_monotonic_ns),
+        actualUtc: future.actual_utc || null,
+        actualMonotonicNs: future.actual_monotonic_ns === null ? null : String(future.actual_monotonic_ns),
+        rng: json(future.rng_metadata_json, null),
+        status: future.status,
+        generated: future.target_json !== null,
+      };
+      if (sha256(canonical(payload)) !== future.event_hash) futureErrors.push("Future target event hash mismatch");
+    }
+    const aggregateErrors = [];
+    const aggregates = this.db.prepare("SELECT * FROM cross_session_analyses WHERE aggregate_id IN (SELECT aggregate_id FROM cross_session_analyses)").all();
+    for (const row of aggregates) {
+      const value = json(row.analysis_json, undefined);
+      if (value === undefined || sha256(canonical(value)) !== row.analysis_hash)
+        aggregateErrors.push(`Cross-session analysis ${row.aggregate_id} hash mismatch`);
+    }
+    const allErrors = [...definitionErrors, ...occurrenceErrors, ...futureErrors, ...aggregateErrors];
+    if (allErrors.length) errors.push(...allErrors);
+    return component(allErrors.length === 0, {
+      definitionPresent: Boolean(definition),
+      targetOccurrenceCount: occurrences.length,
+      futureTargetPresent: Boolean(future),
+      aggregateCount: aggregates.length,
+    }, allErrors);
+  }
+
   verifySession(sessionId, options = {}) {
     const errors = [];
     const session = this._session(sessionId);
@@ -254,6 +330,7 @@ export class IntegrityService {
     ];
     if (analysisErrors.length) errors.push(...analysisErrors);
     const audio = this._verifyAudio(sessionId, errors);
+    const research = this._verifyResearch(sessionId, errors);
     const versionErrors = [];
     const versionValues = [details?.app_version, details?.engine_version, details?.audio_version];
     if (versionValues.some((value) => value !== null && value !== undefined && typeof value !== "string")) versionErrors.push("Application, engine, and audio versions must be strings");
@@ -289,6 +366,7 @@ export class IntegrityService {
         versionCount: analysisVersions.length,
       }, analysisErrors),
       committedAudio: audio,
+      research,
       versions,
       foreignKeyReferentialIntegrity: foreignKeys,
     };

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { sha256, canonical, profiles, APP_VERSION, ENGINE_VERSION } from "../../engine.js";
+import { sha256, canonical, profiles, APP_VERSION, ENGINE_VERSION, normalizeTemporalAnalysisPlan } from "../../engine.js";
 import { PRESETS, AUDIO_VERSION } from "../../audio.js";
 import { IntegrityService } from "../integrity/IntegrityService.js";
 import { SessionRepository } from "../repositories/SessionRepository.js";
@@ -15,8 +15,9 @@ import { BackupService } from "../backup/BackupService.js";
 import { LegacyImporter } from "../import/LegacyImporter.js";
 import { SessionExporter } from "../export/SessionExporter.js";
 import { SessionController } from "../sessions/session-controller.js";
+import { ResearchRepository } from "../repositories/ResearchRepository.js";
 
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 14;
 
 const now = () => new Date().toISOString();
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -29,6 +30,32 @@ const json = (value, fallback = null) => {
   }
 };
 const sqlDb = (owner) => owner?.db?.prepare ? owner.db : owner;
+
+export function requiresStrictResearchGate(researchMeta) {
+  if (!researchMeta) return false;
+  // New schema-14 research definitions are governed by the orthogonal
+  // evidence/reveal projections.  Legacy binary sessions without a research
+  // definition retain their historical raw-report facade, but a committed
+  // non-binary definition must never become reveal-eligible merely because a
+  // raw report was locked.
+  const outcomeSpace = json(researchMeta.outcome_space_json, null);
+  if (outcomeSpace?.type && String(outcomeSpace.type).toUpperCase() !== "BINARY") return true;
+  if (researchMeta.mode !== "INFLUENCE" || researchMeta.primary_endpoint !== "EXACT_SLOT") return true;
+  const analysis = json(researchMeta.temporal_analysis_json, {});
+  return Array.isArray(analysis?.windows) && analysis.windows.some((window) => {
+    const preMs = Number(window?.preMs ?? 0);
+    const postMs = Number(window?.postMs ?? 0);
+    return window?.enabled !== false && (
+      (Number.isFinite(preMs) && preMs > 0) ||
+      (Number.isFinite(postMs) && postMs > 0) ||
+      (window?.exactSequence !== null && window?.exactSequence !== undefined) ||
+      (window?.sequenceStart !== null && window?.sequenceStart !== undefined) ||
+      (window?.sequenceEnd !== null && window?.sequenceEnd !== undefined) ||
+      (window?.sequenceOffsetStart !== null && window?.sequenceOffsetStart !== undefined) ||
+      (window?.sequenceOffsetEnd !== null && window?.sequenceOffsetEnd !== undefined)
+    );
+  });
+}
 
 function tableExists(db, name) {
   return Boolean(
@@ -538,6 +565,105 @@ function ensureV13Columns(db) {
   }
 }
 
+function ensureV14Tables(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS research_definitions(
+      session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+      definition_json TEXT NOT NULL,
+      config_hash TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      outcome_space_json TEXT NOT NULL,
+      cardinality INTEGER NOT NULL,
+      target_definition_json TEXT NOT NULL,
+      participant_phase TEXT NOT NULL,
+      evidence_phase TEXT NOT NULL,
+      output_cadence TEXT NOT NULL,
+      primary_endpoint TEXT NOT NULL,
+      temporal_analysis_json TEXT NOT NULL,
+      reveal_policy TEXT NOT NULL,
+      compatibility_fingerprint TEXT NOT NULL,
+      committed INTEGER NOT NULL DEFAULT 0,
+      committed_utc TEXT,
+      created_utc TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS session_phase_projections(
+      session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+      session_lifecycle TEXT NOT NULL,
+      participant_phase_status TEXT NOT NULL,
+      evidence_phase_status TEXT NOT NULL,
+      report_status TEXT NOT NULL,
+      reveal_status TEXT NOT NULL,
+      integrity_status TEXT NOT NULL,
+      updated_utc TEXT NOT NULL,
+      projection_hash TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS target_occurrences(
+      occurrence_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(session_id),
+      trial_id TEXT REFERENCES trials(trial_id),
+      output_seq INTEGER,
+      value_json TEXT NOT NULL,
+      region TEXT,
+      scheduled_utc TEXT,
+      scheduled_monotonic_ns TEXT,
+      actual_utc TEXT,
+      actual_monotonic_ns TEXT,
+      scheduled_latency_ms REAL,
+      signed_latency_ms REAL,
+      timing_classification TEXT,
+      record_hash TEXT NOT NULL,
+      created_utc TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS future_target_events(
+      session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+      prediction_json TEXT,
+      target_json TEXT,
+      scheduled_utc TEXT,
+      scheduled_monotonic_ns TEXT,
+      actual_utc TEXT,
+      actual_monotonic_ns TEXT,
+      rng_metadata_json TEXT,
+      status TEXT NOT NULL,
+      event_hash TEXT NOT NULL,
+      created_utc TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cross_session_analyses(
+      aggregate_id TEXT PRIMARY KEY,
+      compatibility_fingerprint TEXT,
+      definition_json TEXT,
+      analysis_json TEXT NOT NULL,
+      workflow TEXT NOT NULL,
+      exploratory INTEGER NOT NULL DEFAULT 0,
+      analysis_hash TEXT NOT NULL,
+      created_utc TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS research_defaults(
+      defaults_id INTEGER PRIMARY KEY CHECK(defaults_id=1),
+      defaults_json TEXT NOT NULL,
+      defaults_hash TEXT NOT NULL,
+      updated_utc TEXT NOT NULL
+    );
+  `);
+}
+
+function ensureV14Indexes(db) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_research_mode ON research_definitions(mode,created_utc);
+    CREATE INDEX IF NOT EXISTS idx_research_fingerprint ON research_definitions(compatibility_fingerprint,created_utc);
+    CREATE INDEX IF NOT EXISTS idx_phase_evidence ON session_phase_projections(evidence_phase_status,updated_utc);
+    CREATE INDEX IF NOT EXISTS idx_target_occurrences_session ON target_occurrences(session_id,output_seq);
+    CREATE INDEX IF NOT EXISTS idx_target_occurrences_class ON target_occurrences(timing_classification,actual_utc);
+    CREATE INDEX IF NOT EXISTS idx_outputs_scheduled ON machine_outputs(session_id,scheduled_utc,output_seq);
+    CREATE INDEX IF NOT EXISTS idx_outputs_actual ON machine_outputs(session_id,actual_utc,output_seq);
+    CREATE INDEX IF NOT EXISTS idx_aggregate_fingerprint ON cross_session_analyses(compatibility_fingerprint,created_utc);
+  `);
+}
+
+function ensureV14Columns(db) {
+  addColumn(db, "target_occurrences", "scheduled_latency_ms", "REAL");
+  addColumn(db, "future_target_events", "rng_metadata_json", "TEXT");
+}
+
 function backfillSessionIdSequence(db) {
   if (!tableExists(db, "session_id_sequence")) return;
   const rows = db.prepare("SELECT session_id FROM sessions WHERE session_id GLOB 'S[0-9]*'").all();
@@ -732,10 +858,20 @@ function ensureTriggers(db) {
       ["immutable_analysis_versions_delete", "analysis_versions", "DELETE", "analysis versions are immutable"],
       ["immutable_protocol_stage_events_update", "protocol_stage_events", "UPDATE", "protocol stage events are immutable"],
       ["immutable_protocol_stage_events_delete", "protocol_stage_events", "DELETE", "protocol stage events are immutable"],
+      ["immutable_research_definition_delete", "research_definitions", "DELETE", "committed research definitions are immutable"],
+      ["immutable_target_occurrences_update", "target_occurrences", "UPDATE", "target occurrences are immutable"],
+      ["immutable_target_occurrences_delete", "target_occurrences", "DELETE", "target occurrences are immutable"],
+      ["immutable_future_target_update", "future_target_events", "UPDATE", "future target events are immutable"],
+      ["immutable_future_target_delete", "future_target_events", "DELETE", "future target events are immutable"],
+      ["immutable_cross_session_analysis_update", "cross_session_analyses", "UPDATE", "cross-session analyses are immutable"],
+      ["immutable_cross_session_analysis_delete", "cross_session_analyses", "DELETE", "cross-session analyses are immutable"],
+      ["immutable_research_defaults_delete", "research_defaults", "DELETE", "research defaults are immutable history"],
   ];
   for (const [name, table, action, message] of immutable) {
     if (tableExists(db, table)) immutableTrigger(db, name, table, action, message);
   }
+  if (tableExists(db, "research_definitions"))
+    immutableTrigger(db, "immutable_research_definition_update", "research_definitions", "UPDATE", "committed research definitions are immutable", " WHEN OLD.committed=1");
   if (tableExists(db, "legacy_imports")) {
     immutableTrigger(db, "immutable_legacy_import_final_update", "legacy_imports", "UPDATE", "legacy import records are immutable", " WHEN OLD.source_integrity_status <> 'PENDING'");
   }
@@ -805,6 +941,11 @@ export function migrateConnection(db) {
     ensureIndexes(db);
     ensureV13Indexes(db);
   });
+  apply(14, () => {
+    ensureV14Tables(db);
+    ensureV14Columns(db);
+    ensureV14Indexes(db);
+  });
 
   // A failed process can leave objects created just before a migration marker.
   ensureV12Tables(db);
@@ -812,6 +953,9 @@ export function migrateConnection(db) {
   ensureV13Tables(db);
   ensureV13Columns(db);
   ensureV13Indexes(db);
+  ensureV14Tables(db);
+  ensureV14Columns(db);
+  ensureV14Indexes(db);
   backfillSessionIdSequence(db);
   backfillSessionDetails(db);
   backfillVersionMetadata(db);
@@ -883,6 +1027,7 @@ export class MipDatabase {
     this.calibrations = new CalibrationRepository(this);
     this.audioHealth = new AudioHealthRepository(this);
     this.analyses = new AnalysisRepository(this);
+    this.research = new ResearchRepository(this);
     this.integrity = new IntegrityService(this);
     this.backups = new BackupService(this);
     this.legacyImporter = new LegacyImporter(this);
@@ -910,6 +1055,7 @@ export class MipDatabase {
     this.calibrations = new CalibrationRepository(this);
     this.audioHealth = new AudioHealthRepository(this);
     this.analyses = new AnalysisRepository(this);
+    this.research = new ResearchRepository(this);
     this.integrity = new IntegrityService(this);
     this.backups = new BackupService(this);
     this.legacyImporter = new LegacyImporter(this);
@@ -1013,11 +1159,23 @@ export class MipDatabase {
     const snapshot = { ...clone(profile), material: clone(material) };
     const config = JSON.stringify(snapshot);
     const configHash = sha256(canonical(snapshot));
-    const objective = material.objective === undefined ? null : JSON.stringify(material.objective);
-    const target = material.participantTarget === undefined ? null : String(material.participantTarget);
+    const objective = material.objective === undefined || material.objective === null ? null : JSON.stringify(material.objective);
+    const target = material.participantTarget === undefined || material.participantTarget === null ? null : String(material.participantTarget);
     const timing = material.timing || profile.timing || null;
     const scheduledUtc = material.scheduledUtc ?? timing?.scheduledUtc ?? null;
     const scheduledMonotonicNs = material.scheduledMonotonicNs ?? timing?.scheduledMonotonicNs ?? null;
+    const suppliedDefinition = material.researchDefinition || {};
+    const suppliedEndpoint = suppliedDefinition.primaryEndpoint || profile.analysis?.primaryEndpoint || "EXACT_SLOT";
+    const suppliedAnalysis = normalizeTemporalAnalysisPlan(suppliedDefinition.temporalAnalysis || profile.analysis || {});
+    const suppliedWindows = suppliedAnalysis.windows || [];
+    const suppliedPrimaryWindow = suppliedWindows.find((window) => window.id === suppliedAnalysis.primaryWindowId) || suppliedWindows[0] || {};
+    const suppliedHasDuration = suppliedWindows.some((window) => window.enabled !== false && (Number(window.preMs || 0) > 0 || Number(window.postMs || 0) > 0));
+    const suppliedIntervalMs = Number(suppliedAnalysis.intervalMs ?? profile.output?.intervalMs ?? 1);
+    const fallbackTargetSequence = suppliedEndpoint === "EXACT_SLOT"
+      ? suppliedHasDuration && Number.isFinite(suppliedIntervalMs) && suppliedIntervalMs > 0
+        ? Math.ceil(Number(suppliedPrimaryWindow.preMs || 0) / suppliedIntervalMs)
+        : Number(profile.output?.preBlocks || 0) * Number(profile.output?.blockSize || 1)
+      : null;
     let id = null;
     let trial = null;
     const tx = this.db.transaction(() => {
@@ -1045,6 +1203,37 @@ export class MipDatabase {
       } else {
         this.appendEvent(id, trial, "DRAFT_CREATED", { profileId: profile.id, profileVersion: profile.version });
       }
+      // Keep the session row, immutable snapshot, and normalized research
+      // definition in one SQLite transaction. A validation or persistence
+      // failure must not leave an orphaned session without its protocol
+      // definition.
+      const persistedDefinition = this.research.saveDefinition(id, {
+        ...suppliedDefinition,
+        mode: suppliedDefinition.mode || profile.mode || "INFLUENCE",
+        outcomeSpace: suppliedDefinition.outcomeSpace || profile.outcomeSpace,
+        profileId: profile.id,
+        profileVersion: profile.version,
+        rng: suppliedDefinition.rng || material.rng,
+        targetDefinition: suppliedDefinition.targetDefinition || {
+          mode: suppliedDefinition.mode || profile.mode || "INFLUENCE",
+          anchor: material.targetAnchor || timing?.anchor || ((suppliedDefinition.mode || profile.mode) === "FUTURE_TARGET" ? "ABSOLUTE_UTC" : "PARTICIPANT_REQUEST"),
+          targetSequence: material.targetSequence ?? fallbackTargetSequence,
+          scheduledUtc,
+          scheduledMonotonicNs,
+          semantics: suppliedDefinition.targetSemantics,
+        },
+        outputCadence: suppliedDefinition.outputCadence || profile.analysis?.outputCadence || "FIXED_INTERVAL",
+        primaryEndpoint: suppliedEndpoint,
+        temporalAnalysis: suppliedDefinition.temporalAnalysis || profile.analysis || {},
+        revealPolicy: suppliedDefinition.revealPolicy || profile.reveal?.policy || "AFTER_RAW_REPORT_LOCK",
+      }, { committed: !deferredCommit });
+      if (!deferredCommit && persistedDefinition?.mode === "FUTURE_TARGET") {
+        const prediction = persistedDefinition.definition?.targetDefinition?.prediction ?? null;
+        this.appendEvent(id, trial, "PREDICTION_LOCKED", {
+          predictionCommitted: prediction !== null && prediction !== undefined,
+          scheduledUtc: persistedDefinition.definition?.targetDefinition?.scheduledUtc || null,
+        });
+      }
     });
     tx();
     return { id, sessionId: id, trial, trialId: trial, configHash, status: deferredCommit ? "DRAFT" : "COMMITTED", deferredCommit };
@@ -1065,6 +1254,19 @@ export class MipDatabase {
       if (audio) this.commitAudioConfig(sessionId, audio, { withinTransaction: true });
       this.db.prepare("UPDATE session_details SET memory_confirmed_utc=?,baseline_json=?,environment_json=?,safety_json=? WHERE session_id=?")
         .run(details.memoryConfirmedUtc || committedUtc, details.baseline === undefined ? null : JSON.stringify(details.baseline), details.environment === undefined ? null : JSON.stringify(details.environment), details.safety === undefined ? null : JSON.stringify(details.safety), sessionId);
+      // Commit the normalized research definition in the same transaction as
+      // the immutable session commitment and audio configuration.  A process
+      // loss cannot leave a formally committed session with a draft research
+      // definition.
+      if (this.research) {
+        const committedDefinition = this.research.commitDefinition(sessionId, { committedUtc });
+        if (committedDefinition?.mode === "FUTURE_TARGET" && !this.db.prepare("SELECT 1 FROM evidence_events WHERE session_id=? AND event_type='PREDICTION_LOCKED'").get(sessionId)) {
+          this.appendEvent(sessionId, this.db.prepare("SELECT trial_id FROM trials WHERE session_id=? ORDER BY trial_seq LIMIT 1").get(sessionId)?.trial_id || null, "PREDICTION_LOCKED", {
+            predictionCommitted: committedDefinition.definition?.targetDefinition?.prediction !== null && committedDefinition.definition?.targetDefinition?.prediction !== undefined,
+            scheduledUtc: committedDefinition.definition?.targetDefinition?.scheduledUtc || null,
+          });
+        }
+      }
     });
     tx();
     return { sessionId, configHash, committedUtc, status: "COMMITTED" };
@@ -1083,14 +1285,28 @@ export class MipDatabase {
     const lockHash = sha256(payloadJson);
     const current = this.db.prepare("SELECT status,reveal_policy FROM sessions WHERE session_id=?").get(sessionId);
     if (!current) throw new Error(`Session not found: ${sessionId}`);
-    if (current.reveal_policy && current.reveal_policy !== "AFTER_RAW_REPORT_LOCK")
+    const researchMeta = this.db.prepare("SELECT mode,primary_endpoint,outcome_space_json,temporal_analysis_json FROM research_definitions WHERE session_id=?").get(sessionId) || null;
+    const temporalGate = requiresStrictResearchGate(researchMeta);
+    if (current.reveal_policy && current.reveal_policy !== "AFTER_RAW_REPORT_LOCK" && !temporalGate)
       throw new Error(`Reveal policy ${current.reveal_policy} is not implemented by the report-lock gate.`);
     // The historical synchronous database facade was used by v1 fixtures to
     // lock a report immediately after writing output, without driving the
     // Electron audio lifecycle. Preserve that import/test compatibility path
     // explicitly and mark it as a legacy projection; production IPC always
     // uses the strict RETURNED -> RAW_REPORT_LOCKED transition below.
+    if (current.status === "ABORTED") {
+      this.db.transaction(() => {
+        this.db.prepare("INSERT INTO raw_reports_locked(session_id,locked_utc,payload_json,lock_hash,schema_version) VALUES(?,?,?,?,?)").run(sessionId, lockedUtc, payloadJson, lockHash, schemaVersion);
+        this.db.prepare("DELETE FROM raw_report_drafts WHERE session_id=?").run(sessionId);
+        this.evidence.appendEvent(sessionId, null, "RAW_REPORT_LOCKED_AFTER_ABORT", { lockHash, schemaVersion, evidenceAborted: true });
+        if (temporalGate)
+          this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: "BLOCKED", sessionLifecycle: "ABORTED" });
+      })();
+      return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: false, compatibility: "evidence-aborted" };
+    }
     if (!["RETURNED", "RAW_REPORT_DRAFT"].includes(current.status)) {
+      if (temporalGate)
+        throw new Error("Temporal research reports must use the strict evidence-aware report-lock transaction.");
       this.db.transaction(() => {
         this.db.prepare("INSERT INTO raw_reports_locked(session_id,locked_utc,payload_json,lock_hash,schema_version) VALUES(?,?,?,?,?)").run(sessionId, lockedUtc, payloadJson, lockHash, schemaVersion);
         this.db.prepare("DELETE FROM raw_report_drafts WHERE session_id=?").run(sessionId);
@@ -1111,12 +1327,16 @@ export class MipDatabase {
       },
       evidence: { lockHash },
     });
-    this.persistTransition(sessionId, "REVEAL_ELIGIBLE", {
-      revealEligible: true,
-      eventType: "REVEAL_ELIGIBLE",
-      payload: { rawReportLocked: true },
-    }, { evidence: { gate: "RAW_REPORT_LOCKED" } });
-    return { sessionId, lockedUtc, lockHash, schemaVersion };
+    const eligible = !temporalGate || this.research.revealGate(sessionId).eligible;
+    if (eligible) {
+      this.persistTransition(sessionId, "REVEAL_ELIGIBLE", {
+        revealEligible: true,
+        eventType: "REVEAL_ELIGIBLE",
+        payload: { rawReportLocked: true, gate: temporalGate ? "FULL_RESEARCH_GATE" : "RAW_REPORT_LOCKED" },
+      }, { evidence: { gate: temporalGate ? "FULL_RESEARCH_GATE" : "RAW_REPORT_LOCKED" } });
+    }
+    if (temporalGate) this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: eligible ? "ELIGIBLE" : "BLOCKED" });
+    return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: eligible };
   }
 
   /**
@@ -1128,7 +1348,9 @@ export class MipDatabase {
   lockRawReportAtomic(sessionId, report = {}, schemaVersion = "1.0") {
     const session = this.db.prepare("SELECT status,reveal_policy FROM sessions WHERE session_id=?").get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
-    if (session.reveal_policy && session.reveal_policy !== "AFTER_RAW_REPORT_LOCK")
+    const researchMeta = this.db.prepare("SELECT mode,primary_endpoint,outcome_space_json,temporal_analysis_json FROM research_definitions WHERE session_id=?").get(sessionId) || null;
+    const temporalGate = requiresStrictResearchGate(researchMeta);
+    if (session.reveal_policy && session.reveal_policy !== "AFTER_RAW_REPORT_LOCK" && !temporalGate)
       throw new Error(`Reveal policy ${session.reveal_policy} is not implemented by the report-lock gate.`);
     const existing = this.db.prepare("SELECT locked_utc,lock_hash,schema_version FROM raw_reports_locked WHERE session_id=?").get(sessionId);
     if (existing) {
@@ -1150,18 +1372,36 @@ export class MipDatabase {
           this.db.prepare("DELETE FROM raw_report_drafts WHERE session_id=?").run(sessionId);
           if (["RETURNED", "RAW_REPORT_DRAFT"].includes(session.status))
             appendEdge(session.status, "RAW_REPORT_LOCKED", "RAW_REPORT_LOCKED", { lockHash: existing.lock_hash, schemaVersion: existing.schema_version }, { lockHash: existing.lock_hash, repaired: true });
-          appendEdge("RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEAL_ELIGIBLE", { rawReportLocked: true }, { gate: "RAW_REPORT_LOCKED", repaired: true });
+          const repairedEligible = !temporalGate || this.research.revealGate(sessionId).eligible;
+          if (repairedEligible)
+            appendEdge("RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEAL_ELIGIBLE", { rawReportLocked: true }, { gate: temporalGate ? "FULL_RESEARCH_GATE" : "RAW_REPORT_LOCKED", repaired: true });
+          if (temporalGate)
+            this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: repairedEligible ? "ELIGIBLE" : "BLOCKED" });
         })();
-        return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: true, repaired: true };
+        const currentStatus = this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status;
+        return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: currentStatus === "REVEAL_ELIGIBLE", repaired: true };
       }
       return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: eligible };
     }
-    if (!["RETURNED", "RAW_REPORT_DRAFT"].includes(session.status))
+    if (!["RETURNED", "RAW_REPORT_DRAFT", "ABORTED"].includes(session.status))
       throw new Error("A report cannot be locked before formal return.");
     const payloadJson = JSON.stringify(clone(report));
     const lockHash = sha256(payloadJson);
     const lockedUtc = now();
     const trialId = this.sessions.trials(sessionId)[0]?.trialId || null;
+    if (session.status === "ABORTED") {
+      // ABORTED is terminal for machine evidence. Locking the participant
+      // report afterward remains useful, but must not rewrite the lifecycle
+      // to RAW_REPORT_LOCKED or imply reveal eligibility.
+      this.db.transaction(() => {
+        this.db.prepare("INSERT INTO raw_reports_locked(session_id,locked_utc,payload_json,lock_hash,schema_version) VALUES(?,?,?,?,?)").run(sessionId, lockedUtc, payloadJson, lockHash, schemaVersion);
+        this.db.prepare("DELETE FROM raw_report_drafts WHERE session_id=?").run(sessionId);
+        this.evidence.appendEvent(sessionId, trialId, "RAW_REPORT_LOCKED_AFTER_ABORT", { lockHash, schemaVersion, evidenceAborted: true });
+        if (temporalGate)
+          this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: "BLOCKED", sessionLifecycle: "ABORTED" });
+      })();
+      return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: false, alreadyLocked: false, evidenceAborted: true };
+    }
     const appendEdge = (from, to, eventType, payload, evidence) => {
       const event = this.evidence.appendEvent(sessionId, trialId, eventType, payload);
       const projection = this.evidence.projectTransition(sessionId, trialId, from, to, { eventId: event.eventId, occurredUtc: event.occurredUtc, monotonicNs: event.monotonicNs });
@@ -1170,13 +1410,19 @@ export class MipDatabase {
       this.evidence.addTransitionEvidence(sessionId, { trialId, projectionId: projection.projectionId, evidenceEventId: event.eventId, evidenceType: to, evidence });
       return { event, projection };
     };
+    let eligible = false;
     this.db.transaction(() => {
       this.db.prepare("INSERT INTO raw_reports_locked(session_id,locked_utc,payload_json,lock_hash,schema_version) VALUES(?,?,?,?,?)").run(sessionId, lockedUtc, payloadJson, lockHash, schemaVersion);
       this.db.prepare("DELETE FROM raw_report_drafts WHERE session_id=?").run(sessionId);
       appendEdge(session.status, "RAW_REPORT_LOCKED", "RAW_REPORT_LOCKED", { lockHash, schemaVersion }, { lockHash });
-      appendEdge("RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEAL_ELIGIBLE", { rawReportLocked: true }, { gate: "RAW_REPORT_LOCKED" });
+      eligible = !temporalGate || this.research.revealGate(sessionId).eligible;
+      if (eligible)
+        appendEdge("RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEAL_ELIGIBLE", { rawReportLocked: true }, { gate: temporalGate ? "FULL_RESEARCH_GATE" : "RAW_REPORT_LOCKED" });
+      if (temporalGate)
+        this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: eligible ? "ELIGIBLE" : "BLOCKED" });
     })();
-    return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: true, alreadyLocked: false };
+    const finalStatus = this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status;
+    return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: finalStatus === "REVEAL_ELIGIBLE", alreadyLocked: false };
   }
 
   getReport(sessionId, options = {}) {
@@ -1191,6 +1437,12 @@ export class MipDatabase {
     const session = this.db.prepare("SELECT * FROM sessions WHERE session_id=?").get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
     if (!this.db.prepare("SELECT 1 FROM raw_reports_locked WHERE session_id=?").get(sessionId)) throw new Error("Reveal is not eligible until the raw report is locked");
+    const researchMeta = this.db.prepare("SELECT mode,primary_endpoint,outcome_space_json,temporal_analysis_json FROM research_definitions WHERE session_id=?").get(sessionId);
+    const strictResearchGate = requiresStrictResearchGate(researchMeta);
+    if (strictResearchGate) {
+      const gate = this.research.revealGate(sessionId);
+      if (!gate.eligible) throw new Error(`Reveal is blocked until research evidence is complete: ${gate.missing.join(", ")}`);
+    }
     if (!["REVEALED", "COMPLETE"].includes(session.status)) {
       this.persistTransition(sessionId, "REVEALED", {
         revealAuthorized: true,
@@ -1198,6 +1450,7 @@ export class MipDatabase {
         payload: { objective: session.hidden_objective },
       }, { evidence: { ownerAuthorizedReveal: true } });
     }
+    this.research?.updatePhases(sessionId, { revealStatus: "REVEALED", sessionLifecycle: "REVEALED" });
     return this.sessions.getFull(sessionId);
   }
 

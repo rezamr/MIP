@@ -118,6 +118,7 @@ function setPage(p) {
     calibration: renderCalibration,
     health: renderAudioHealth,
     reports: renderReports,
+    aggregate: renderAggregate,
     settings: renderSettings,
   })[p];
   if (typeof render !== "function") {
@@ -187,8 +188,42 @@ function renderStart() {
   summary();
   $("#next").onclick = renderPre;
 }
-function renderPre() {
-  app.innerHTML = `<div class="section-intro"><div><h2>Pre-session state</h2><p>Capture only the baseline context needed by the selected protocol.</p></div></div>${steps(2)}<div class="card"><div class="form-grid"><div class="field"><label for="participant">Participant label</label><input id="participant" value="Local participant"></div><div class="field"><label for="record">Record type</label><select id="record"><option value="dry">Dry run / validation</option><option value="contemporaneous">Contemporaneous research record</option></select></div><div class="field"><label for="baseline">Baseline state</label><select id="baseline"><option>Ordinary alertness</option><option>Relaxed</option><option>Fatigued</option></select></div><div class="field"><label for="environment">Environment note</label><input id="environment" placeholder="Optional note"></div><div class="field full"><label><input id="safety" type="checkbox"> I can safely stop by opening my eyes, removing headphones, and reorienting.</label></div></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next">Continue to target assignment →</button></div>`;
+async function renderPre() {
+  const settings = window.mip?.getSettings ? await window.mip.getSettings().catch(() => ({})) : {};
+  const profileSpace = selectedProfile?.outcomeSpace || settings?.researchDefaults?.outcomeSpace || { type: "BINARY", values: [0, 1] };
+  const integerSpace = String(profileSpace.type || "").toUpperCase() === "INTEGER_RANGE";
+  const minDefault = profileSpace.minInclusive ?? profileSpace.min ?? 0;
+  const maxDefault = profileSpace.maxInclusive ?? profileSpace.max ?? 1;
+  const profileAnalysis = selectedProfile?.analysis || {};
+  const appAnalysis = settings?.researchDefaults?.temporalAnalysis || settings?.researchDefaults?.analysis || {};
+  const inheritedWindows = Array.isArray(profileAnalysis.windows) && profileAnalysis.windows.length
+    ? profileAnalysis.windows
+    : Array.isArray(appAnalysis.windows) && appAnalysis.windows.length
+      ? appAnalysis.windows
+      : [];
+  const profileWindow = inheritedWindows[0] || (profileAnalysis.primaryWindow && typeof profileAnalysis.primaryWindow === "object" ? profileAnalysis.primaryWindow : {});
+  const endpointDefault = String(profileAnalysis.primaryEndpoint || appAnalysis.primaryEndpoint || "EXACT_SLOT").toUpperCase();
+  const intervalDefault = selectedProfile?.output?.intervalMs ?? profileAnalysis.intervalMs ?? appAnalysis.intervalMs ?? "";
+  app.innerHTML = `<div class="section-intro"><div><h2>Pre-session state</h2><p>Capture baseline context and the protocol overrides that will be committed for this session.</p></div></div>${steps(2)}<div class="card"><div class="form-grid"><div class="field"><label for="participant">Participant label</label><input id="participant" value="Local participant"></div><div class="field"><label for="record">Record type</label><select id="record"><option value="dry">Dry run / validation</option><option value="contemporaneous">Contemporaneous research record</option></select></div><div class="field"><label for="experimentMode">Experiment mode</label><select id="experimentMode"><option value="INFLUENCE">Influence</option><option value="FUTURE_TARGET">Future target / recognition</option><option value="CONTROL">Control</option><option value="SHAM">Sham</option></select><small>The mode is committed before START; future targets are generated only at their anchor.</small></div><div class="field"><label for="prediction">Future-target prediction <span id="predictionRequired">(required for FUTURE_TARGET)</span></label><input id="prediction" placeholder="Only used in FUTURE_TARGET mode"><small>This prediction is committed before START and is not the actual future target.</small></div><div class="field" id="futureDelayField" style="display:none"><label for="futureDelayMinutes">Future target delay (minutes)</label><input id="futureDelayMinutes" type="number" min="1" max="525600" value="1440"><small>The target is generated only at this committed future anchor; it is not generated early and hidden.</small></div><div class="field" id="outcomeRangeFields" style="display:${integerSpace ? "block" : "none"}"><label>Integer outcome-space override</label><div class="form-grid"><input id="outcomeMin" type="number" step="1" value="${esc(minDefault)}" aria-label="Outcome range minimum"><input id="outcomeMax" type="number" step="1" value="${esc(maxDefault)}" aria-label="Outcome range maximum"></div><small>Symbolic range; no values are enumerated. Edit before commitment.</small><div id="outcomeCardinality" class="review-row"><span>Calculated cardinality</span><strong>${integerSpace ? esc(Number(maxDefault) - Number(minDefault) + 1) : "2"}</strong></div></div><div class="field"><label for="primaryEndpoint">Primary endpoint</label><select id="primaryEndpoint"><option value="EXACT_SLOT">Exact scheduled target slot</option><option value="FIXED_TIME_WINDOW">Fixed committed time window</option><option value="FIXED_SEQUENCE_WINDOW">Fixed committed sequence window</option><option value="TARGET_FREQUENCY">Target frequency</option></select><small>Late or early matches remain exploratory unless this endpoint explicitly includes them.</small></div><div class="field"><label for="outputIntervalMs">Output cadence (milliseconds)</label><input id="outputIntervalMs" type="number" min="0.001" max="31536000000" step="any" value="${esc(intervalDefault)}"><small>Cadence is part of the immutable evidence definition.</small></div><div class="field"><label for="preTargetSeconds">Pre-target monitoring (seconds)</label><input id="preTargetSeconds" type="number" min="0" max="31536000" step="any" value="${esc(Number(profileWindow.preMs || 0) / 1000)}"></div><div class="field"><label for="postTargetSeconds">Post-target monitoring (seconds)</label><input id="postTargetSeconds" type="number" min="0" max="31536000" step="any" value="${esc(Number(profileWindow.postMs || 0) / 1000)}"></div><div class="field"><label for="baseline">Baseline state</label><select id="baseline"><option>Ordinary alertness</option><option>Relaxed</option><option>Fatigued</option></select></div><div class="field"><label for="environment">Environment note</label><input id="environment" placeholder="Optional note"></div><div class="field full"><label><input id="safety" type="checkbox"> I can safely stop by opening my eyes, removing headphones, and reorienting.</label></div></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next">Continue to target assignment →</button></div>`;
+  $("#experimentMode").value = selectedProfile?.mode || "INFLUENCE";
+  $("#primaryEndpoint").value = ["EXACT_SLOT", "FIXED_TIME_WINDOW", "FIXED_SEQUENCE_WINDOW", "TARGET_FREQUENCY"].includes(endpointDefault) ? endpointDefault : "EXACT_SLOT";
+  const updateCardinality = () => {
+    const min = Number($("#outcomeMin")?.value);
+    const max = Number($("#outcomeMax")?.value);
+    const field = $("#outcomeCardinality strong");
+    if (!field) return;
+    field.textContent = Number.isSafeInteger(min) && Number.isSafeInteger(max) && max >= min ? new Intl.NumberFormat().format(max - min + 1) : "Invalid range";
+  };
+  $("#outcomeMin")?.addEventListener("input", updateCardinality);
+  $("#outcomeMax")?.addEventListener("input", updateCardinality);
+  updateCardinality();
+  const updateFutureFields = () => {
+    const future = $("#experimentMode").value === "FUTURE_TARGET";
+    $("#futureDelayField").style.display = future ? "block" : "none";
+    $("#prediction").required = future;
+  };
+  $("#experimentMode").onchange = updateFutureFields;
+  updateFutureFields();
   $("#back").onclick = renderStart;
   $("#next").onclick = async () => {
     if (!$("#safety").checked)
@@ -199,10 +234,38 @@ function renderPre() {
       safetyConfirmed: true,
     };
     try {
+      const mode = $("#experimentMode").value;
+      const requestedSpace = integerSpace
+        ? { type: "INTEGER_RANGE", minInclusive: Number($("#outcomeMin").value), maxInclusive: Number($("#outcomeMax").value) }
+        : undefined;
+      if (requestedSpace && (!Number.isSafeInteger(requestedSpace.minInclusive) || !Number.isSafeInteger(requestedSpace.maxInclusive) || requestedSpace.maxInclusive < requestedSpace.minInclusive))
+        throw new Error("The integer outcome range must contain safe integer bounds with minimum ≤ maximum.");
+      const intervalRaw = $("#outputIntervalMs").value.trim();
+      const intervalMs = intervalRaw === "" ? null : Number(intervalRaw);
+      const preMs = Number($("#preTargetSeconds").value || 0) * 1000;
+      const postMs = Number($("#postTargetSeconds").value || 0) * 1000;
+      if (![preMs, postMs].every((item) => Number.isFinite(item) && item >= 0) || (intervalMs !== null && (!Number.isFinite(intervalMs) || intervalMs <= 0)))
+        throw new Error("Temporal monitoring durations and cadence must be valid non-negative values.");
+      // Preserve inherited fine windows in the committed definition.  The
+      // session override edits only the primary duration; it must not erase
+      // application/profile windows that were reviewed before commitment.
+      const temporalAnalysis = {
+        primaryEndpoint: $("#primaryEndpoint").value,
+        windows: [
+          { ...profileWindow, id: "primary", enabled: true, preMs, postMs },
+          ...inheritedWindows.slice(1).map((window, index) => ({ ...window, id: window.id || `fine-${index + 1}` })),
+        ],
+      };
+      if (Number.isFinite(intervalMs) && intervalMs > 0) temporalAnalysis.intervalMs = intervalMs;
       currentSession = await api("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
           profileId: selectedProfile.id,
+          mode,
+          ...(requestedSpace ? { outcomeSpace: requestedSpace } : {}),
+          temporalAnalysis,
+          prediction: $("#prediction").value.trim() || null,
+          targetDelayMs: mode === "FUTURE_TARGET" ? Number($("#futureDelayMinutes").value || 1440) * 60_000 : undefined,
           participantLabel: $("#participant").value,
           recordType: $("#record").value,
           deferCommit: true,
@@ -215,17 +278,51 @@ function renderPre() {
   };
 }
 function renderTarget() {
-  app.innerHTML = `<div class="section-intro"><div><h2>Assigned target & encoding</h2><p>The target is assigned in a draft; immutable commitment occurs only after memory and safety confirmation.</p></div>${pill("Target assigned · Draft")}</div>${steps(3)}<div class="grid two"><div class="card target-box"><div class="subtle">Participant-facing target</div><div class="target">${esc(currentSession.participantTarget.match(/favor (.+?)(?: now\.)?$/)?.[1] || currentSession.participantTarget)}</div><p class="subtle">Memorize exactly what is shown. Hidden future output is not displayed.</p></div><div class="card"><h3>Encoding instruction</h3><p>${esc(currentSession.participantTarget)}</p><div class="callout">Release the request and observe neutrally. Fixed non-semantic cues guide hands-free stages.</div><label style="display:flex;gap:8px;margin-top:18px"><input id="memory" type="checkbox"> I have memorized the target and instruction.</label></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next" disabled>Continue to readiness review →</button></div>`;
+  const future = currentSession?.mode === "FUTURE_TARGET";
+  const instruction = currentSession?.participantTarget || (future ? `Prediction committed: ${currentSession?.prediction ?? "not recorded"}. The actual future target is generated only at the committed anchor.` : "Target instruction unavailable.");
+  const targetText = future ? "Hidden until the future target anchor" : (instruction.match(/favor (.+?)(?: now\.)?$/)?.[1] || instruction);
+  app.innerHTML = `<div class="section-intro"><div><h2>${future ? "Future target commitment" : "Assigned target & encoding"}</h2><p>${future ? "Prediction/recognition mode: no actual target exists before its precommitted anchor." : "The target is assigned in a draft; immutable commitment occurs only after memory and safety confirmation."}</p></div>${pill(future ? "Future target · Draft" : "Target assigned · Draft")}</div>${steps(3)}<div class="grid two"><div class="card target-box"><div class="subtle">Participant-facing target</div><div class="target">${esc(targetText)}</div><p class="subtle">${future ? "The actual target and machine output remain hidden until the evidence gate permits reveal." : "Memorize exactly what is shown. Hidden future output is not displayed."}</p></div><div class="card"><h3>Encoding instruction</h3><p>${esc(instruction)}</p><div class="callout">Release the request and observe neutrally. Fixed non-semantic cues guide hands-free stages.</div><label style="display:flex;gap:8px;margin-top:18px"><input id="memory" type="checkbox"> I have memorized the target and instruction.</label></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next" disabled>Continue to readiness review →</button></div>`;
   $("#back").onclick = renderPre;
   $("#memory").onchange = (e) => ($("#next").disabled = !e.target.checked);
   $("#next").onclick = renderReady;
 }
 function renderReady() {
   const p = selectedProfile;
+  const targetSummary = currentSession?.mode === "FUTURE_TARGET" ? "Generated only at the committed future anchor" : currentSession?.participantTarget;
+  const spaceSummary = currentSession?.outcomeSpace?.type === "INTEGER_RANGE"
+    ? `${currentSession.outcomeSpace.minInclusive}..${currentSession.outcomeSpace.maxInclusive}`
+    : (currentSession?.outcomeSpace?.values || []).join(", ");
+  const research = currentSession?.researchDefinition || {};
+  const windows = Array.isArray(research.temporalAnalysis?.windows) ? research.temporalAnalysis.windows : [];
+  const primaryWindow = windows.find((window) => window.id === (research.temporalAnalysis?.primaryWindowId || "primary")) || windows[0] || {};
+  const output = p.output || {};
+  const configuredOpportunities = (Number(output.preBlocks || 0) + Number(output.primaryBlocks || 0) + Number(output.postBlocks || 0)) * Number(output.blockSize || 1);
+  const intervalMs = research.temporalAnalysis?.intervalMs ?? output.intervalMs ?? "Not recorded";
+  const hasCommittedTimeWindow = primaryWindow.enabled !== false && (Number(primaryWindow.preMs || 0) > 0 || Number(primaryWindow.postMs || 0) > 0);
+  const derivedTemporalOpportunities = hasCommittedTimeWindow && Number(intervalMs) > 0
+    ? Math.ceil(Number(primaryWindow.preMs || 0) / Number(intervalMs)) + 1 + Math.ceil(Number(primaryWindow.postMs || 0) / Number(intervalMs))
+    : null;
+  const plannedOpportunities = derivedTemporalOpportunities || configuredOpportunities || (output.type === "SINGLE_OUTCOME" ? 1 : "Not recorded");
+  const scheduledUtc = research.targetDefinition?.scheduledUtc || currentSession?.timing?.scheduledUtc || "Not recorded";
+  const evidenceWindow = `${Number(primaryWindow.preMs || 0) / 1000}s before T → ${Number(primaryWindow.postMs || 0) / 1000}s after T`;
+  const fineWindows = windows.slice(1).map((window) => {
+    const pre = Number(window.preMs || 0) / 1000;
+    const post = Number(window.postMs || 0) / 1000;
+    return `${window.id}: -${pre}s/+${post}s`;
+  });
+  const cardinality = Number(currentSession?.cardinality || 2);
   app.innerHTML = `<div class="section-intro"><div><h2>Readiness review</h2><p>Human-readable commitment summary. Exact IDs and hashes are expandable.</p></div></div>${steps(4)}<div class="card"><div class="grid two"><div>${[
     ["Profile", p.name],
     ["Assignment", "System random uniform"],
-    ["Target", currentSession.participantTarget],
+    ["Mode", currentSession?.mode || p.mode || "INFLUENCE"],
+    ["Outcome space / K", `${spaceSummary || p.outcomeSpace?.type || "BINARY"} · ${currentSession?.cardinality || "2"}`],
+    ["Target", targetSummary],
+    ["Target anchor (T)", scheduledUtc],
+    ["Evidence monitoring", evidenceWindow],
+    ["Output cadence", `${intervalMs} ms per opportunity`],
+    ["Planned opportunities", plannedOpportunities],
+    ["Precommitted fine windows", fineWindows.length ? fineWindows.join(", ") : "None"],
+    ["Uniform exact-target chance", `1 / ${Number.isSafeInteger(cardinality) && cardinality > 0 ? cardinality : "K"}`],
     ["Timing", p.timing.mode],
   ]
     .map(
@@ -234,9 +331,9 @@ function renderReady() {
     )
     .join("")}</div><div>${[
     ["Audio", p.audio.recipeId + " · live synthesis"],
-    ["Random source", p.rng.provider],
+    ["Random source", research.rng?.provider || p.rng.provider],
     ["Reveal policy", p.reveal.policy],
-    ["Analysis", "Primary + exploratory windows"],
+    ["Analysis", `${currentSession?.researchDefinition?.primaryEndpoint || p.analysis?.primaryEndpoint || "EXACT_SLOT"} · primary + exploratory windows`],
   ]
     .map(
       (x) =>
@@ -286,7 +383,19 @@ function renderReady() {
   };
 }
 function renderHandsFree() {
-  app.innerHTML = `<div class="hands-free"><span class="eyebrow">SESSION ACTIVE · HANDS-FREE</span><div class="breath"></div><h2>Remain comfortable</h2><p>Audio, cues, telemetry, and hidden output are running automatically.<br>No screen interaction is required.</p><div class="progress"><span id="sessionProgress" style="width:0%"></span></div><small id="sessionStage">Stage in progress · hidden output protected</small><button class="button" id="returned">I have returned</button></div>`;
+  const research = currentSession?.researchDefinition || {};
+  const temporalWindows = research.temporalAnalysis?.windows?.some?.((window) =>
+    window?.enabled !== false && (Number(window?.preMs || 0) > 0 || Number(window?.postMs || 0) > 0 ||
+      window?.exactSequence !== null && window?.exactSequence !== undefined ||
+      window?.sequenceStart !== null && window?.sequenceStart !== undefined ||
+      window?.sequenceEnd !== null && window?.sequenceEnd !== undefined ||
+      window?.sequenceOffsetStart !== null && window?.sequenceOffsetStart !== undefined ||
+      window?.sequenceOffsetEnd !== null && window?.sequenceOffsetEnd !== undefined));
+  const temporal = currentSession?.mode === "FUTURE_TARGET" ||
+    String(currentSession?.mode || "INFLUENCE").toUpperCase() !== "INFLUENCE" ||
+    (research.outcomeSpace?.type || currentSession?.outcomeSpace?.type) !== "BINARY" ||
+    research.primaryEndpoint !== "EXACT_SLOT" || temporalWindows;
+  app.innerHTML = `<div class="hands-free"><span class="eyebrow">SESSION ACTIVE · HANDS-FREE</span><div class="breath"></div><h2>Remain comfortable</h2><p>Audio, cues, telemetry, and hidden output are running automatically.<br>No screen interaction is required.</p><div class="progress"><span id="sessionProgress" style="width:0%"></span></div><small id="sessionStage">Stage in progress · hidden output protected</small><div class="actions" style="margin-top:18px"><button class="button" id="returned">End participant phase / Return</button>${temporal ? '<button class="button danger" id="abortEvidence">Abort evidence collection</button>' : ""}</div>${temporal ? '<p class="subtle" style="margin-top:12px">Returning ends the participant phase only. Abort is a separate confirmed action and records a deviation; missed opportunities are never backfilled.</p>' : ""}</div>`;
   updateFormalProgress();
   $("#returned").onclick = async () => {
     const returned = $("#returned");
@@ -304,6 +413,28 @@ function renderHandsFree() {
       toast(error.message);
     }
   };
+  $("#abortEvidence")?.addEventListener("click", async () => {
+    if (!confirm("Abort evidence collection? Future scheduled outputs will stop and the deviation will be recorded. This cannot be undone.")) return;
+    const button = $("#abortEvidence");
+    button.disabled = true;
+    try {
+      // End the participant/audio phase first, then perform the explicit
+      // evidence abort.  This preserves the required AudioWorklet
+      // finalization handshake while keeping the destructive evidence action
+      // distinct; the main process records the final session as ABORTED and
+      // no scheduled output can resume afterward.
+      if (window.mip && player.status !== "stopped") {
+        await window.mip.audioStopRequested({ id: currentSession.sessionId, reason: "owner_abort" });
+        const finalization = await stopPlayer();
+        if (finalization) await window.mip.audioFinalized({ id: currentSession.sessionId, finalization: jsonSafe(finalization) });
+      }
+      await window.mip.abortEvidence({ id: currentSession.sessionId, confirmed: true, reason: "owner_abort" });
+      renderRaw();
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message);
+    }
+  });
 }
 
 function updateFormalProgress() {
@@ -352,8 +483,19 @@ async function renderRaw() {
     if (required.length) { $("#reportValidation").textContent = `Complete required fields before lock: ${required.join(", ")}.`; return; }
     if (!confirm("Lock this raw report? It becomes read-only.")) return;
     try {
-      await api(`/api/sessions/${id}/lock-report`, { method: "POST", body: JSON.stringify({ report }) });
-      app.innerHTML = `<div class="card"><div class="lock-box">✓ Raw report locked · reveal gate satisfied</div><p class="subtle">The original report is immutable. Later recollections are append-only.</p><button class="button primary" id="reveal">Reveal result</button></div>`;
+      const lockResult = await api(`/api/sessions/${id}/lock-report`, { method: "POST", body: JSON.stringify({ report }) });
+      app.innerHTML = `<div class="card"><div class="lock-box">✓ Raw report locked · ${lockResult.revealEligible ? "reveal gate satisfied" : "evidence collection still in progress"}</div><p class="subtle">The original report is immutable. Later recollections are append-only.</p><div id="gateStatus" class="callout">${lockResult.revealEligible ? "All required evidence gates are complete." : "Reveal remains blocked until the evidence phase, primary endpoint, post-target window, and integrity checks complete."}</div><button class="button primary" id="reveal" ${lockResult.revealEligible ? "" : "disabled"}>Reveal result</button><button class="button" id="refreshGate" ${lockResult.revealEligible ? "style=\"display:none\"" : ""}>Refresh evidence gate</button></div>`;
+      const refreshGate = async () => {
+        try {
+          const phases = await window.mip?.getResearchPhases?.({ id });
+          const session = await window.mip?.getSession?.({ id });
+          const eligible = session?.revealEligible === true;
+          $("#gateStatus").textContent = eligible ? "All required evidence gates are complete." : `Evidence phase: ${phases?.evidencePhaseStatus || "PENDING"}. Reveal remains blocked.`;
+          $("#reveal").disabled = !eligible;
+          if (eligible) $("#refreshGate").style.display = "none";
+        } catch (error) { toast(error.message); }
+      };
+      $("#refreshGate").onclick = refreshGate;
       $("#reveal").onclick = async () => {
         try {
           const r = await api(`/api/sessions/${id}/reveal`, { method: "POST" });
@@ -922,12 +1064,43 @@ async function renderAudioHealth() {
 async function renderSettings() {
   const value = window.mip ? await window.mip.getSettings() : { schemaVersion: "server-managed" };
   const backupHistory = window.mip?.backupHistory ? await window.mip.backupHistory({ limit: 50 }) : [];
-  app.innerHTML = `<div class="section-intro"><div><h2>Settings &amp; Data</h2><p>Owner-controlled diagnostics, backups, import, and export. Runtime session evidence remains in SQLite.</p></div></div><div class="grid two"><div class="card"><h3>Application identity</h3>${[["App version", value.appVersion], ["Engine version", value.engineVersion], ["Audio version", value.audioVersion], ["Processor version", value.processorVersion], ["Schema version", value.schemaVersion], ["Database", value.databasePath], ["Database size", `${value.databaseSize || 0} bytes`]].map(([label, item]) => `<div class="review-row"><span>${esc(label)}</span><strong class="${label === "Database" ? "mono" : ""}">${esc(item ?? "Not recorded")}</strong></div>`).join("")}<button class="button" id="copyDbPath">Copy database path</button></div><div class="card"><h3>Owner preferences</h3><div class="field"><label for="theme">Theme</label><input id="theme" value="${esc(value.theme || "default")}"></div><div class="field"><label for="audioLabel">Audio output label</label><input id="audioLabel" value="${esc(value.audioOutputLabel || "")}"></div><button class="button primary" id="saveSettings">Save settings</button></div></div><div class="card" style="margin-top:18px"><h3>Evidence data operations</h3><div class="actions"><button class="button" id="backup">Create verified backup</button><button class="button" id="restore">Restore selected backup</button><button class="button" id="import">Import legacy bundle</button><button class="button" id="diagnosticsExport">Export diagnostics</button></div><div class="form-grid" style="margin-top:14px"><div class="field"><label for="exportSessionId">Revealed session ID for export</label><input id="exportSessionId" placeholder="S0003"></div><button class="button" id="exportSession">Export session bundle</button></div><div id="dataStatus" class="callout" style="margin-top:16px">${value.lastBackup ? `Last verified backup: ${esc(value.lastBackup.createdUtc)} · ${esc(value.lastBackup.sha256)}` : "No backup recorded."}</div><details style="margin-top:14px"><summary>Backup history</summary><div>${backupHistory.map((row) => `<div class="review-row"><span>${esc(row.createdUtc)} · ${esc(row.backupId)}</span><strong>${row.verified ? "VERIFIED" : "UNVERIFIED"}</strong></div>`).join("") || '<p class="subtle">No backups recorded.</p>'}</div></details></div>`;
+  const defaults = value.researchDefaults && typeof value.researchDefaults === "object" ? value.researchDefaults : {};
+  const defaultSpace = defaults.outcomeSpace && typeof defaults.outcomeSpace === "object" ? defaults.outcomeSpace : {};
+  const defaultAnalysis = defaults.temporalAnalysis && typeof defaults.temporalAnalysis === "object" ? defaults.temporalAnalysis : (defaults.analysis && typeof defaults.analysis === "object" ? defaults.analysis : {});
+  const defaultWindow = Array.isArray(defaultAnalysis.windows) && defaultAnalysis.windows[0] ? defaultAnalysis.windows[0] : {};
+  const defaultFineWindows = Array.isArray(defaultAnalysis.windows) ? defaultAnalysis.windows.slice(1).map((window) => Number(window.preMs || window.postMs || 0) / 1000).filter((seconds) => Number.isFinite(seconds) && seconds > 0).join(", ") : "";
+  app.innerHTML = `<div class="section-intro"><div><h2>Settings &amp; Data</h2><p>Owner-controlled diagnostics, backups, and research defaults. Runtime session evidence remains in SQLite.</p></div></div><div class="grid two"><div class="card"><h3>Application identity</h3>${[["App version", value.appVersion], ["Engine version", value.engineVersion], ["Audio version", value.audioVersion], ["Processor version", value.processorVersion], ["Schema version", value.schemaVersion], ["Database", value.databasePath], ["Database size", `${value.databaseSize || 0} bytes`]].map(([label, item]) => `<div class="review-row"><span>${esc(label)}</span><strong class="${label === "Database" ? "mono" : ""}">${esc(item ?? "Not recorded")}</strong></div>`).join("")}<button class="button" id="copyDbPath">Copy database path</button></div><div class="card"><h3>Research Defaults</h3><div class="form-grid"><div class="field"><label for="defaultMin">Outcome range minimum</label><input id="defaultMin" type="number" step="1" value="${esc(defaultSpace.minInclusive ?? defaultSpace.min ?? "")}"></div><div class="field"><label for="defaultMax">Outcome range maximum</label><input id="defaultMax" type="number" step="1" value="${esc(defaultSpace.maxInclusive ?? defaultSpace.max ?? "")}"></div><div class="field"><label for="defaultCadence">Machine output cadence</label><select id="defaultCadence"><option value="FIXED_INTERVAL">Fixed interval</option><option value="FIXED_COUNT">Fixed count</option><option value="EVENT_DRIVEN">Event driven</option></select></div><div class="field"><label for="defaultEndpoint">Primary endpoint</label><select id="defaultEndpoint"><option value="EXACT_SLOT">Exact scheduled target slot</option><option value="FIXED_TIME_WINDOW">Fixed committed time window</option><option value="FIXED_SEQUENCE_WINDOW">Fixed committed sequence window</option><option value="TARGET_FREQUENCY">Target frequency</option></select></div><div class="field"><label for="defaultPre">Default pre-target duration (seconds)</label><input id="defaultPre" type="number" min="0" step="any" value="${esc(Number(defaultWindow.preMs || 0) / 1000)}"></div><div class="field"><label for="defaultPost">Default post-target duration (seconds)</label><input id="defaultPost" type="number" min="0" step="any" value="${esc(Number(defaultWindow.postMs || 0) / 1000)}"></div><div class="field full"><label for="defaultFineWindows">Fine windows (seconds, comma separated)</label><input id="defaultFineWindows" value="${esc(defaultFineWindows)}" placeholder="10, 30, 60, 120"><small>These are precommitted defaults only; later exploratory scans remain labelled post-hoc.</small></div></div><div class="review-row"><span>Default cardinality</span><strong id="defaultCardinality">${defaultSpace.type === "INTEGER_RANGE" && Number.isSafeInteger(Number(defaultSpace.minInclusive ?? defaultSpace.min)) && Number.isSafeInteger(Number(defaultSpace.maxInclusive ?? defaultSpace.max)) ? esc(new Intl.NumberFormat().format(Number(defaultSpace.maxInclusive ?? defaultSpace.max) - Number(defaultSpace.minInclusive ?? defaultSpace.min) + 1)) : "Set a range to calculate K"}</strong></div><details style="margin-top:12px"><summary>Expert view (read-only)</summary><pre class="json">${esc(JSON.stringify(defaults, null, 2))}</pre></details><small>Precedence: session override → profile → application default. Defaults are validated, canonicalized, hashed, and stored before use.</small><div class="field" style="margin-top:12px"><label for="theme">Theme</label><input id="theme" value="${esc(value.theme || "default")}"></div><div class="field"><label for="audioLabel">Audio output label</label><input id="audioLabel" value="${esc(value.audioOutputLabel || "")}"></div><button class="button primary" id="saveSettings">Save settings</button></div></div><div class="card" style="margin-top:18px"><h3>Evidence data operations</h3><div class="actions"><button class="button" id="backup">Create verified backup</button><button class="button" id="restore">Restore selected backup</button><button class="button" id="import">Import legacy bundle</button><button class="button" id="diagnosticsExport">Export diagnostics</button></div><div class="form-grid" style="margin-top:14px"><div class="field"><label for="exportSessionId">Revealed session ID for export</label><input id="exportSessionId" placeholder="S0003"></div><button class="button" id="exportSession">Export session bundle</button></div><div id="dataStatus" class="callout" style="margin-top:16px">${value.lastBackup ? `Last verified backup: ${esc(value.lastBackup.createdUtc)} · ${esc(value.lastBackup.sha256)}` : "No backup recorded."}</div><details style="margin-top:14px"><summary>Backup history</summary><div>${backupHistory.map((row) => `<div class="review-row"><span>${esc(row.createdUtc)} · ${esc(row.backupId)}</span><strong>${row.verified ? "VERIFIED" : "UNVERIFIED"}</strong></div>`).join("") || '<p class="subtle">No backups recorded.</p>'}</div></details></div>`;
+  $("#defaultCadence").value = ["FIXED_INTERVAL", "FIXED_COUNT", "EVENT_DRIVEN"].includes(String(defaultAnalysis.outputCadence || "").toUpperCase()) ? String(defaultAnalysis.outputCadence).toUpperCase() : "FIXED_INTERVAL";
+  $("#defaultEndpoint").value = ["EXACT_SLOT", "FIXED_TIME_WINDOW", "FIXED_SEQUENCE_WINDOW", "TARGET_FREQUENCY"].includes(String(defaultAnalysis.primaryEndpoint || "").toUpperCase()) ? String(defaultAnalysis.primaryEndpoint).toUpperCase() : "EXACT_SLOT";
+  const updateDefaultCardinality = () => {
+    const min = Number($("#defaultMin")?.value);
+    const max = Number($("#defaultMax")?.value);
+    if ($("#defaultCardinality")) $("#defaultCardinality").textContent = Number.isSafeInteger(min) && Number.isSafeInteger(max) && max >= min ? new Intl.NumberFormat().format(max - min + 1) : "Set a valid range to calculate K";
+  };
+  $("#defaultMin").oninput = updateDefaultCardinality;
+  $("#defaultMax").oninput = updateDefaultCardinality;
   $("#copyDbPath").onclick = async () => { try { await navigator.clipboard?.writeText(value.databasePath || ""); toast("Database path copied."); } catch { toast(value.databasePath || "Database path unavailable."); } };
   $("#diagnosticsExport").onclick = async () => { try { const result = await window.mip?.exportDiagnostics({}); $("#dataStatus").textContent = result?.cancelled ? "Diagnostics export cancelled." : `Diagnostics exported to ${result.path}`; } catch (error) { toast(error.message); } };
   $("#exportSession").onclick = async () => { try { const id = $("#exportSessionId").value.trim(); if (!id) throw new Error("Enter a revealed session ID first."); const result = await window.mip?.exportSession({ id }); $("#dataStatus").textContent = result?.directory ? `Session bundle exported to ${result.directory}.` : "Session export completed."; } catch (error) { toast(error.message); } };
   $("#saveSettings").onclick = async () => {
-    try { await window.mip?.updateSettings({ theme: $("#theme").value, audioOutputLabel: $("#audioLabel").value }); toast("Settings saved."); } catch (error) { toast(error.message); }
+    try {
+      const minRaw = $("#defaultMin").value.trim();
+      const maxRaw = $("#defaultMax").value.trim();
+      const min = minRaw === "" ? null : Number(minRaw);
+      const max = maxRaw === "" ? null : Number(maxRaw);
+      if ((min === null) !== (max === null) || (min !== null && (!Number.isSafeInteger(min) || !Number.isSafeInteger(max) || max < min)))
+        throw new Error("Outcome defaults must contain both safe integer bounds with minimum ≤ maximum.");
+      const preSeconds = Number($("#defaultPre").value || 0);
+      const postSeconds = Number($("#defaultPost").value || 0);
+      if (![preSeconds, postSeconds].every((item) => Number.isFinite(item) && item >= 0)) throw new Error("Default temporal durations must be non-negative numbers.");
+      const fineWindows = $("#defaultFineWindows").value.split(",").map((item) => item.trim()).filter(Boolean).map(Number);
+      if (fineWindows.some((item) => !Number.isFinite(item) || item <= 0) || fineWindows.length > 8) throw new Error("Fine windows must be positive seconds (at most eight).")
+      const researchDefaults = { ...defaults, temporalAnalysis: { ...(defaults.temporalAnalysis || {}), primaryEndpoint: $("#defaultEndpoint").value, outputCadence: $("#defaultCadence").value, windows: [{ id: "primary", enabled: true, preMs: preSeconds * 1000, postMs: postSeconds * 1000 }, ...fineWindows.map((seconds, index) => ({ id: `fine-${index + 1}`, enabled: true, preMs: seconds * 1000, postMs: seconds * 1000, exploratory: false }))] } };
+      if (min !== null) researchDefaults.outcomeSpace = { type: "INTEGER_RANGE", minInclusive: min, maxInclusive: max };
+      else if (researchDefaults.outcomeSpace && researchDefaults.outcomeSpace.type === "INTEGER_RANGE") delete researchDefaults.outcomeSpace;
+      await window.mip?.updateSettings({ theme: $("#theme").value, audioOutputLabel: $("#audioLabel").value, researchDefaults });
+      toast("Settings saved.");
+    } catch (error) { toast(error.message); }
   };
   $("#backup").onclick = async () => {
     try { const result = await window.mip?.backupNow({}); $("#dataStatus").textContent = result ? `Verified backup created: ${result.path} · ${result.sha256}` : "Backup unavailable outside Electron."; } catch (error) { toast(error.message); }
@@ -939,6 +1112,54 @@ async function renderSettings() {
   $("#import").onclick = async () => {
     try { const result = await window.mip?.importLegacy({}); $("#dataStatus").textContent = result?.cancelled ? "Import cancelled." : `Imported ${result?.imported || 0} legacy session(s); source integrity: ${result?.sourceIntegrityStatus || "UNKNOWN"}.`; } catch (error) { toast(error.message); }
   };
+}
+
+async function renderAggregate() {
+  const sessions = window.mip ? await window.mip.listSessions({}) : [];
+  const revealed = sessions.filter((session) => session.hasReveal === true);
+  const renderAggregateDetails = (aggregate) => {
+    const analysis = aggregate?.analysis || aggregate || {};
+    const metric = (label, value) => `<div class="review-row"><span>${esc(label)}</span><strong>${esc(value === null || value === undefined ? "—" : typeof value === "number" ? value.toLocaleString() : value)}</strong></div>`;
+    const rate = analysis.primaryHitRate === null || analysis.primaryHitRate === undefined ? "—" : `${(Number(analysis.primaryHitRate) * 100).toFixed(2)}%`;
+    const firstMedian = analysis.firstHitLatency?.medianMs === null || analysis.firstHitLatency?.medianMs === undefined ? "—" : `${Number(analysis.firstHitLatency.medianMs).toLocaleString()} ms`;
+    const histogram = Object.entries(analysis.latencyHistogram || {}).sort((left, right) => Number(left[0]) - Number(right[0]));
+    const histogramHtml = histogram.length
+      ? `<div class="subtle" style="margin-top:12px">Signed latency histogram (one-second buckets)</div><div class="distribution-chart">${histogram.slice(0, 128).map(([bucket, count]) => `<div class="bar-row"><span>${esc(bucket)}s</span><span class="bar" style="width:${Math.max(2, Math.min(100, Number(count) / Math.max(1, Number(analysis.hits || count)) * 100))}%" role="img" aria-label="${esc(bucket)} seconds, ${esc(count)} hits"></span><strong>${esc(count)}</strong></div>`).join("")}${histogram.length > 128 ? `<div class="subtle">${histogram.length - 128} additional buckets are available in the export.</div>` : ""}</div>`
+      : '<div class="empty">No signed target-relative latencies recorded.</div>';
+    const rasterHtml = Array.isArray(analysis.targetAlignedRaster) && analysis.targetAlignedRaster.length
+      ? `<div class="subtle" style="margin-top:16px">Target-aligned raster (T = 0 ms)</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Session</th><th>Signed latencies</th></tr></thead><tbody>${analysis.targetAlignedRaster.map((row) => `<tr><td>${esc(row.sessionId)}</td><td class="mono">${esc((row.latenciesMs || []).map((value) => `${value} ms`).join(" · ") || "No hit")}</td></tr>`).join("")}</tbody></table></div>`
+      : "";
+    const cumulativeHtml = Array.isArray(analysis.cumulativeObservedVsNull) && analysis.cumulativeObservedVsNull.length
+      ? `<div class="subtle" style="margin-top:16px">Cumulative observed versus null expectation</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Session</th><th>Observed</th><th>Expected</th></tr></thead><tbody>${analysis.cumulativeObservedVsNull.map((row) => `<tr><td>${esc(row.sessionId)}</td><td>${esc(row.observedHits)}</td><td>${esc(Number(row.expectedHits || 0).toFixed(3))}</td></tr>`).join("")}</tbody></table></div>`
+      : "";
+    const perWindowHtml = Array.isArray(analysis.perWindow) && analysis.perWindow.length
+      ? `<div class="subtle" style="margin-top:16px">Per-window observed versus expected hits</div><div class="table-wrap"><table class="data-table"><thead><tr><th>Session</th><th>Window</th><th>Observed</th><th>Expected</th><th>Eligible</th></tr></thead><tbody>${analysis.perWindow.map((row) => `<tr><td>${esc(row.sessionId)}</td><td>${esc(row.id)}${row.exploratory ? " · exploratory" : ""}</td><td>${esc(row.observedHits)}</td><td>${esc(Number(row.expectedHits || 0).toFixed(3))}</td><td>${esc(row.eligibleCount)}</td></tr>`).join("")}</tbody></table></div>`
+      : "";
+    return `<div class="card" style="margin-top:16px"><div class="section-intro"><div><h3>Aggregate ${esc(aggregate?.aggregateId || "analysis")}</h3><p class="subtle">${esc(analysis.labels?.aggregate || "Compatible committed sessions")}</p></div>${pill(analysis.exploratory ? "EXPLORATORY" : "CONFIRMATORY")}</div>${metric("Sessions", analysis.sessionCount)}${metric("Completed sessions", analysis.completedSessionCount)}${metric("Incomplete / deviated", `${analysis.incompleteSessionCount ?? 0} / ${analysis.deviatedSessionCount ?? 0}`)}${metric("Exact primary matches", analysis.primaryHits)}${metric("Exact primary hit rate", rate)}${metric("Expected exact primary matches (null)", analysis.expectedExactPrimaryMatches)}${metric("Target occurrences", analysis.hits)}${metric("Total eligible opportunities", analysis.eligibleCount)}${metric("Pre-target / post-target hits", `${analysis.preTargetHitCount ?? 0} / ${analysis.postTargetHitCount ?? 0}`)}${metric("No-hit sessions", analysis.noHitSessionCount)}${metric("Median first-hit latency", firstMedian)}${metric("Temporal hit density", analysis.temporalHitDensity?.hitsPerEligibleOpportunity)}${histogramHtml}${rasterHtml}${cumulativeHtml}${perWindowHtml}</div>`;
+  };
+  app.innerHTML = `<div class="section-intro"><div><h2>Aggregate Workspace</h2><p>Cross-session analysis is restricted to revealed sessions with compatible committed definitions.</p></div>${pill("DISCOVER → PRECOMMIT → REPLICATE → AGGREGATE")}</div><div class="card"><p class="subtle">Select revealed sessions. Primary endpoints remain confirmatory; all other occurrences are labelled exploratory.</p><div class="form-grid"><div class="field full"><label for="aggregateSessions">Revealed session IDs</label><select id="aggregateSessions" multiple size="8">${revealed.map((session) => `<option value="${esc(session.sessionId)}">${esc(session.sessionId)} · ${esc(session.profileId)} · ${esc(session.research?.mode || "INFLUENCE")}</option>`).join("")}</select></div></div><button class="button primary" id="runAggregate" ${revealed.length < 1 ? "disabled" : ""}>Run compatible aggregate</button><div id="aggregateResult" style="margin-top:16px"></div></div><div class="card" style="margin-top:18px"><h3>Saved aggregate analyses</h3><div id="aggregateHistory">Loading…</div></div>`;
+  const draw = async () => {
+    try {
+      const rows = await window.mip?.listAggregates?.({ limit: 100 }) || [];
+      $("#aggregateHistory").innerHTML = rows.length ? rows.map((row) => `<div class="review-row"><span>${esc(row.aggregateId)} · ${esc(row.createdUtc)}</span><strong>${esc(row.workflow)} · ${row.exploratory ? "EXPLORATORY" : "CONFIRMATORY"} <button class="button" data-view-aggregate="${esc(row.aggregateId)}">View</button> <button class="button" data-export-aggregate="${esc(row.aggregateId)}">Export</button></strong></div>`).join("") : '<p class="subtle">No aggregate analyses recorded.</p>';
+      $("#aggregateHistory").querySelectorAll("[data-view-aggregate]").forEach((button) => button.onclick = async () => {
+        try { const aggregate = await window.mip?.getAggregate?.({ aggregateId: button.dataset.viewAggregate }); $("#aggregateResult").innerHTML = renderAggregateDetails(aggregate); } catch (error) { toast(error.message); }
+      });
+      $("#aggregateHistory").querySelectorAll("[data-export-aggregate]").forEach((button) => button.onclick = async () => {
+        try { const result = await window.mip?.exportAggregate({ aggregateId: button.dataset.exportAggregate }); toast(result?.directory ? `Aggregate exported to ${result.directory}.` : "Aggregate export completed."); } catch (error) { toast(error.message); }
+      });
+    } catch (error) { $("#aggregateHistory").textContent = error.message; }
+  };
+  $("#runAggregate").onclick = async () => {
+    const sessionIds = [...$("#aggregateSessions").selectedOptions].map((option) => option.value);
+    if (!sessionIds.length) return toast("Select at least one revealed session.");
+    try {
+      const result = await window.mip.runAggregate({ sessionIds, workflow: "AGGREGATE" });
+      $("#aggregateResult").innerHTML = `<div class="callout success">Aggregate ${esc(result.aggregateId)} saved.</div>${renderAggregateDetails(result)}`;
+      draw();
+    } catch (error) { toast(error.message); }
+  };
+  draw();
 }
 
 async function renderCalibration() {
@@ -963,7 +1184,9 @@ async function renderCalibration() {
     if (!window.mip) return toast("Calibration requires the Electron application.");
     try {
       const result = await window.mip.runCalibration({ provider: $("#calRng").value, samples: Number($("#calN").value) });
-      $("#calResult").innerHTML = `<div class="card"><h3>Persisted calibration result</h3><div class="review-row"><span>Provider</span><strong>${esc(result.provider)} · ${esc(result.providerVersion)}</strong></div><div class="review-row"><span>Samples</span><strong>${result.samples}</strong></div><div class="review-row"><span>Counts</span><strong>${result.counts[0]} / ${result.counts[1]}</strong></div>${renderDistribution(result.counts)}<div class="review-row"><span>SHA-256</span><strong class="mono">${esc(result.resultHash)}</strong></div></div>`;
+      const countTotal = Object.values(result.counts || {}).reduce((sum, count) => sum + Number(count || 0), 0);
+      const statistics = result.statistics || {};
+      $("#calResult").innerHTML = `<div class="card"><h3>Persisted calibration result</h3><div class="review-row"><span>Provider</span><strong>${esc(result.provider)} · ${esc(result.providerVersion)}</strong></div><div class="review-row"><span>Samples</span><strong>${esc(result.samples ?? result.sampleCount ?? countTotal)}</strong></div><div class="review-row"><span>Outcome space / K</span><strong>${esc(statistics.outcomeSpace?.type || "UNKNOWN")} · ${esc(statistics.cardinality ?? "—")}</strong></div><div class="review-row"><span>Unique outcomes / duplicates</span><strong>${esc(statistics.uniqueCount ?? Object.keys(result.counts || {}).length)} / ${esc(statistics.duplicateCount ?? "—")}</strong></div><div class="review-row"><span>Numeric min / max</span><strong>${esc(statistics.min ?? "—")} / ${esc(statistics.max ?? "—")}</strong></div>${renderDistribution(result.counts)}<div class="review-row"><span>SHA-256</span><strong class="mono">${esc(result.resultHash)}</strong></div></div>`;
       toast("Calibration persisted in SQLite.");
       setTimeout(renderCalibration, 0);
     } catch (error) { toast(error.message); }
@@ -1009,13 +1232,14 @@ async function openSession(id) {
   }
 }
 async function renderSession(id) {
-  const [m, e, v, raw, out, analysis, annotations] = await Promise.all([
+  const [m, e, v, raw, out, analysis, occurrenceData, annotations] = await Promise.all([
     sessionService.get(id),
     sessionService.events(id),
     sessionService.verify(id),
     sessionService.report(id),
     mPromiseOutput(id),
     sessionService.analysis(id),
+    sessionService.occurrences(id),
     sessionService.annotations(id),
   ]);
   app.innerHTML = `<div class="section-intro"><div><h2>${esc(id)} · Audit workspace</h2><p>${esc(m.profileId)} · ${new Date(m.createdUtc).toLocaleString()}</p></div><div class="actions">${pill(m.status)}${m.revealEligible ? '<button class="button primary" id="ownerReveal">Reveal result</button>' : ""}</div></div><div class="card"><div class="tabs">${renderReportTabs()}</div><div id="tabContent"></div></div><button class="button" id="back">← Back to sessions</button>`;
@@ -1030,9 +1254,9 @@ async function renderSession(id) {
       .querySelectorAll("[data-tab]")
       .forEach((b) => b.classList.toggle("active", b.dataset.tab === t));
     if (t === "overview")
-      content.innerHTML = `<div class="grid two"><div class="review-row"><span>Status</span><strong>${esc(m.status)}</strong></div><div class="review-row"><span>Reveal policy</span><strong>${esc(m.revealPolicy)}</strong></div><div class="review-row"><span>Participant</span><strong>${esc(m.participantLabel)}</strong></div><div class="review-row"><span>Config fingerprint</span><strong class="mono">${esc(m.configFingerprint)}</strong></div></div>`;
+      content.innerHTML = `<div class="grid two"><div class="review-row"><span>Status</span><strong>${esc(m.status)}</strong></div><div class="review-row"><span>Reveal policy</span><strong>${esc(m.revealPolicy)}</strong></div><div class="review-row"><span>Participant</span><strong>${esc(m.participantLabel)}</strong></div><div class="review-row"><span>Config fingerprint</span><strong class="mono">${esc(m.configFingerprint)}</strong></div>${m.research ? `<div class="review-row"><span>Experiment mode</span><strong>${esc(m.research.mode)}</strong></div><div class="review-row"><span>Outcome space / K</span><strong>${esc(m.research.outcomeSpace?.type || "UNKNOWN")} · ${esc(m.research.cardinality)}</strong></div><div class="review-row"><span>Primary endpoint</span><strong>${esc(m.research.primaryEndpoint)}</strong></div><div class="review-row"><span>Participant phase</span><strong>${esc(m.research.phases?.participantPhaseStatus || "UNKNOWN")}</strong></div><div class="review-row"><span>Evidence phase</span><strong>${esc(m.research.phases?.evidencePhaseStatus || "UNKNOWN")}</strong></div><div class="review-row"><span>Reveal projection</span><strong>${esc(m.research.phases?.revealStatus || "UNKNOWN")}</strong></div>` : ""}</div>`;
     if (t === "timeline")
-      content.innerHTML = `<div class="timeline">${e.events.map((x) => `<div class="timeline-item"><div class="timeline-time">${new Date(x.occurredUtc).toLocaleTimeString()}</div><div class="timeline-node"></div><div class="timeline-event">${esc(x.type)}<small>Event ${x.seq} · ${x.hash ? `${esc(x.hash.slice(0, 16))}…` : "hash redacted before reveal"}</small></div></div>`).join("")}</div>`;
+      content.innerHTML = `<div class="timeline">${e.events.map((x) => `<div class="timeline-item"><div class="timeline-time">${x.occurredUtc ? new Date(x.occurredUtc).toLocaleTimeString() : "time hidden until reveal"}</div><div class="timeline-node"></div><div class="timeline-event">${esc(x.type)}<small>Event ${x.seq} · ${x.hash ? `${esc(x.hash.slice(0, 16))}…` : "hash redacted before reveal"}</small></div></div>`).join("")}</div>`;
     if (t === "machine" || t === "analysis") {
       if (!m.revealed && m.status !== "REVEALED" && m.status !== "COMPLETE") {
         content.innerHTML = '<div class="callout warning">Machine output and derived analysis remain gated until raw-report lock and the separate reveal action.</div>';
@@ -1043,9 +1267,24 @@ async function renderSession(id) {
         content.innerHTML = `<div class="callout success">Actual persisted machine-output sequence · ${rows.length}${total !== rows.length ? ` of ${total}` : ""} records.</div><div class="grid two"><div class="card"><h3>Distribution</h3>${renderDistribution(counts)}</div><div class="card"><h3>Timing summary</h3>${fieldRow("First scheduled", rows[0]?.scheduledUtc || "Not recorded")}${fieldRow("Last actual", rows.at(-1)?.actualUtc || "Not recorded")}${fieldRow("Late / missed", rows.filter((row) => /LATE|MISSED/i.test(row.timingStatus || "")).length)}${fieldRow("Regions", [...new Set(rows.map((row) => row.region).filter(Boolean))].join(", ") || "Not recorded")}</div></div><div class="table-wrap" style="margin-top:18px"><table class="data-table"><thead><tr><th>Seq</th><th>Region</th><th>Value</th><th>Scheduled UTC</th><th>Actual UTC</th><th>Lateness</th><th>Status</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${esc(row.outputSeq)}</td><td>${esc(row.region || "UNKNOWN")}</td><td>${esc(row.value)}</td><td>${esc(row.scheduledUtc || "—")}</td><td>${esc(row.actualUtc || "—")}</td><td>${esc(row.latenessMs ?? "—")}</td><td>${pill(row.timingStatus || "ON_TIME")}</td></tr>`).join("") || '<tr><td colspan="7" class="empty">No output records.</td></tr>'}</tbody></table></div>`;
       } else {
         const data = analysis?.analysis || analysis || {};
+        const genericTemporal = Number(data.cardinality || 2) !== 2 || data.endpoint && data.endpoint !== "EXACT_SLOT" || Array.isArray(data.occurrences);
+        if (genericTemporal) {
+          const occurrences = Array.isArray(occurrenceData?.records) ? occurrenceData.records : (Array.isArray(data.occurrences) ? data.occurrences : []);
+          content.innerHTML = `<div class="callout success">Generic finite-outcome analysis · ${esc(data.endpoint || "EXACT_SLOT")} · primary and exploratory observations remain separate.</div><div class="grid three"><div class="card">${fieldRow("Target", data.target ?? "Not recorded")}${fieldRow("Outcome cardinality (K)", data.cardinality ?? "Not recorded")}${fieldRow("Primary status", data.primary?.status ?? "Not resolved")}${fieldRow("Primary result", data.primary?.hit === true ? "MATCH" : data.primary?.resolved ? "NO MATCH" : "MISSED / UNAVAILABLE")}</div><div class="card">${fieldRow("Planned opportunities", data.plannedCount ?? "Not recorded")}${fieldRow("Eligible opportunities", data.eligibleCount ?? "Not recorded")}${fieldRow("Missed opportunities", data.missedCount ?? "Not recorded")}${fieldRow("Observed target hits", data.hits ?? 0)}</div><div class="card">${fieldRow("Single-target p0", data.nullModel?.p0 ?? "Not recorded")}${fieldRow("Expected hits", data.expectedHits?.value ?? data.expectedHits ?? "Not recorded")}${fieldRow("Any-hit null probability", data.anyHitProbability?.value ?? data.anyHitProbability ?? "Not recorded")}${fieldRow("Calculation version", data.methodVersion || data.analysisVersion || "Not recorded")}</div></div><div class="card" style="margin-top:18px"><h3>Committed target-relative summary</h3>${fieldRow("First pre-target occurrence", data.firstPreTargetLatencyMs ?? "None")}${fieldRow("First post-target occurrence", data.firstPostTargetLatencyMs ?? "None")}${fieldRow("Nearest occurrence to T", data.nearestOccurrenceLatencyMs ?? "None")}${fieldRow("Primary scheduled target", data.primary?.targetScheduledUtc || "Not recorded")}</div><div class="card" style="margin-top:18px"><h3>Target occurrences relative to T</h3>${occurrences.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Sequence</th><th>Region</th><th>Scheduled UTC</th><th>Actual UTC</th><th>Signed latency (ms)</th><th>Classification</th></tr></thead><tbody>${occurrences.map((item) => `<tr><td>${esc(item.sequence ?? item.outputSeq ?? "—")}</td><td>${esc(item.region || "—")}</td><td>${esc(item.scheduledUtc || "—")}</td><td>${esc(item.actualUtc || "—")}</td><td>${esc(item.signedLatencyMs ?? item.latencyMs ?? "—")}</td><td>${pill(item.timingClassification || item.status || "OBSERVED")}</td></tr>`).join("")}</tbody></table></div>` : '<p class="subtle">No exact target occurrences were observed.</p>'}</div><details style="margin-top:18px"><summary>Analysis evidence JSON</summary><pre class="json">${esc(JSON.stringify(data, null, 2))}</pre></details>`;
+          return;
+        }
         const bands = ["pre", "primary", "post"].map((name) => data[name] || {});
         const peak = Number(data.peakDeviation ?? data.peak ?? 0);
         content.innerHTML = `<div class="callout success">Analysis uses the committed named region boundaries and request/timing anchors.</div><div class="grid three">${bands.map((band, index) => `<div class="card"><h3>${["Pre-request", "Primary", "Post-request"][index]}</h3>${fieldRow("Expected records", band.expectedCount ?? "Not recorded")}${fieldRow("Observed records", band.observedCount ?? "Not recorded")}${fieldRow("Matches", band.matches ?? "Not recorded")}${fieldRow("Match proportion", band.proportion === null || band.proportion === undefined ? "Not recorded" : `${(Number(band.proportion) * 100).toFixed(1)}%`)}</div>`).join("")}</div><div class="card" style="margin-top:18px"><h3>Requested-direction deviation</h3>${renderAnalysisBands(data)}${fieldRow("Peak deviation", Number.isFinite(peak) ? peak : "Not recorded")}${fieldRow("Threshold crossing", data.thresholdCrossing ?? data.thresholdCrossed ?? "Not recorded")}${fieldRow("Sustained crossing", data.sustainedCrossing ?? "Not recorded")}${fieldRow("Latency", data.latencyMs ?? "Not recorded")}${fieldRow("Persistence", data.persistence ?? "Not recorded")}${fieldRow("Return toward baseline", data.returnTowardBaseline ?? "Not recorded")}</div><details style="margin-top:18px"><summary>Analysis evidence JSON</summary><pre class="json">${esc(JSON.stringify(data, null, 2))}</pre></details>`;
+      }
+    }
+    if (t === "occurrences") {
+      if (!m.revealed && m.status !== "REVEALED" && m.status !== "COMPLETE") {
+        content.innerHTML = '<div class="callout warning">Target occurrences remain gated until the owner completes reveal.</div>';
+      } else {
+        const data = analysis?.analysis || analysis || {};
+        const occurrences = Array.isArray(occurrenceData?.records) ? occurrenceData.records : (Array.isArray(data.occurrences) ? data.occurrences : []);
+        content.innerHTML = `<div class="callout">Every exact target occurrence is retained. A late or early occurrence does not rewrite the primary endpoint.</div>${occurrences.length ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Sequence</th><th>Region</th><th>Scheduled</th><th>Actual</th><th>Signed latency</th><th>Classification</th></tr></thead><tbody>${occurrences.map((item) => `<tr><td>${esc(item.sequence ?? item.outputSeq ?? "—")}</td><td>${esc(item.region || "—")}</td><td>${esc(item.scheduledUtc || "—")}</td><td>${esc(item.actualUtc || "—")}</td><td>${esc(item.signedLatencyMs ?? item.latencyMs ?? "—")}</td><td>${pill(item.timingClassification || item.status || "OBSERVED")}</td></tr>`).join("")}</tbody></table></div>` : '<p class="subtle">No exact target occurrences were observed.</p>'}`;
       }
     }
     if (t === "raw") {

@@ -25,6 +25,7 @@ export class SessionService {
     return api(`/api/sessions/${encodeURIComponent(id)}/output${query ? `?${query}` : ""}`);
   }
   analysis(id) { return window.mip?.getAnalysis?.({ id }) ?? null; }
+  occurrences(id) { return window.mip?.getTargetOccurrences?.({ id }) ?? null; }
   annotations(id) { return window.mip?.getLateAnnotations?.({ id }) ?? []; }
   addAnnotation(id, kind, annotation) { return window.mip?.addLateAnnotation?.({ id, kind, annotation }); }
   export(id) { return window.mip?.exportSession?.({ id }); }

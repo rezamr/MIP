@@ -1,4 +1,5 @@
 import { canonical, sha256 } from "../../engine.js";
+import { normalizeOutcomeSpace, containsOutcome } from "../../domain/research-model.js";
 import { now, json } from "../database/db.js";
 import { redact } from "./SessionRepository.js";
 
@@ -13,6 +14,15 @@ const SAFE_PRE_REVEAL_PAYLOAD_KEYS = new Set([
   "deviation", "recoveryRequired", "recoveryReason", "source", "saved",
   "gate", "ownerAuthorizedReveal", "ownerConfirmedMemory", "timingDeviation",
   "audioFailed", "interrupted", "aborted", "reportDraft", "rawReportLocked",
+]);
+
+const PRE_REVEAL_TIMING_SENSITIVE_EVENTS = new Set([
+  "MACHINE_OUTPUT_RECORDED",
+  "OUTPUT_RECORDED",
+  "OUTPUT_MISSED",
+  "FUTURE_TARGET_GENERATED",
+  "FUTURE_TARGET_MISSED",
+  "MACHINE_OUTPUT_FINALIZED",
 ]);
 
 function safePreRevealPayload(value) {
@@ -63,7 +73,10 @@ export class EvidenceRepository {
       seq: event.seq,
       eventId: event.eventId,
       type: event.type,
-      occurredUtc: event.occurredUtc,
+      // Output/target event timestamps are themselves target-relative evidence
+      // and stay hidden until reveal.  Lifecycle/protocol timestamps remain
+      // available for an honest pre-reveal audit timeline.
+      occurredUtc: PRE_REVEAL_TIMING_SENSITIVE_EVENTS.has(event.type) ? null : event.occurredUtc,
       payload: safePreRevealPayload(event.payload),
     });
   }
@@ -75,14 +88,22 @@ export class EvidenceRepository {
     if (!Number.isSafeInteger(outputSeq) || outputSeq < 0) throw new Error("outputSeq must be a non-negative safe integer");
     if (!this.db.prepare("SELECT 1 FROM sessions WHERE session_id=?").get(sessionId)) throw new Error(`Session not found: ${sessionId}`);
     const value = asValue(record);
+    // Machine output is an authoritative evidence ledger.  When a committed
+    // research definition exists, reject values outside its finite outcome
+    // space at this boundary as well as in the scheduler.  Missed slots use a
+    // deliberate null value and remain valid; legacy/imported sessions without
+    // a normalized definition retain their historical write compatibility.
+    const definitionRow = this.db.prepare("SELECT outcome_space_json,committed FROM research_definitions WHERE session_id=?").get(sessionId);
+    if (definitionRow?.committed && value !== null && !containsOutcome(normalizeOutcomeSpace(json(definitionRow.outcome_space_json, null)), value))
+      throw new TypeError("machine output value must belong to the committed outcome space");
     const generatedUtc = record.generatedUtc || record.actualUtc || now();
     const monotonicNs = String(record.monotonicNs ?? process.hrtime.bigint());
     const trialId = record.trialId || record.trial_id || null;
     const region = record.region || record.block || null;
     const scheduledUtc = record.scheduledUtc || record.scheduled_utc || null;
-    const scheduledMonotonicNs = record.scheduledMonotonicNs || record.scheduled_monotonic_ns || null;
+    const scheduledMonotonicNs = record.scheduledMonotonicNs ?? record.scheduled_monotonic_ns ?? null;
     const actualUtc = record.actualUtc || record.actual_utc || generatedUtc;
-    const actualMonotonicNs = record.actualMonotonicNs || record.actual_monotonic_ns || monotonicNs;
+    const actualMonotonicNs = record.actualMonotonicNs ?? record.actual_monotonic_ns ?? monotonicNs;
     const latenessMs = record.latenessMs ?? record.lateness_ms ?? null;
     const timingStatus = record.timingStatus || record.timing_status || null;
     const core = { sessionId, trialId, outputSeq, generatedUtc, monotonicNs, value, region, scheduledUtc, scheduledMonotonicNs, actualUtc, actualMonotonicNs, latenessMs, timingStatus };
@@ -102,12 +123,14 @@ export class EvidenceRepository {
 
   outputs(sessionId, options = {}) {
     const revealed = ["REVEALED", "COMPLETE"].includes(this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status);
-    const limit = options.limit === undefined ? null : Math.min(5_000, Math.max(1, Number(options.limit)));
-    const offset = options.offset === undefined ? 0 : Math.max(0, Number(options.offset));
-    const query = limit === null
-      ? "SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq"
-      : "SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq LIMIT ? OFFSET ?";
-    const rows = limit === null ? this.db.prepare(query).all(sessionId) : this.db.prepare(query).all(sessionId, limit, offset);
+    const requestedLimit = options.limit === undefined ? 5_000 : Number(options.limit);
+    const requestedOffset = options.offset === undefined ? 0 : Number(options.offset);
+    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) throw new TypeError("output limit must be a positive safe integer");
+    if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0) throw new TypeError("output offset must be a non-negative safe integer");
+    const limit = Math.min(5_000, requestedLimit);
+    const offset = requestedOffset;
+    const query = "SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq LIMIT ? OFFSET ?";
+    const rows = this.db.prepare(query).all(sessionId, limit, offset);
     const records = rows.map((row) => ({
       sessionId: row.session_id, trialId: row.trial_id, outputSeq: row.output_seq, generatedUtc: row.generated_utc, monotonicNs: row.monotonic_ns, region: row.region, recordHash: row.record_hash, scheduledUtc: row.scheduled_utc, scheduledMonotonicNs: row.scheduled_monotonic_ns, actualUtc: row.actual_utc, actualMonotonicNs: row.actual_monotonic_ns, latenessMs: row.lateness_ms, timingStatus: row.timing_status,
       ...(options.full && revealed ? { value: json(row.value_json, null) } : {}),
@@ -115,7 +138,7 @@ export class EvidenceRepository {
     return options.paginated ? {
       sessionId,
       offset,
-      limit: limit ?? records.length,
+      limit,
       total: Number(this.db.prepare("SELECT COUNT(*) AS count FROM machine_outputs WHERE session_id=?").get(sessionId).count),
       records,
     } : records;

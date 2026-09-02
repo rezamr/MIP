@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 
 import { analyzeStream, assignOutcome, sha256, timingPlan } from "../src/engine.js";
+import { analyzeTemporalEvidence } from "../src/main/analysis/temporal-analysis.js";
+import { TemporalEvidenceScheduler } from "../src/main/sessions/temporal-evidence-scheduler.js";
+import { EXPERIMENT_MODES, outcomeSpaceSize } from "../src/domain/research-model.js";
 import { renderOffline, PCM_CANONICAL_FORMAT, PCM_DIGEST_VERSION, PROCESSOR_VERSION } from "../public/audio-core.js";
 import { MipDatabase } from "../src/main/database/db.js";
 import { RANDOM_SOURCES, createRandomSources, randomSourcesMetadata } from "../src/main/random/random-domains.js";
@@ -65,6 +68,162 @@ function stageFixture(db, sessionId, trialId, anchor) {
     });
     offsetMs += stageType === "INDUCTION_START" ? 5 : stageType === "SETTLING_START" ? 5 : stageType === "REQUEST_START" ? 10 : stageType === "RELEASE_START" ? 10 : stageType === "NEUTRAL_OBSERVATION" ? 10 : stageType === "RETURN_CUE" ? 5 : 0;
   }
+}
+
+function fakeClock(startUtcMs) {
+  let current = startUtcMs;
+  return {
+    clock: { now: () => current },
+    set(ms) { current = ms; },
+    get() { return current; },
+  };
+}
+
+function recordTemporalOutput(db, session, record) {
+  db.evidence.recordOutput(session.id, {
+    trialId: session.trial,
+    outputSeq: record.sequence,
+    value: record.value,
+    region: record.region,
+    generatedUtc: record.actualUtc,
+    monotonicNs: record.actualMonotonicNs,
+    scheduledUtc: record.scheduledUtc,
+    scheduledMonotonicNs: record.scheduledMonotonicNs?.toString?.() || record.scheduledMonotonicNs,
+    actualUtc: record.actualUtc,
+    actualMonotonicNs: record.actualMonotonicNs,
+    latenessMs: record.latenessMs,
+    timingStatus: record.status,
+  });
+}
+
+async function runTemporalFixtures(db) {
+  const baseUtc = Date.parse("2026-01-05T00:00:00.000Z");
+  const range = { type: "INTEGER_RANGE", minInclusive: 0, maxInclusive: 999_999_999 };
+  const target = 347_921_684;
+  const targetUtc = new Date(baseUtc + 40).toISOString();
+  const profile = db.profiles.getVersion("TEMPORAL_INTEGER_RANGE_V1", 1);
+  const definition = {
+    mode: EXPERIMENT_MODES.INFLUENCE,
+    outcomeSpace: range,
+    targetDefinition: { mode: EXPERIMENT_MODES.INFLUENCE, anchor: "ABSOLUTE_UTC", targetSequence: 1, scheduledUtc: targetUtc, prediction: null },
+    temporalAnalysis: { primaryEndpoint: "EXACT_SLOT", outputCadence: "FIXED_INTERVAL", intervalMs: 10, windows: [{ id: "primary", preMs: 20, postMs: 20 }] },
+    revealPolicy: "AFTER_EVIDENCE_COMPLETE",
+  };
+  const session = db.beginSession(profile, "Temporal large-range dry-run", "dry", {
+    objective: target,
+    participantTarget: `Favor ${target} at the committed target anchor.`,
+    researchDefinition: definition,
+    deferCommit: false,
+  });
+  const fake = fakeClock(baseUtc);
+  const records = [];
+  const scheduler = new TemporalEvidenceScheduler({
+    ...profile,
+    ...definition,
+    output: { preCount: 1, primaryCount: 1, postCount: 1 },
+  }, {
+    sessionId: session.id,
+    trialId: session.trial,
+    clock: fake.clock,
+    timer: { setTimeout: () => 0, clearTimeout: () => {} },
+    outputProvider: ({ sequence }) => sequence === 1 ? target : 12_345,
+    onOutput: (record) => { records.push(record); recordTemporalOutput(db, session, record); },
+    onEvidence: (event) => db.evidence.appendEvent(session.id, session.trial, event.type, clone(event.payload)),
+  });
+  await scheduler.start();
+  fake.set(baseUtc + 20);
+  scheduler.endParticipantPhase("fixture_return");
+  db.research.updatePhases(session.id, { participantPhaseStatus: "ENDED", sessionLifecycle: "RETURNED" });
+  const atReturn = { participantPhase: scheduler.participantPhase, evidencePhase: scheduler.evidencePhase, status: scheduler.status, targetHidden: scheduler.toRendererDTO().target === undefined };
+  await scheduler.tick();
+  fake.set(baseUtc + 40);
+  await scheduler.tick();
+  const atTarget = { exactSlotStatus: scheduler.records.find((record) => record.sequence === 1)?.status || null, targetHidden: scheduler.toRendererDTO().target === undefined };
+  fake.set(baseUtc + 50);
+  await scheduler.tick();
+  db.research.updatePhases(session.id, { evidencePhaseStatus: "COMPLETE", sessionLifecycle: "COMPLETE" });
+  const analysis = analyzeTemporalEvidence({
+    outputs: records,
+    target,
+    outcomeSpace: range,
+    primaryEndpoint: "EXACT_SLOT",
+    targetSequence: 1,
+    targetScheduledUtc: targetUtc,
+    primaryWindow: { preMs: 20, postMs: 20 },
+    plannedCount: scheduler.plan.totalCount,
+    eligibleCount: records.filter((record) => record.status !== "MISSED").length,
+    missedCount: records.filter((record) => record.status === "MISSED").length,
+  });
+  db.analyses.save(session.id, clone(analysis), { input: clone({ outputs: records, target, outcomeSpace: range }), analysisVersion: analysis.analysisVersion });
+
+  const futureTarget = 876_543_210;
+  const futureUtc = new Date(baseUtc + 40).toISOString();
+  const futureDefinition = {
+    mode: EXPERIMENT_MODES.FUTURE_TARGET,
+    outcomeSpace: range,
+    targetDefinition: { mode: EXPERIMENT_MODES.FUTURE_TARGET, anchor: "ABSOLUTE_UTC", targetSequence: 1, scheduledUtc: futureUtc, prediction: futureTarget },
+    temporalAnalysis: { primaryEndpoint: "EXACT_SLOT", outputCadence: "FIXED_INTERVAL", intervalMs: 10, windows: [{ id: "primary", preMs: 20, postMs: 20 }] },
+    revealPolicy: "AFTER_EVIDENCE_COMPLETE",
+  };
+  const futureSession = db.beginSession(profile, "Future target dry-run", "dry", {
+    objective: null,
+    participantTarget: `Prediction committed: ${futureTarget}`,
+    researchDefinition: futureDefinition,
+    deferCommit: false,
+  });
+  const futureFake = fakeClock(baseUtc);
+  const futureRecords = [];
+  const futureScheduler = new TemporalEvidenceScheduler({
+    ...profile,
+    ...futureDefinition,
+    prediction: futureTarget,
+    output: { preCount: 1, primaryCount: 1, postCount: 1 },
+  }, {
+    sessionId: futureSession.id,
+    trialId: futureSession.trial,
+    clock: futureFake.clock,
+    timer: { setTimeout: () => 0, clearTimeout: () => {} },
+    randomSource: { int: () => futureTarget, metadata: () => ({ domain: "FUTURE_TARGET", provider: "DETERMINISTIC_PRNG_TEST", id: "dry-run", version: "v1", deterministic: true }) },
+    outputProvider: ({ sequence }) => sequence === 1 ? futureTarget : 42,
+    onOutput: (record) => { futureRecords.push(record); recordTemporalOutput(db, futureSession, record); },
+    onTargetGenerated: (event) => {
+      db.research.recordTargetGeneration(futureSession.id, event);
+      db.db.prepare("UPDATE sessions SET hidden_objective=? WHERE session_id=? AND hidden_objective IS NULL").run(JSON.stringify(event.target), futureSession.id);
+    },
+    onEvidence: (event) => db.evidence.appendEvent(futureSession.id, futureSession.trial, event.type, clone(event.payload)),
+  });
+  await futureScheduler.start();
+  futureFake.set(baseUtc + 20);
+  await futureScheduler.tick();
+  const beforeFutureAnchor = { target: futureScheduler.target, persistedTarget: db.db.prepare("SELECT hidden_objective FROM sessions WHERE session_id=?").get(futureSession.id).hidden_objective };
+  futureFake.set(baseUtc + 40);
+  await futureScheduler.tick();
+  futureFake.set(baseUtc + 50);
+  await futureScheduler.tick();
+  db.research.updatePhases(futureSession.id, { evidencePhaseStatus: "COMPLETE", sessionLifecycle: "COMPLETE" });
+  const futureIntegrity = db.integrity.verifySession(futureSession.id, { persist: false });
+  return {
+    temporalLargeRange: {
+      sessionId: session.id,
+      outcomeSpace: range,
+      cardinality: outcomeSpaceSize(range),
+      target,
+      timeline: { participantReturnMs: 20, targetAnchorMs: 40, evidenceEndMs: 50 },
+      atReturn,
+      atTarget,
+      final: { status: scheduler.status, evidencePhase: scheduler.evidencePhase, planned: scheduler.plan.totalCount, eligible: analysis.eligibleCount, missed: analysis.missedCount, hits: analysis.hits, primary: analysis.primary },
+      integrity: db.integrity.verifySession(session.id, { persist: false }),
+    },
+    futureTarget: {
+      sessionId: futureSession.id,
+      prediction: futureTarget,
+      scheduledUtc: futureUtc,
+      beforeFutureAnchor,
+      generated: futureScheduler.getResult({ revealed: true }).targetGeneration,
+      final: { status: futureScheduler.status, evidencePhase: futureScheduler.evidencePhase, generatedCount: futureScheduler.outputs.length, missedCount: futureScheduler.records.filter((record) => record.status === "MISSED").length },
+      integrity: futureIntegrity,
+    },
+  };
 }
 
 const root = uniqueRoot();
@@ -242,6 +401,7 @@ try {
   const integrity = db.integrity.verifySession(created.id, { persist: false });
   if (!integrity.valid) throw new Error(`SQLite dry-run integrity failed: ${integrity.errors.join("; ")}`);
   const exported = db.exporter.exportSession(created.id, { includeHidden: true });
+  const researchFixtures = await runTemporalFixtures(db);
   const reportPath = path.join(root, "dry-run-report.json");
   const report = {
     command: "npm run dry-run",
@@ -253,6 +413,7 @@ try {
     objective,
     outputCount: hiddenOutputs.length,
     audio: { digest: audioFixture.digest, frames: audioFixture.frames, handshake },
+    researchFixtures,
     integrity,
     export: exported,
     timedVerification: "not executed",
@@ -264,6 +425,10 @@ try {
     sessionId: created.id,
     outputCount: hiddenOutputs.length,
     integrity: { valid: integrity.valid, eventCount: integrity.eventCount, machineOutputCount: integrity.machineOutputCount },
+    researchFixtures: {
+      temporalLargeRange: { sessionId: researchFixtures.temporalLargeRange.sessionId, cardinality: researchFixtures.temporalLargeRange.cardinality, primary: researchFixtures.temporalLargeRange.final.primary, integrity: researchFixtures.temporalLargeRange.integrity.valid },
+      futureTarget: { sessionId: researchFixtures.futureTarget.sessionId, beforeAnchorTarget: researchFixtures.futureTarget.beforeFutureAnchor.target, generated: researchFixtures.futureTarget.generated?.target, integrity: researchFixtures.futureTarget.integrity.valid },
+    },
     exportDirectory: exported.directory,
     report: reportPath,
   }, null, 2));

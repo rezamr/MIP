@@ -6,6 +6,7 @@ import CalibrationPage from "./Calibration.js";
 import AudioHealthPage from "./AudioHealth.js";
 import SessionsReportsPage from "./SessionsReports.js";
 import SettingsPage from "./Settings.js";
+const AggregatePage = { id: "aggregate", title: "Aggregate Workspace" };
 
 export const PAGE_DEFINITIONS = Object.freeze({
   start: StartSessionPage,
@@ -16,6 +17,7 @@ export const PAGE_DEFINITIONS = Object.freeze({
   health: AudioHealthPage,
   reports: SessionsReportsPage,
   settings: SettingsPage,
+  aggregate: AggregatePage,
 });
 
 export function pageDefinition(id) {

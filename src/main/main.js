@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { MipDatabase } from "./database/db.js";
+import { MipDatabase, requiresStrictResearchGate } from "./database/db.js";
 import {
   analyzeStream,
   APP_VERSION,
@@ -19,6 +19,13 @@ import {
   canonical,
   ENGINE_VERSION,
   requestInstruction,
+  sampleOutcome,
+  normalizeOutcomeSpace,
+  outcomeSpaceSize,
+  containsOutcome,
+  resolveEffectiveConfiguration,
+  createCompatibilityFingerprint,
+  EXPERIMENT_MODES,
   sha256,
   timingPlan,
   validateProfile,
@@ -44,6 +51,9 @@ import {
   SessionScheduler,
 } from "./sessions/session-scheduler.js";
 import { ProtocolStageController } from "./sessions/protocol-stage-controller.js";
+import { TemporalEvidenceScheduler } from "./sessions/temporal-evidence-scheduler.js";
+import { classifyStartupRecovery } from "./sessions/recovery-policy.js";
+import { analyzeTemporalEvidence, findTargetOccurrences, aggregateCrossSession } from "./analysis/temporal-analysis.js";
 import {
   RANDOM_SOURCES,
   createRandomSources,
@@ -345,7 +355,17 @@ async function transitionSession(id, to, context = {}, lifecycle = {}) {
 function activeFormalSession() {
   const placeholders = FORMAL_ACTIVE_STATES.map(() => "?").join(",");
   return db.db
-    .prepare(`SELECT session_id,status FROM sessions WHERE status IN (${placeholders}) ORDER BY created_utc DESC LIMIT 1`)
+    .prepare(`
+      SELECT s.session_id,s.status
+      FROM sessions s
+      LEFT JOIN session_phase_projections sp ON sp.session_id=s.session_id
+      WHERE s.status IN (${placeholders})
+       OR (s.status IN ('RETURNED','RAW_REPORT_DRAFT','RAW_REPORT_LOCKED') AND (
+            sp.evidence_phase_status IN ('RUNNING','TARGET_PENDING','TARGET_GENERATED','TARGET_OBSERVED','POST_TARGET_MONITORING')
+            OR sp.session_lifecycle='RECOVERY_REQUIRED'
+          ))
+      ORDER BY s.created_utc DESC LIMIT 1
+    `)
     .get(...FORMAL_ACTIVE_STATES) || null;
 }
 
@@ -406,6 +426,11 @@ async function failRuntimeClosed(runtime, reason, payload = {}) {
         recoveryReason: reason,
         payload: { classification: "LOGGING_FAILURE", reason, ...clone(payload) },
       }, { recoveryState: "LOGGING_FAILURE", evidence: { classification: "LOGGING_FAILURE", reason } });
+      db.research?.updatePhases(runtime.id, {
+        sessionLifecycle: "RECOVERY_REQUIRED",
+        participantPhaseStatus: "FAILED",
+        evidencePhaseStatus: "FAILED",
+      });
     } catch (error) {
       try { db.evidence.appendEvent(runtime.id, runtime.trialId, "LOGGING_FAILURE_UNRECOVERED", { reason, error: error.message }); } catch {}
     }
@@ -428,6 +453,11 @@ async function failRuntimeClosed(runtime, reason, payload = {}) {
         recoveryReason: reason,
         payload: { classification: "AUDIO_AUTHENTICATION_FAILURE", reason },
       }, { recoveryState: "AUDIO_AUTHENTICATION_FAILURE", evidence: { classification: "AUDIO_AUTHENTICATION_FAILURE", reason } });
+      db.research?.updatePhases(runtime.id, {
+        sessionLifecycle: "RECOVERY_REQUIRED",
+        participantPhaseStatus: "FAILED",
+        evidencePhaseStatus: "FAILED",
+      });
     } catch (error) {
       try { db.evidence.appendEvent(runtime.id, runtime.trialId, "AUDIO_FAILURE_UNRECOVERED", { reason, error: error.message }); } catch {}
     }
@@ -637,6 +667,7 @@ function schedulerIntervalMs(profile) {
 
 function createScheduler(runtime) {
   const profile = runtime.profile;
+  const research = runtime.researchDefinition || {};
   const timing = { ...profile.timing };
   const config = {
     ...profile,
@@ -651,11 +682,136 @@ function createScheduler(runtime) {
     config.requestMonotonicNs = process.hrtime.bigint() + BigInt(Math.round(leadMs * 1e6));
     config.requestUtc = new Date(Date.now() + leadMs).toISOString();
   }
+  const temporal = isTemporalResearchDefinition(research);
+  if (temporal) {
+    const temporalOutput = { ...profile.output };
+    const committedWindows = Array.isArray(research.temporalAnalysis?.windows)
+      ? research.temporalAnalysis.windows
+      : [];
+    const hasCommittedTimeWindow = committedWindows.some((window) => window?.enabled !== false && (
+      Number(window?.preMs || 0) > 0 || Number(window?.postMs || 0) > 0
+    ));
+    // For a target-anchored temporal definition the committed duration and
+    // cadence define the opportunity set. Profile block counts remain the
+    // backwards-compatible fallback for exact-slot/binary sessions that do
+    // not declare a duration window; they must not silently override a
+    // session-level T-relative timing override.
+    if (hasCommittedTimeWindow) {
+      for (const key of ["preCount", "primaryCount", "postCount", "preBlocks", "primaryBlocks", "postBlocks"])
+        delete temporalOutput[key];
+    }
+    const scheduler = new TemporalEvidenceScheduler({
+      ...profile,
+      mode: research.mode || profile.mode || EXPERIMENT_MODES.INFLUENCE,
+      outcomeSpace: research.outcomeSpace || profile.outcomeSpace,
+      target: runtime.objective,
+      prediction: runtime.prediction,
+      targetDefinition: research.targetDefinition || {
+        mode: research.mode || profile.mode || EXPERIMENT_MODES.INFLUENCE,
+        anchor: runtime.protocolAnchor?.name || "PARTICIPANT_REQUEST",
+        scheduledUtc: timing.scheduledUtc,
+        scheduledMonotonicNs: timing.scheduledMonotonicNs,
+      },
+      temporalAnalysis: research.temporalAnalysis || profile.analysis,
+      analysis: research.temporalAnalysis || profile.analysis,
+      output: temporalOutput,
+    }, {
+      sessionId: runtime.id,
+      trialId: runtime.trialId,
+      randomSource: runtime.randomSources[RANDOM_SOURCES.FUTURE_TARGET],
+      machineRandomSource: runtime.randomSources[RANDOM_SOURCES.MACHINE_OUTPUT],
+      target: runtime.objective,
+      outputProvider: ({ randomSource }) => sampleOutcome(research.outcomeSpace || profile.outcomeSpace, randomSource),
+      onOutput: (record) => {
+        db.evidence.recordOutput(runtime.id, {
+          trialId: runtime.trialId,
+          outputSeq: record.sequence,
+          value: record.value,
+          region: record.region,
+          generatedUtc: record.actualUtc,
+          monotonicNs: record.actualMonotonicNs,
+          scheduledUtc: record.scheduledUtc,
+          scheduledMonotonicNs: record.scheduledMonotonicNs?.toString?.() || record.scheduledMonotonicNs,
+          actualUtc: record.actualUtc,
+          actualMonotonicNs: record.actualMonotonicNs,
+          latenessMs: record.latenessMs,
+          timingStatus: record.status,
+        });
+        if (research.mode === EXPERIMENT_MODES.FUTURE_TARGET && record.targetSlot)
+          db.research.updatePhases(runtime.id, { evidencePhaseStatus: record.status === "MISSED" ? "POST_TARGET_MONITORING" : "TARGET_OBSERVED" });
+        if (runtime.objective !== null && runtime.objective !== undefined) {
+          for (const occurrence of findTargetOccurrences({ outputs: [record], target: runtime.objective, outcomeSpace: research.outcomeSpace || profile.outcomeSpace, window: research.temporalAnalysis?.windows?.[0] || {}, targetScheduledUtc: runtime.scheduler?.plan?.targetUtc, targetScheduledMonotonicNs: runtime.scheduler?.plan?.targetMonotonicNs })) {
+            db.research.recordOccurrence(runtime.id, occurrence);
+          }
+        }
+      },
+      onTargetGenerated: (event) => {
+        runtime.objective = event.target;
+        db.research.recordTargetGeneration(runtime.id, event);
+        db.research.updatePhases(runtime.id, { evidencePhaseStatus: "TARGET_GENERATED" });
+        // FUTURE_TARGET participant prediction is a precommitted observation,
+        // not an instruction rewritten with the later machine target.  Keep
+        // the prediction text immutable and persist only the hidden objective
+        // when the anchor is reached.
+        db.db.prepare("UPDATE sessions SET hidden_objective=? WHERE session_id=? AND hidden_objective IS NULL")
+          .run(JSON.stringify(event.target), runtime.id);
+        // Once the future target exists, classify any already-recorded
+        // outputs against it in the authority.  This does not reveal values
+        // to the renderer and preserves pre-anchor occurrences for analysis.
+        const priorOutputs = db.db.prepare("SELECT session_id,trial_id,output_seq,value_json,region,scheduled_utc,scheduled_monotonic_ns,actual_utc,actual_monotonic_ns,timing_status FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(runtime.id).map((row) => ({ sessionId: row.session_id, trialId: row.trial_id, sequence: row.output_seq, outputSeq: row.output_seq, value: parseStoredJson(row.value_json), region: row.region, scheduledUtc: row.scheduled_utc, scheduledMonotonicNs: row.scheduled_monotonic_ns, actualUtc: row.actual_utc, actualMonotonicNs: row.actual_monotonic_ns, status: row.timing_status }));
+        for (const occurrence of findTargetOccurrences({ outputs: priorOutputs, target: event.target, outcomeSpace: runtime.researchDefinition?.outcomeSpace || runtime.profile.outcomeSpace, window: runtime.researchDefinition?.temporalAnalysis?.windows?.[0] || {}, targetScheduledUtc: event.scheduledUtc, targetScheduledMonotonicNs: event.scheduledMonotonicNs })) db.research.recordOccurrence(runtime.id, occurrence);
+      },
+      onParticipantPhase: (phase) => db.research.updatePhases(runtime.id, { participantPhaseStatus: phase.participantPhase }),
+      onEvidence: (event) => db.evidence.appendEvent(runtime.id, runtime.trialId, event.type, jsonSafe(event.payload)),
+      onComplete: (result) => {
+        runtime.schedulerResult = clone(result);
+        db.research.updatePhases(runtime.id, { evidencePhaseStatus: "COMPLETE" });
+        db.evidence.appendEvent(runtime.id, runtime.trialId, "SCHEDULER_COMPLETE", jsonSafe(result));
+        // The power-save blocker belongs to the evidence lifecycle, not the
+        // participant/audio lifecycle.  Keep it active after participant
+        // return and release it only when the committed evidence schedule
+        // has actually completed.
+        try { powerManager?.stop(); } catch (error) {
+          try { db.evidence.appendEvent(runtime.id, runtime.trialId, "POWER_BLOCKER_STOP_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" }); } catch {}
+        }
+        try {
+          const derived = persistedAnalysis(runtime);
+          // A temporal participant may return and lock the raw report while
+          // machine evidence is still running.  Always append the completed
+          // temporal analysis here so the final post-target evidence becomes
+          // the authoritative latest analysis version; a provisional
+          // return-time snapshot must never suppress that update.
+          db.analyses.save(runtime.id, derived.analysis, { input: derived.input, analysisVersion: derived.analysis.analysisVersion });
+        } catch (error) {
+          db.evidence.appendEvent(runtime.id, runtime.trialId, "ANALYSIS_DEFERRED", { classification: "LOGGING_FAILURE", error: error.message });
+        }
+        try {
+          const current = db.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(runtime.id)?.status;
+          if (current === "RAW_REPORT_LOCKED" && db.research.revealGate(runtime.id).eligible) {
+            void transitionSession(runtime.id, "REVEAL_ELIGIBLE", {
+              trialId: runtime.trialId,
+              eventType: "REVEAL_ELIGIBLE",
+              revealEligible: true,
+              payload: { gate: "FULL_RESEARCH_GATE" },
+            }, { evidence: { gate: "FULL_RESEARCH_GATE" } }).then(() => {
+              db.research.updatePhases(runtime.id, { revealStatus: "ELIGIBLE", sessionLifecycle: "REVEAL_ELIGIBLE" });
+              runtime.controller = new SessionController("REVEAL_ELIGIBLE", { sessionId: runtime.id, trialId: runtime.trialId });
+            }).catch((error) => db.evidence.appendEvent(runtime.id, runtime.trialId, "REVEAL_GATE_PERSISTENCE_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" }));
+          }
+        } catch (error) {
+          db.evidence.appendEvent(runtime.id, runtime.trialId, "REVEAL_GATE_EVALUATION_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" });
+        }
+      },
+      onFailure: (failure) => failRuntimeClosed(runtime, "SCHEDULER_EVIDENCE_FAILURE", failure),
+    });
+    runtime.scheduler = scheduler;
+    return scheduler;
+  }
   const scheduler = new SessionScheduler(config, {
     sessionId: runtime.id,
     trialId: runtime.trialId,
-    outputProvider: () => assignOutcome(
-      runtime.profile,
+    outputProvider: () => sampleOutcome(
+      runtime.profile.outcomeSpace,
       runtime.randomSources[RANDOM_SOURCES.MACHINE_OUTPUT],
     ),
     onOutput: (record) => db.evidence.recordOutput(runtime.id, {
@@ -688,6 +844,24 @@ function createScheduler(runtime) {
   return scheduler;
 }
 
+function isTemporalResearchDefinition(definition = {}) {
+  const spaceType = String(definition.outcomeSpace?.type || "BINARY").toUpperCase();
+  const windows = Array.isArray(definition.temporalAnalysis?.windows) ? definition.temporalAnalysis.windows : [];
+  return definition.mode === EXPERIMENT_MODES.FUTURE_TARGET ||
+    String(definition.mode || "INFLUENCE").toUpperCase() !== EXPERIMENT_MODES.INFLUENCE ||
+    spaceType !== "BINARY" ||
+    (definition.primaryEndpoint && definition.primaryEndpoint !== "EXACT_SLOT") ||
+    windows.some((window) => window?.enabled !== false && (
+      Number(window?.preMs || 0) > 0 ||
+      Number(window?.postMs || 0) > 0 ||
+      (window?.exactSequence !== null && window?.exactSequence !== undefined) ||
+      (window?.sequenceStart !== null && window?.sequenceStart !== undefined) ||
+      (window?.sequenceEnd !== null && window?.sequenceEnd !== undefined) ||
+      (window?.sequenceOffsetStart !== null && window?.sequenceOffsetStart !== undefined) ||
+      (window?.sequenceOffsetEnd !== null && window?.sequenceOffsetEnd !== undefined)
+    ));
+}
+
 function persistedAnalysis(runtime) {
   const sessionIdValue = typeof runtime === "string" ? runtime : runtime.id;
   const sessionRow = db.db.prepare("SELECT profile_id,profile_version,hidden_objective FROM sessions WHERE session_id=?").get(sessionIdValue);
@@ -697,9 +871,59 @@ function persistedAnalysis(runtime) {
   const objective = typeof runtime === "string"
     ? parseStoredJson(sessionRow?.hidden_objective, sessionRow?.hidden_objective)
     : runtime.objective;
+  const researchDefinition = db.research?.getDefinition(sessionIdValue, { full: true })?.definition ||
+    (typeof runtime === "object" ? runtime.researchDefinition : null);
   const rows = db.db
-    .prepare("SELECT output_seq,region,value_json FROM machine_outputs WHERE session_id=? ORDER BY output_seq")
+    .prepare("SELECT output_seq,trial_id,region,value_json,scheduled_utc,scheduled_monotonic_ns,actual_utc,actual_monotonic_ns,lateness_ms,timing_status FROM machine_outputs WHERE session_id=? ORDER BY output_seq")
     .all(sessionIdValue);
+  const genericSpace = researchDefinition?.outcomeSpace || profile?.outcomeSpace || { type: "BINARY" };
+  const genericMode = researchDefinition?.mode || profile?.mode || EXPERIMENT_MODES.INFLUENCE;
+  const genericEndpoint = researchDefinition?.primaryEndpoint || profile?.analysis?.primaryEndpoint || "EXACT_SLOT";
+  const hasTemporalWindows = Boolean(researchDefinition?.temporalAnalysis?.windows?.some?.((window) =>
+    window?.enabled !== false && (
+      Number(window?.preMs || 0) > 0 ||
+      Number(window?.postMs || 0) > 0 ||
+      (window?.exactSequence !== null && window?.exactSequence !== undefined) ||
+      (window?.sequenceStart !== null && window?.sequenceStart !== undefined) ||
+      (window?.sequenceEnd !== null && window?.sequenceEnd !== undefined) ||
+      (window?.sequenceOffsetStart !== null && window?.sequenceOffsetStart !== undefined) ||
+      (window?.sequenceOffsetEnd !== null && window?.sequenceOffsetEnd !== undefined)
+    )));
+  if (genericMode !== EXPERIMENT_MODES.INFLUENCE || genericSpace.type !== "BINARY" || genericEndpoint !== "EXACT_SLOT" || hasTemporalWindows || runtime?.scheduler instanceof TemporalEvidenceScheduler) {
+    const outputs = rows.map((row) => ({
+      sessionId: sessionIdValue,
+      trialId: row.trial_id,
+      sequence: row.output_seq,
+      outputSeq: row.output_seq,
+      value: JSON.parse(row.value_json),
+      region: row.region,
+      scheduledUtc: row.scheduled_utc,
+      scheduledMonotonicNs: row.scheduled_monotonic_ns,
+      actualUtc: row.actual_utc,
+      actualMonotonicNs: row.actual_monotonic_ns,
+      latenessMs: row.lateness_ms,
+      status: row.timing_status,
+    }));
+    const temporal = analyzeTemporalEvidence({
+      outputs,
+      target: objective,
+      outcomeSpace: genericSpace,
+      primaryEndpoint: genericEndpoint,
+      targetSequence: researchDefinition?.targetDefinition?.targetSequence ?? null,
+      targetScheduledUtc: researchDefinition?.targetDefinition?.scheduledUtc || null,
+      targetScheduledMonotonicNs: researchDefinition?.targetDefinition?.scheduledMonotonicNs || null,
+      primaryWindow: researchDefinition?.temporalAnalysis?.windows?.find?.((window) => window.id === (researchDefinition?.temporalAnalysis?.primaryWindowId || "primary")) || researchDefinition?.temporalAnalysis?.windows?.[0] || {},
+      analysisWindows: researchDefinition?.temporalAnalysis?.windows || null,
+      plannedCount: Number(runtime?.scheduler?.plan?.totalCount || rows.length),
+      eligibleCount: rows.filter((row) => row.timing_status !== "MISSED").length,
+      missedCount: rows.filter((row) => row.timing_status === "MISSED").length,
+      analysisVersion: researchDefinition?.temporalAnalysis?.version || "temporal-analysis-v1",
+    });
+    return {
+      analysis: temporal,
+      input: { requested: objective, outcomeSpace: genericSpace, endpoint: genericEndpoint, outputs },
+    };
+  }
   const blockSize = Number(profile?.output?.blockSize || 1);
   const preCount = Number(profile?.output?.preBlocks || 0) * blockSize;
   const primaryCount = Number(profile?.output?.primaryBlocks || 0) * blockSize;
@@ -814,19 +1038,28 @@ async function formalReturn(runtime) {
         status: "TIMING_DEVIATION",
       });
     }
+    // Any definition with committed temporal windows (including an
+    // EXACT_SLOT primary) keeps machine evidence alive after the participant
+    // returns.  Only the legacy non-temporal binary scheduler is allowed to
+    // interrupt here, and only because its evidence plan is already tied to
+    // the participant interaction.
+    const evidenceContinuesAfterReturn = isTemporalResearchDefinition(runtime.researchDefinition) ||
+      runtime.scheduler instanceof TemporalEvidenceScheduler;
     requestAudioStop(runtime, "formal_return");
-    if (["RUNNING", "COMMITTED"].includes(runtime.scheduler?.status))
+    if (evidenceContinuesAfterReturn) runtime.scheduler?.endParticipantPhase?.("formal_return");
+    else if (["RUNNING", "COMMITTED"].includes(runtime.scheduler?.status))
       runtime.scheduler.interrupt("formal return requested");
     const schedulerResult = runtime.scheduler?.getResult?.() || null;
     const schedulerExpected = Number(runtime.scheduler?.plan?.totalCount || 0);
     const schedulerGenerated = Number(schedulerResult?.generatedCount ?? runtime.scheduler?.outputs?.length ?? 0);
     const schedulerDeviation = Boolean(
       runtime.scheduler &&
+      !evidenceContinuesAfterReturn &&
       schedulerExpected > 0 &&
       (schedulerResult?.status !== "COMPLETE" || schedulerGenerated < schedulerExpected),
     );
     const earlyReturnDeviation = Boolean(runtime.protocolStageController && !runtime.protocolStageController.returnCueObserved);
-    if ((schedulerDeviation || earlyReturnDeviation) && runtime.controller.state === "RUNNING") {
+    if ((schedulerDeviation || earlyReturnDeviation) && runtime.controller.state === "RUNNING" && !evidenceContinuesAfterReturn) {
       await transitionSession(runtime.id, "TIMING_DEVIATION", {
         trialId: runtime.trialId,
         eventType: "TIMING_DEVIATION",
@@ -870,7 +1103,7 @@ async function formalReturn(runtime) {
             frameCount: finalization.totalFrames,
             format,
           });
-        if (!db.analyses.get(runtime.id))
+        if (!evidenceContinuesAfterReturn && !db.analyses.get(runtime.id))
           db.analyses.save(runtime.id, derived.analysis, {
             input: derived.input,
             analysisVersion: derived.analysis.analysisVersion,
@@ -924,7 +1157,12 @@ async function formalReturn(runtime) {
         });
       },
     });
-    powerManager.stop();
+    if (evidenceContinuesAfterReturn) {
+      db.research.updatePhases(runtime.id, { participantPhaseStatus: "ENDED", sessionLifecycle: "RETURNED", evidencePhaseStatus: runtime.scheduler?.evidencePhase || "RUNNING" });
+      runtime.participantPhase = "ENDED";
+    }
+    if (!evidenceContinuesAfterReturn || runtime.scheduler?.status !== "RUNNING")
+      powerManager.stop();
     runtime.protocolStageController?.stop("formal_return");
     runtime.returned = true;
     return sessionDto(runtime.id);
@@ -1131,7 +1369,11 @@ function registerSessionHandlers() {
       full: true,
       paginated: value.paginated === true,
       offset: value.offset === undefined ? 0 : positiveInteger(value.offset, "output offset", { min: 0 }),
-      limit: value.limit === undefined ? undefined : positiveInteger(value.limit, "output page size", { min: 1, max: 5_000 }),
+      // Never allow an IPC caller to materialize an unbounded machine-output
+      // result.  Renderer/report consumers must page large evidence ledgers;
+      // the same 5,000-row ceiling is used for an omitted limit and an
+      // explicit page request.
+      limit: value.limit === undefined ? 5_000 : positiveInteger(value.limit, "output page size", { min: 1, max: 5_000 }),
     };
     return db.evidence.outputs(id, options);
   });
@@ -1146,7 +1388,37 @@ function registerSessionHandlers() {
     const requestedProfileVersion = value.profileVersion === undefined ? undefined : positiveInteger(value.profileVersion, "profile version");
     const profile = db.profiles.getVersion(profileId, requestedProfileVersion);
     if (!profile) throw new Error(`Profile version is not available in SQLite: ${profileId} v${requestedProfileVersion ?? "active"}.`);
-    const profileValidation = db.profiles.validate(profile);
+    const requestedMode = String(value.mode || value.experimentMode || profile.mode || EXPERIMENT_MODES.INFLUENCE).toUpperCase();
+    if (!Object.values(EXPERIMENT_MODES).includes(requestedMode)) throw new Error(`Unsupported experiment mode: ${requestedMode}.`);
+    const requestedPrediction = value.prediction ?? value.targetDefinition?.prediction ?? null;
+    if (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET && (requestedPrediction === null || requestedPrediction === undefined || String(requestedPrediction).trim() === ""))
+      throw new Error("FUTURE_TARGET requires a participant prediction committed before START.");
+    let effective;
+    try {
+      effective = resolveEffectiveConfiguration({
+        app: settings.researchDefaults || {},
+        // Keep profile values as the middle-precedence layer.  Session
+        // overrides are supplied separately below so omitted nested fields
+        // (for example a profile cadence) are not erased accidentally.
+        profile: { ...profile, mode: profile.mode || requestedMode, outcomeSpace: profile.outcomeSpace, temporalAnalysis: profile.analysis },
+        session: {
+          mode: requestedMode,
+          outcomeSpace: value.outcomeSpace,
+          temporalAnalysis: value.temporalAnalysis,
+          targetDefinition: {
+            ...(value.targetDefinition && typeof value.targetDefinition === "object" ? value.targetDefinition : {}),
+            ...(value.target !== undefined ? { target: value.target } : {}),
+            prediction: requestedPrediction,
+          },
+          rng: value.rng,
+          primaryEndpoint: value.primaryEndpoint,
+          outputCadence: value.outputCadence,
+        },
+      });
+    } catch (error) {
+      throw new Error(`Research configuration is invalid: ${error.message}`);
+    }
+    const profileValidation = db.profiles.validate({ ...profile, mode: requestedMode, outcomeSpace: effective.outcomeSpace });
     if (!profileValidation.valid) throw new Error(`Profile validation failed: ${profileValidation.errors.join("; ")}`);
     if (profile.isDraft || profile.status !== "ACTIVE" || profile.isActive !== true)
       throw new Error(`Formal session requires an active, non-draft profile: ${profile.id} v${profile.version}.`);
@@ -1160,15 +1432,92 @@ function registerSessionHandlers() {
     if (!recipeValidation.valid) throw new Error(`Audio recipe validation failed: ${recipeValidation.errors.join("; ")}`);
     if (recipe.isDraft || recipe.status !== "ACTIVE" || recipe.isActive !== true || recipe.incomplete)
       throw new Error(`Formal session requires an active, complete recipe: ${recipe.recipeId} v${recipe.version}.`);
-    const provider = profile.rng?.provider || "OS_CSPRNG";
+    // RNG provider is part of the effective (session > profile > app)
+    // research definition.  Reading only the profile silently ignored a
+    // deliberate session/application override and could make the persisted
+    // provenance disagree with the source that actually generated evidence.
+    const provider = effective.rng?.provider || profile.rng?.provider || "OS_CSPRNG";
     const rootSeed = provider === "DETERMINISTIC_PRNG_TEST"
       ? stringValue(value.seed, "deterministic root seed", { max: 512 })
       : crypto.randomBytes(32);
     const randomSources = createRandomSources(rootSeed, { provider });
-    const objective = assignOutcome(profile, randomSources[RANDOM_SOURCES.TARGET_ASSIGNMENT]);
-    const participantTarget = requestInstruction(profile, objective);
+    const requestedTarget = value.target ?? value.targetDefinition?.target;
+    let objective = requestedMode === EXPERIMENT_MODES.FUTURE_TARGET
+      ? null
+      : requestedTarget === undefined || requestedTarget === null
+        ? assignOutcome({ ...profile, outcomeSpace: effective.outcomeSpace }, randomSources[RANDOM_SOURCES.TARGET_ASSIGNMENT])
+        : requestedTarget;
+    if (objective !== null && !containsOutcome(effective.outcomeSpace, objective))
+      throw new Error("The committed target must belong to the selected outcome space.");
+    const participantTarget = objective === null
+      ? (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? `Prediction committed: ${String(requestedPrediction)}` : null)
+      : requestedMode === EXPERIMENT_MODES.CONTROL
+        ? (profile.timing?.controlWording || "Control condition: observe the scheduled protocol neutrally; no participant target is requested.")
+        : requestedMode === EXPERIMENT_MODES.SHAM
+          ? (profile.timing?.shamWording || "Sham condition: observe the scheduled protocol neutrally.")
+          : requestInstruction({ ...profile, outcomeSpace: effective.outcomeSpace }, objective);
     const audio = completeAudioRecipe(recipe, randomSources[RANDOM_SOURCES.AUDIO_NOISE], value.sampleRate, profile.protocol);
-    const timing = timingPlan(profile);
+    const timing = timingPlan({ ...profile, timing: value.timing || profile.timing });
+    const futureTargetUtc = requestedMode === EXPERIMENT_MODES.FUTURE_TARGET
+      ? (value.futureTargetUtc || value.targetDefinition?.scheduledUtc || new Date(Date.now() + finiteNumber(value.targetDelayMs === undefined ? 24 * 60 * 60 * 1000 : value.targetDelayMs, "targetDelayMs", { min: 1, max: 365 * 24 * 60 * 60 * 1000 })).toISOString())
+      : timing.scheduledUtc;
+    if (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET && !Number.isFinite(Date.parse(String(futureTargetUtc))))
+      throw new Error("FUTURE_TARGET requires a valid futureTargetUtc.");
+    if (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET && Date.parse(String(futureTargetUtc)) <= Date.now())
+      throw new Error("FUTURE_TARGET scheduled anchor must be in the future.");
+    if (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET && !containsOutcome(effective.outcomeSpace, requestedPrediction))
+      throw new Error("The committed future prediction must belong to the selected outcome space.");
+    const configuredTargetSequence = value.targetDefinition?.targetSequence ?? effective.targetDefinition.targetSequence;
+    const committedTemporalWindows = Array.isArray(effective.temporalAnalysis?.windows)
+      ? effective.temporalAnalysis.windows
+      : [];
+    const hasCommittedDurationWindow = committedTemporalWindows.some((window) => window?.enabled !== false && (
+      Number(window?.preMs || 0) > 0 || Number(window?.postMs || 0) > 0
+    ));
+    const committedPrimaryWindow = committedTemporalWindows.find((window) => window.id === (effective.temporalAnalysis?.primaryWindowId || "primary"))
+      || committedTemporalWindows[0]
+      || {};
+    const committedIntervalMs = Number(effective.temporalAnalysis?.intervalMs ?? profile.output?.intervalMs ?? schedulerIntervalMs(profile));
+    const hasRelativeSequenceWindow = committedTemporalWindows.some((window) => window?.enabled !== false && (
+      window?.sequenceOffsetStart !== null && window?.sequenceOffsetStart !== undefined ||
+      window?.sequenceOffsetEnd !== null && window?.sequenceOffsetEnd !== undefined
+    ));
+    // With a target-anchored duration window, the exact slot is the explicit
+    // anchor after all scheduled pre-target opportunities.  Do not reuse the
+    // profile's historical block count when a session override changed the
+    // cadence/window geometry.
+    const defaultExactTargetSequence = effective.primaryEndpoint === "EXACT_SLOT"
+      ? hasCommittedDurationWindow && Number.isFinite(committedIntervalMs) && committedIntervalMs > 0
+        ? Math.ceil(Number(committedPrimaryWindow.preMs || 0) / committedIntervalMs)
+        : Number(profile.output?.preBlocks || 0) * Number(profile.output?.blockSize || 1)
+      : null;
+    const defaultTemporalTargetSequence = hasRelativeSequenceWindow && Number.isFinite(committedIntervalMs) && committedIntervalMs > 0
+      ? hasCommittedDurationWindow
+        ? Math.ceil(Number(committedPrimaryWindow.preMs || 0) / committedIntervalMs)
+        : Number(profile.output?.preBlocks || 0) * Number(profile.output?.blockSize || 1)
+      : null;
+    const researchDefinition = {
+      ...effective,
+      mode: requestedMode,
+      outcomeSpace: effective.outcomeSpace,
+      cardinality: outcomeSpaceSize(effective.outcomeSpace),
+      targetDefinition: {
+        ...effective.targetDefinition,
+        target: requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? null : objective,
+        mode: requestedMode,
+        anchor: value.targetDefinition?.anchor || effective.targetDefinition.anchor || (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? "ABSOLUTE_UTC" : "PARTICIPANT_REQUEST"),
+        scheduledUtc: futureTargetUtc,
+        scheduledMonotonicNs: value.targetDefinition?.scheduledMonotonicNs ?? null,
+        targetSequence: configuredTargetSequence ?? defaultExactTargetSequence ?? defaultTemporalTargetSequence,
+        prediction: requestedPrediction ?? effective.targetDefinition.prediction ?? null,
+        semantics: requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? "GENERATE_AT_ANCHOR" : "COMMITTED_BEFORE_PARTICIPATION",
+      },
+      temporalAnalysis: effective.temporalAnalysis,
+      revealPolicy: effective.revealPolicy || profile.reveal?.policy || "AFTER_EVIDENCE_COMPLETE",
+      profileId: profile.id,
+      profileVersion: profile.version,
+      rng: { provider, targetDomain: requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? RANDOM_SOURCES.FUTURE_TARGET : RANDOM_SOURCES.TARGET_ASSIGNMENT, machineDomain: RANDOM_SOURCES.MACHINE_OUTPUT, audioDomain: RANDOM_SOURCES.AUDIO_NOISE, analysisDomain: RANDOM_SOURCES.ANALYSIS_SIMULATION },
+    };
     const audioNonce = crypto.randomBytes(32).toString("hex");
     const deferredCommit = value.deferCommit === true;
     const created = db.beginSession(
@@ -1189,12 +1538,14 @@ function registerSessionHandlers() {
         engineVersion: ENGINE_VERSION,
         audioNonce,
         deferCommit: deferredCommit,
+        researchDefinition,
       },
     );
     const runtime = {
       id: created.id,
       trialId: created.trial,
       profile,
+      researchDefinition,
       objective,
       participantTarget,
       audio,
@@ -1215,12 +1566,38 @@ function registerSessionHandlers() {
       scheduler: null,
       schedulerResult: null,
       startedUtc: null,
+      participantPhase: "READY",
+      evidencePhase: "NOT_STARTED",
+      prediction: requestedPrediction,
     };
     runtimes.set(created.id, runtime);
     return {
       sessionId: created.id,
       trialId: created.trial,
       participantTarget,
+      ...(requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? { prediction: requestedPrediction } : {}),
+      mode: requestedMode,
+      outcomeSpace: effective.outcomeSpace.type === "INTEGER_RANGE" ? effective.outcomeSpace : { type: effective.outcomeSpace.type, values: effective.outcomeSpace.values },
+      cardinality: effective.cardinality,
+      compatibilityFingerprint: effective.compatibilityFingerprint,
+      researchDefinition: {
+        mode: requestedMode,
+        cardinality: effective.cardinality,
+        outcomeSpace: effective.outcomeSpace,
+        targetAnchor: researchDefinition.targetDefinition.anchor,
+        targetDefinition: {
+          anchor: researchDefinition.targetDefinition.anchor,
+          target: researchDefinition.targetDefinition.target,
+          scheduledUtc: researchDefinition.targetDefinition.scheduledUtc,
+          targetSequence: researchDefinition.targetDefinition.targetSequence,
+          semantics: researchDefinition.targetDefinition.semantics,
+        },
+        outputCadence: effective.outputCadence,
+        primaryEndpoint: effective.primaryEndpoint,
+        temporalAnalysis: effective.temporalAnalysis,
+        configHash: effective.configHash,
+        compatibilityFingerprint: effective.compatibilityFingerprint,
+      },
       timing,
       status: created.status,
       deferredCommit,
@@ -1373,6 +1750,16 @@ function registerSessionHandlers() {
       runtime.startedUtc = new Date().toISOString();
       powerManager.start("prevent-app-suspension");
       const scheduler = createScheduler(runtime);
+      // Keep the queryable research projection in lock-step with the
+      // lifecycle event.  The session controller is authoritative for the
+      // persisted lifecycle, while this projection exposes the orthogonal
+      // participant/evidence phases to reports and recovery without leaking
+      // any hidden objective.
+      db.research?.updatePhases(id, {
+        sessionLifecycle: "RUNNING",
+        participantPhaseStatus: "READY",
+        evidencePhaseStatus: "SCHEDULED",
+      });
       return {
         sessionId: id,
         status: "RUNNING",
@@ -1460,10 +1847,15 @@ function registerSessionHandlers() {
           void failRuntimeClosed(runtime, "PROTOCOL_COMPLETION_PERSISTENCE_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" });
         }
       },
-    });
+      });
       runtime.protocolStageController.start(runtime.protocolAnchor);
       const result = await runtime.scheduler?.start();
       runtime.schedulerResult = result ? clone(result) : null;
+      db.research?.updatePhases(id, {
+        sessionLifecycle: "RUNNING",
+        participantPhaseStatus: runtime.scheduler?.participantPhase || "ACTIVE",
+        evidencePhaseStatus: runtime.scheduler?.evidencePhase || "RUNNING",
+      });
       if (runtime.scheduler?.plan.mode === SCHEDULER_MODES.PREGENERATED_HIDDEN) {
         for (const record of runtime.scheduler.getHiddenOutputsForAuthority()) {
           db.evidence.recordOutput(id, {
@@ -1520,6 +1912,11 @@ function registerSessionHandlers() {
         error: reason,
         payload: { error: reason, processorErrors: value.processorErrors || [] },
       }, { recoveryState: "AUDIO_WORKLET_FAILURE", evidence: { error: reason } });
+      db.research?.updatePhases(id, {
+        sessionLifecycle: "FAILED",
+        participantPhaseStatus: "FAILED",
+        evidencePhaseStatus: "FAILED",
+      });
     } catch (error) {
       await failRuntimeClosed(runtime, "AUDIO_FAILURE_PERSISTENCE_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" });
       throw error;
@@ -1610,6 +2007,67 @@ function registerSessionHandlers() {
   handle("audio:block", () => {
     throw new Error("Arbitrary renderer audio bytes are not accepted; the final digest must come from AUDIO_FINALIZED.");
   });
+  handle("sessions:end-participant-phase", (payload) => {
+    const value = objectPayload(payload, "participant phase end request", { maxBytes: 64_000 });
+    const id = sessionId(value);
+    const runtime = runtimes.get(id);
+    if (!runtime || !(runtime.scheduler instanceof TemporalEvidenceScheduler)) throw new Error("Participant phase separation is available only for temporal evidence sessions.");
+    const phase = runtime.scheduler.endParticipantPhase(stringValue(value.reason || "participant_return", "phase end reason", { max: 256 }));
+    db.research.updatePhases(id, { participantPhaseStatus: phase });
+    return { sessionId: id, participantPhase: phase, evidencePhase: runtime.scheduler.evidencePhase, evidenceContinues: runtime.scheduler.status === "RUNNING" };
+  });
+  handle("sessions:abort-evidence", async (payload) => {
+    const value = objectPayload(payload, "evidence abort request", { maxBytes: 64_000 });
+    const id = sessionId(value);
+    if (value.confirmed !== true && value.confirm !== true) throw new Error("Explicit confirmation is required to abort evidence collection.");
+    const runtime = runtimes.get(id);
+    if (!runtime || !(runtime.scheduler instanceof TemporalEvidenceScheduler)) throw new Error("Evidence abortion is available only for temporal evidence sessions.");
+    const currentStatus = sessionStatus(id);
+    const evidencePhase = String(runtime.scheduler.evidencePhase || "").toUpperCase();
+    // Abort is only meaningful while the committed evidence window is still
+    // active.  A late click/race after normal completion must not rewrite a
+    // completed/reveal-eligible session's orthogonal projection to ABORTED.
+    // Repeated aborts of an already-aborted run remain idempotent.
+    if (evidencePhase === "COMPLETE" || evidencePhase === "MISSED" || ["COMPLETE", "REVEAL_ELIGIBLE", "REVEALED"].includes(currentStatus))
+      throw new Error("Evidence collection is already complete; abort is unavailable.");
+    const result = runtime.scheduler.abortEvidence(stringValue(value.reason || "owner_abort", "evidence abort reason", { max: 256 }));
+    // Evidence abortion is an explicit destructive lifecycle action, not a
+    // renderer-only scheduler flag.  Persist the orthogonal evidence
+    // projection and move the session projection through the authoritative
+    // state graph so restart/recovery cannot mistake an aborted run for an
+    // active one.  The transition remains legal from RUNNING, RETURNED and
+    // report-lock states, preserving evidence already collected.
+    if (["RUNNING", "TIMING_DEVIATION", "RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED"].includes(currentStatus)) {
+      await transitionSession(id, "ABORTED", {
+        trialId: runtime.trialId,
+        eventType: "EVIDENCE_ABORTED",
+        aborted: true,
+        reason: value.reason || "owner_abort",
+        payload: { classification: result.abortClassification, noBackfill: true },
+      }, { evidence: { classification: result.abortClassification, noBackfill: true } });
+    }
+    db.research.updatePhases(id, { evidencePhaseStatus: "ABORTED", sessionLifecycle: "ABORTED", revealStatus: "BLOCKED" });
+    runtime.controller = new SessionController("ABORTED", { sessionId: id, trialId: runtime.trialId });
+    try { powerManager?.stop(); } catch {}
+    return { sessionId: id, status: result.status, evidencePhase: result.evidencePhase, abortClassification: result.abortClassification, noBackfill: true };
+  });
+  handle("research:definition", (payload) => {
+    const id = sessionId(payload);
+    return db.research.getDefinition(id, { full: isRevealed(id), revealed: isRevealed(id) });
+  });
+  handle("research:phases", (payload) => db.research.getPhases(sessionId(payload)));
+  handle("future-target:get", (payload) => {
+    const id = sessionId(payload);
+    return db.research.getTargetGeneration(id, { full: isRevealed(id), revealed: isRevealed(id) });
+  });
+  handle("research:occurrences", (payload) => {
+    const value = objectPayload(payload, "occurrence request", { maxBytes: 32_000 });
+    const id = identifier(value.id, "session id");
+    if (!isRevealed(id)) return { sessionId: id, redacted: true, records: [] };
+    const limit = value.limit === undefined ? 5_000 : positiveInteger(value.limit, "occurrence page size", { min: 1, max: 5_000 });
+    const offset = value.offset === undefined ? 0 : positiveInteger(value.offset, "occurrence offset", { min: 0 });
+    return { sessionId: id, redacted: false, ...db.research.occurrences(id, { full: true, revealed: true, paginated: true, limit, offset }) };
+  });
 }
 
 function registerReportHandlers() {
@@ -1618,9 +2076,19 @@ function registerReportHandlers() {
     const id = sessionId(value);
     const report = objectPayload(value.report || {}, "raw report", { maxBytes: 512_000 });
     const state = sessionStatus(id);
-    if (!["RETURNED", "RAW_REPORT_DRAFT"].includes(state))
+    if (!["RETURNED", "RAW_REPORT_DRAFT", "ABORTED"].includes(state))
       throw new Error("A report cannot be drafted before formal return.");
-    if (state === "RETURNED") {
+    if (state === "ABORTED") {
+      // An evidence abort is terminal for machine collection but must not
+      // discard the participant's subjective report. Keep the session
+      // lifecycle classification ABORTED and persist the mutable report
+      // directly under its orthogonal report projection.
+      db.db.transaction(() => {
+        db.saveReportDraft(id, report);
+        db.evidence.appendEvent(id, null, "RAW_REPORT_DRAFT_SAVED_AFTER_ABORT", { saved: true, evidenceAborted: true });
+        db.research.updatePhases(id, { reportStatus: "DRAFT", sessionLifecycle: "ABORTED" });
+      })();
+    } else if (state === "RETURNED") {
       await transitionSession(id, "RAW_REPORT_DRAFT", {
         eventType: "RAW_REPORT_DRAFT_SAVED",
         reportDraft: true,
@@ -1662,26 +2130,40 @@ function registerReportHandlers() {
     const schemaVersion = reportSchemaVersion(id);
     const result = db.lockRawReportAtomic(id, report, schemaVersion);
     const runtime = runtimes.get(id);
-    if (runtime) runtime.controller = new SessionController("REVEAL_ELIGIBLE", { sessionId: id, trialId: runtime.trialId });
-    return { sessionId: id, locked: true, rawReportLocked: true, revealEligible: result.revealEligible !== false, revealed: false, alreadyLocked: result.alreadyLocked === true, schemaVersion: result.schemaVersion };
+    if (runtime) {
+      const persistedStatus = sessionStatus(id);
+      runtime.controller = new SessionController(
+        persistedStatus === "ABORTED" ? "ABORTED" : result.revealEligible ? "REVEAL_ELIGIBLE" : "RAW_REPORT_LOCKED",
+        { sessionId: id, trialId: runtime.trialId },
+      );
+    }
+    return { sessionId: id, locked: true, rawReportLocked: true, revealEligible: result.revealEligible === true, revealed: false, alreadyLocked: result.alreadyLocked === true, schemaVersion: result.schemaVersion };
   });
   handle("sessions:reveal", async (payload) => {
     const id = sessionId(payload);
-    const row = db.db.prepare("SELECT hidden_objective,participant_target,status FROM sessions WHERE session_id=?").get(id);
+    const row = db.db.prepare("SELECT hidden_objective,participant_target,status,(SELECT mode FROM research_definitions WHERE session_id=sessions.session_id) AS research_mode FROM sessions WHERE session_id=?").get(id);
     if (!row) throw new Error("Session not found.");
     if (row.status === "REVEALED" || row.status === "COMPLETE") throw new Error("Session has already been revealed.");
     if (row.status !== "REVEAL_ELIGIBLE") throw new Error("Reveal is not eligible until the raw report is locked.");
+    const researchMeta = db.db.prepare("SELECT mode,primary_endpoint,outcome_space_json,temporal_analysis_json FROM research_definitions WHERE session_id=?").get(id);
+    const strictResearchGate = requiresStrictResearchGate(researchMeta);
+    const researchGate = strictResearchGate ? db.research?.revealGate(id) : null;
+    if (researchGate && !researchGate.eligible) throw new Error(`Reveal is blocked until the committed evidence gate is complete: ${researchGate.missing.join(", ")}`);
     await transitionSession(id, "REVEALED", {
       eventType: "REVEALED",
       revealAuthorized: true,
       payload: { objective: row.hidden_objective },
     }, { evidence: { ownerAuthorizedReveal: true } });
+    db.research?.updatePhases(id, { revealStatus: "REVEALED", sessionLifecycle: "REVEALED" });
     const analysis = db.analyses.getFull(id)?.analysis || null;
     const objective = parseStoredJson(row.hidden_objective, row.hidden_objective);
+    const futureTarget = row.research_mode === "FUTURE_TARGET" ? db.research.getTargetGeneration(id, { full: true, revealed: true }) : null;
     return {
       sessionId: id,
       objective,
       participantTarget: row.participant_target,
+      ...(futureTarget ? { prediction: futureTarget.prediction } : {}),
+      ...(futureTarget ? { futureTarget } : {}),
       analysis,
       ...(analysis && typeof analysis === "object" ? analysis : {}),
       rawReportLocked: true,
@@ -1709,12 +2191,50 @@ function registerReportHandlers() {
   handle("analysis:run", (payload) => {
     const id = sessionId(payload);
     const status = sessionStatus(id);
-    if (!["RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEALED", "COMPLETE"].includes(status))
+    if (!["RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED", "REVEAL_ELIGIBLE", "REVEALED", "COMPLETE", "ABORTED"].includes(status))
       throw new Error("Analysis requires finalized machine output.");
     const runtime = runtimes.get(id);
     const derived = persistedAnalysis(runtime || id);
     const result = db.analyses.save(id, derived.analysis, { input: derived.input, analysisVersion: derived.analysis.analysisVersion });
     return isRevealed(id) ? result : { sessionId: id, present: true, redacted: true, version: result.version, analysisVersion: result.analysisVersion, createdUtc: result.createdUtc };
+  });
+  handle("aggregate:list", (payload) => {
+    const value = objectPayload(payload, "aggregate filters", { optional: true, maxBytes: 32_000 });
+    return db.research.listAggregates({ limit: value.limit || 100, offset: value.offset || 0, full: false });
+  });
+  handle("aggregate:get", (payload) => {
+    const value = objectPayload(payload);
+    return db.research.getAggregate(identifier(value.aggregateId || value.id, "aggregate id"), { full: true });
+  });
+  handle("aggregate:run", (payload) => {
+    const value = objectPayload(payload, "aggregate request", { maxBytes: 256_000 });
+    if (!Array.isArray(value.sessionIds) || value.sessionIds.length < 1 || value.sessionIds.length > 500) throw new Error("sessionIds must contain 1-500 sessions.");
+    const sessions = value.sessionIds.map((candidate) => {
+      const id = identifier(candidate, "session id");
+      if (!isRevealed(id)) throw new Error("Cross-session analysis requires revealed sessions; hidden target/output data cannot enter an aggregate.");
+      const definition = db.research.getDefinition(id, { full: true });
+      const analysis = db.analyses.getFull(id)?.analysis || persistedAnalysis(id).analysis;
+      const phases = db.research.getPhases(id);
+      const evidencePhase = phases?.evidencePhaseStatus || null;
+      return {
+        sessionId: id,
+        definition: definition?.definition || null,
+        compatibilityFingerprint: definition?.compatibilityFingerprint || null,
+        analysis,
+        phases,
+        evidencePhase,
+        completed: evidencePhase === "COMPLETE" || isRevealed(id),
+        deviated: ["ABORTED", "MISSED", "INCOMPLETE", "FAILED"].includes(String(evidencePhase || "").toUpperCase()),
+        committedDefinition: definition?.committed !== false,
+      };
+    });
+    const aggregate = aggregateCrossSession(sessions, {
+      workflow: value.workflow || "AGGREGATE",
+      compatibilityFingerprint: value.compatibilityFingerprint,
+      requireCompatible: value.requireCompatible !== false,
+      exploratory: value.exploratory === true,
+    });
+    return db.research.saveAggregate({ ...aggregate, definition: { sessionIds: value.sessionIds, compatibilityFingerprint: aggregate.compatibilityFingerprint } });
   });
   handle("annotations:add", (payload) => {
     const value = objectPayload(payload, "late annotation request", { maxBytes: 512_000 });
@@ -1754,8 +2274,11 @@ async function selectedBackupInput(payload, title) {
 function registerServiceHandlers() {
   handle("settings:get", () => {
     const lastBackup = db.db.prepare("SELECT backup_id AS backupId,created_utc AS createdUtc,sha256,verified FROM backups ORDER BY created_utc DESC LIMIT 1").get() || null;
+    const persistedResearchDefaults = db.db.prepare("SELECT defaults_json,defaults_hash,updated_utc FROM research_defaults WHERE defaults_id=1").get() || null;
     return {
       ...settings,
+      researchDefaults: settings.researchDefaults || parseStoredJson(persistedResearchDefaults?.defaults_json, {}),
+      researchDefaultsHash: persistedResearchDefaults?.defaults_hash || null,
       appVersion: app.getVersion(),
       engineVersion: ENGINE_VERSION,
       audioVersion: AUDIO_VERSION,
@@ -1769,7 +2292,7 @@ function registerServiceHandlers() {
   });
   handle("settings:update", (payload) => {
     const value = objectPayload(payload, "settings", { maxBytes: 64_000 });
-    const allowed = new Set(["defaultProfileId", "theme", "telemetryHistory", "audioOutputLabel"]);
+    const allowed = new Set(["defaultProfileId", "theme", "telemetryHistory", "audioOutputLabel", "researchDefaults"]);
     for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`Unsupported setting: ${key}.`);
     const next = { ...settings };
     if (value.defaultProfileId !== undefined) next.defaultProfileId = identifier(value.defaultProfileId, "default profile id");
@@ -1779,6 +2302,13 @@ function registerServiceHandlers() {
       next.telemetryHistory = value.telemetryHistory;
     }
     if (value.audioOutputLabel !== undefined) next.audioOutputLabel = stringValue(value.audioOutputLabel, "audio output label", { max: 200, min: 0 });
+    if (value.researchDefaults !== undefined) {
+      const defaults = objectPayload(value.researchDefaults, "research defaults", { maxBytes: 128_000 });
+      let effective;
+      try { effective = resolveEffectiveConfiguration({ app: defaults }); } catch (error) { throw new Error(`Invalid research defaults: ${error.message}`); }
+      next.researchDefaults = clone(defaults);
+      db.db.prepare("INSERT INTO research_defaults(defaults_id,defaults_json,defaults_hash,updated_utc) VALUES(1,?,?,?) ON CONFLICT(defaults_id) DO UPDATE SET defaults_json=excluded.defaults_json,defaults_hash=excluded.defaults_hash,updated_utc=excluded.updated_utc").run(JSON.stringify(next.researchDefaults), effective.configHash, new Date().toISOString());
+    }
     persistSettings(next);
     settings = next;
     return clone(settings);
@@ -1812,6 +2342,10 @@ function registerServiceHandlers() {
     const id = sessionId(value);
     if (!isRevealed(id)) throw new Error("A complete session export is available only after actual reveal.");
     return db.exporter.exportSession(id, { includeHidden: true });
+  });
+  handle("exports:aggregate", (payload) => {
+    const value = objectPayload(payload, "aggregate export request", { maxBytes: 32_000 });
+    return db.exporter.exportAggregate(identifier(value.aggregateId || value.id, "aggregate id"));
   });
   handle("legacy:import", async (payload) => {
     const value = objectPayload(payload, "legacy import request", { optional: true, maxBytes: 10_000_000 });
@@ -1976,20 +2510,55 @@ function registerServiceHandlers() {
       ? stringValue(value.seed ?? "mip-calibration-fixture", "calibration seed", { max: 512 })
       : crypto.randomBytes(32);
     const source = createRandomSources(rootSeed, { provider })[RANDOM_SOURCES.MACHINE_OUTPUT];
-    const counts = { 0: 0, 1: 0 };
+    const outcomeSpace = normalizeOutcomeSpace(value.outcomeSpace || { type: "BINARY", values: [0, 1] });
+    const cardinality = outcomeSpaceSize(outcomeSpace);
+    const counts = Object.create(null);
     const started = process.hrtime.bigint();
-    for (let index = 0; index < samples; index += 1) counts[source.int(2)] += 1;
+    const observations = [];
+    const seenOutcomes = new Set();
+    let min = null;
+    let max = null;
+    for (let index = 0; index < samples; index += 1) {
+      const outcome = sampleOutcome(outcomeSpace, source);
+      // Preserve type identity for enumerated values such as `1` and `"1"`,
+      // while retaining the historical `"0"`/`"1"` keys for binary and
+      // numeric-range calibration output.
+      const key = outcomeSpace.type === "ENUMERATED_VALUES"
+        ? `${typeof outcome}:${String(outcome)}`
+        : String(outcome);
+      counts[key] = (counts[key] || 0) + 1;
+      seenOutcomes.add(key);
+      if (typeof outcome === "number" && Number.isFinite(outcome)) {
+        min = min === null ? outcome : Math.min(min, outcome);
+        max = max === null ? outcome : Math.max(max, outcome);
+      }
+      if (observations.length < 10_000) observations.push(outcome);
+    }
+    const unique = seenOutcomes.size;
+    const duplicateCount = samples - unique;
     const result = db.calibrations.save({
       provider,
       providerVersion: source.version,
       samples,
       counts,
-      statistics: { proportionOne: counts[1] / samples },
+      statistics: {
+        outcomeSpace,
+        cardinality,
+        duplicateCount,
+        uniqueCount: unique,
+        min,
+        max,
+        bucketCount: Object.keys(counts).length,
+        proportionOne: outcomeSpace.type === "BINARY" ? (counts["1"] || 0) / samples : undefined,
+      },
       metadata: {
         appVersion: APP_VERSION,
         engineVersion: ENGINE_VERSION,
         randomSource: source.metadata(),
         elapsedMonotonicNs: (process.hrtime.bigint() - started).toString(),
+        randomDomain: RANDOM_SOURCES.MACHINE_OUTPUT,
+        observationsHash: sha256(canonical({ preview: observations, previewCount: observations.length, samples, counts })),
+        observationsPreviewCount: observations.length,
       },
       integrityStatus: "VERIFIED",
     });
@@ -2006,12 +2575,62 @@ function registerHandlers() {
 
 async function recoverIncompleteSessions(reason = "application startup") {
   if (!db?.db?.open) return;
+  const temporalStates = ["RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED"];
+  const formalPlaceholders = FORMAL_ACTIVE_STATES.map(() => "?").join(",");
   const rows = db.db
-    .prepare(`SELECT session_id,status FROM sessions WHERE status IN (${FORMAL_ACTIVE_STATES.map(() => "?").join(",")}) ORDER BY created_utc`)
-    .all(...FORMAL_ACTIVE_STATES);
+    .prepare(`
+      SELECT s.session_id,s.status
+      FROM sessions s
+      LEFT JOIN research_definitions rd ON rd.session_id=s.session_id
+      WHERE s.status IN (${formalPlaceholders})
+         OR (rd.session_id IS NOT NULL AND s.status IN (?,?,?))
+      ORDER BY s.created_utc
+    `)
+    .all(...FORMAL_ACTIVE_STATES, ...temporalStates);
   for (const row of rows) {
     const id = row.session_id;
     try {
+      const researchDefinition = db.research?.getDefinition(id, { full: true })?.definition || null;
+      const researchTarget = researchDefinition?.targetDefinition || {};
+      const futureTarget = db.research?.getTargetGeneration(id, { full: true }) || null;
+      const temporal = Boolean(researchDefinition && isTemporalResearchDefinition(researchDefinition));
+      const phaseProjection = db.research?.getPhases(id) || {};
+      if (["RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED"].includes(row.status) && !temporal)
+        continue;
+      const futureScheduleStillPending = temporal &&
+        researchDefinition.mode === EXPERIMENT_MODES.FUTURE_TARGET &&
+        !futureTarget &&
+        researchTarget.scheduledUtc &&
+        Date.parse(researchTarget.scheduledUtc) > Date.now();
+      // A process restart must never backfill a future target. If its
+      // committed anchor has already passed and no generation event exists,
+      // persist one explicit MISSED event and leave the session incomplete.
+      if (researchDefinition?.mode === EXPERIMENT_MODES.FUTURE_TARGET && !futureTarget && researchTarget.scheduledUtc && Date.parse(researchTarget.scheduledUtc) <= Date.now()) {
+        db.research.recordTargetGeneration(id, {
+          prediction: researchTarget.prediction,
+          target: null,
+          scheduledUtc: researchTarget.scheduledUtc,
+          scheduledMonotonicNs: researchTarget.scheduledMonotonicNs,
+          actualUtc: new Date().toISOString(),
+          actualMonotonicNs: process.hrtime.bigint().toString(),
+          status: "MISSED",
+        });
+        db.evidence.appendEvent(id, trialIdFor(id), "FUTURE_TARGET_MISSED", {
+          classification: "TARGET_MISSED_DURING_APPLICATION_UNAVAILABLE",
+          scheduledUtc: researchTarget.scheduledUtc,
+          noBackfill: true,
+        });
+        db.research.updatePhases(id, { evidencePhaseStatus: "MISSED" });
+      } else if (researchDefinition?.mode === EXPERIMENT_MODES.FUTURE_TARGET && !futureTarget) {
+        db.research.updatePhases(id, { evidencePhaseStatus: "TARGET_PENDING" });
+      }
+      const evidencePhaseAfterClockCheck = String(db.research?.getPhases(id)?.evidencePhaseStatus || phaseProjection.evidencePhaseStatus || "").toUpperCase();
+      const recoveryDecision = classifyStartupRecovery({
+        status: row.status,
+        temporal,
+        evidencePhaseStatus: evidencePhaseAfterClockCheck,
+        futureScheduleStillPending,
+      });
       const integrity = db.integrity.verifySession(id, { persist: false });
       db.evidence.appendEvent(id, trialIdFor(id), "RECOVERY_CHECK", {
         classification: integrity.valid ? "PERSISTED_EVIDENCE_VALID" : "PERSISTED_EVIDENCE_REQUIRES_REVIEW",
@@ -2026,6 +2645,11 @@ async function recoverIncompleteSessions(reason = "application startup") {
         }, { recoveryState: "INTEGRITY_FAILED", evidence: { classification: "PERSISTED_EVIDENCE_REQUIRES_REVIEW" } });
         continue;
       }
+      // A process restart is an evidence interruption boundary.  Startup
+      // recovery may inspect and classify the persisted SQLite ledger, but it
+      // must never recreate an in-memory scheduler or silently resume formal
+      // collection.  This keeps the next output opportunity explicit and
+      // prevents wall-clock downtime from becoming an implicit backfill.
       if (row.status === "RUNNING") {
         await transitionSession(id, "INTERRUPTED", {
           eventType: "RUNTIME_INTERRUPTED",
@@ -2039,6 +2663,14 @@ async function recoverIncompleteSessions(reason = "application startup") {
           recoveryReason: reason,
           payload: { reason },
         }, { recoveryState: "RECOVERY_REQUIRED", evidence: { reason } });
+        if (temporal) {
+          db.research?.updatePhases(id, {
+            sessionLifecycle: "RECOVERY_REQUIRED",
+            evidencePhaseStatus: "INCOMPLETE",
+            revealStatus: "BLOCKED",
+            integrityStatus: integrity.valid ? "VERIFIED" : "FAILED",
+          });
+        }
       } else if (row.status === "TIMING_DEVIATION" || row.status === "INTERRUPTED" || row.status === "AUDIO_FAILED") {
         await transitionSession(id, "RECOVERY_REQUIRED", {
           eventType: "RECOVERY_REQUIRED",
@@ -2046,6 +2678,14 @@ async function recoverIncompleteSessions(reason = "application startup") {
           recoveryReason: reason,
           payload: { reason },
         }, { recoveryState: "RECOVERY_REQUIRED", evidence: { reason } });
+        if (temporal) {
+          db.research?.updatePhases(id, {
+            sessionLifecycle: "RECOVERY_REQUIRED",
+            evidencePhaseStatus: "INCOMPLETE",
+            revealStatus: "BLOCKED",
+            integrityStatus: integrity.valid ? "VERIFIED" : "FAILED",
+          });
+        }
       } else if (row.status === "AUDIO_PREPARING") {
         await transitionSession(id, "AUDIO_FAILED", {
           eventType: "AUDIO_RUNTIME_LOST",
@@ -2059,7 +2699,16 @@ async function recoverIncompleteSessions(reason = "application startup") {
           recoveryReason: reason,
           payload: { reason },
         }, { recoveryState: "RECOVERY_REQUIRED", evidence: { reason } });
-      } else if (["COMMITTED", "AUDIO_READY"].includes(row.status)) {
+        if (temporal) {
+          db.research?.updatePhases(id, {
+            sessionLifecycle: "RECOVERY_REQUIRED",
+            participantPhaseStatus: "FAILED",
+            evidencePhaseStatus: "FAILED",
+            revealStatus: "BLOCKED",
+            integrityStatus: integrity.valid ? "VERIFIED" : "FAILED",
+          });
+        }
+      } else if (["COMMITTED", "AUDIO_READY"].includes(row.status) && !futureScheduleStillPending) {
         await transitionSession(id, "ABORTED", {
           eventType: "RUNTIME_ABORTED",
           aborted: true,
@@ -2074,6 +2723,67 @@ async function recoverIncompleteSessions(reason = "application startup") {
           payload: { classification: "DRAFT_NOT_COMMITTED", reason },
         }, { recoveryState: "DRAFT_NOT_COMMITTED", evidence: { classification: "DRAFT_NOT_COMMITTED" } });
       }
+      const recoveredProjection = db.research?.getPhases(id) || {};
+      if (recoveryDecision.action === "MARK_INCOMPLETE_REVIEW") {
+        // Participant return/report entry is a valid orthogonal phase, but a
+        // process restart while evidence was active cannot be resumed without
+        // an explicit owner-controlled recovery action. Preserve every SQLite
+        // row, mark the evidence incomplete, and keep reveal hard-blocked.
+        const persistedOutputCount = Number(db.db.prepare("SELECT COUNT(*) AS count FROM machine_outputs WHERE session_id=?").get(id)?.count || 0);
+        const targetGeneration = db.research?.getTargetGeneration(id, { full: false }) || null;
+        db.db.transaction(() => {
+          db.sessions.setStatus(id, row.status, "PROCESS_INTERRUPTED");
+          db.research.updatePhases(id, {
+            sessionLifecycle: "RECOVERY_REQUIRED",
+            evidencePhaseStatus: "INCOMPLETE",
+            revealStatus: "BLOCKED",
+            integrityStatus: integrity.valid ? "VERIFIED" : "FAILED",
+          });
+          db.evidence.appendEvent(id, trialIdFor(id), "EVIDENCE_RECOVERY_REQUIRED", {
+            classification: "PERSISTED_TEMPORAL_RUNTIME_NOT_RESUMED",
+            reason,
+            resumed: false,
+            noBackfill: true,
+            persistedOutputCount,
+            targetGenerationStatus: targetGeneration?.status || null,
+          });
+        })();
+      } else if (recoveryDecision.action === "PRESERVE_SCHEDULE_METADATA") {
+        // A committed future-target schedule is retained as metadata only. No
+        // target or scheduler is materialized before an explicit START action.
+        db.db.transaction(() => {
+          db.sessions.setStatus(id, row.status, "SCHEDULE_PRESERVED_AFTER_RESTART");
+          db.research.updatePhases(id, {
+            sessionLifecycle: "COMMITTED",
+            evidencePhaseStatus: "TARGET_PENDING",
+            revealStatus: "BLOCKED",
+          });
+          db.evidence.appendEvent(id, trialIdFor(id), "FUTURE_TARGET_SCHEDULE_PRESERVED", {
+            classification: "SCHEDULE_METADATA_ONLY",
+            reason,
+            targetGenerated: false,
+            noBackfill: true,
+          });
+        })();
+      }
+      // If evidence completed just before a process loss, the scheduler's
+      // asynchronous reveal-eligibility edge may not have been persisted.
+      // Re-evaluate the complete gate during startup rather than leaving a
+      // permanently locked report that requires an unrelated user action.
+      const recoveredPhases = db.research?.getPhases(id) || {};
+      const recoveredStatus = db.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(id)?.status;
+      if (temporal && recoveredStatus === "RAW_REPORT_LOCKED" && recoveredPhases.evidencePhaseStatus === "COMPLETE") {
+        const gate = db.research.revealGate(id);
+        if (gate.eligible) {
+          await transitionSession(id, "REVEAL_ELIGIBLE", {
+            trialId: trialIdFor(id),
+            eventType: "REVEAL_ELIGIBLE_RECOVERED",
+            revealEligible: true,
+            payload: { gate: "FULL_RESEARCH_GATE", recovered: true },
+          }, { evidence: { gate: "FULL_RESEARCH_GATE", recovered: true } });
+          db.research.updatePhases(id, { revealStatus: "ELIGIBLE", sessionLifecycle: "REVEAL_ELIGIBLE" });
+        }
+      }
     } catch (error) {
       db.evidence.appendEvent(id, trialIdFor(id), "RECOVERY_ATTEMPT_FAILED", { reason, error: error.message });
     }
@@ -2082,9 +2792,23 @@ async function recoverIncompleteSessions(reason = "application startup") {
 
 async function stopForShutdown() {
   for (const runtime of runtimes.values()) {
+    if (runtime.scheduler instanceof TemporalEvidenceScheduler && runtime.scheduler.status === "RUNNING") {
+      // Shutdown is an authority boundary for every temporal scheduler. Pause
+      // the timer and persist the fact that the evidence clock stopped; the
+      // next process must classify the persisted session for explicit owner
+      // recovery and may not silently resume or backfill elapsed slots.
+      runtime.scheduler._clearTimer?.();
+      db.evidence.appendEvent(runtime.id, runtime.trialId, "EVIDENCE_SCHEDULER_PAUSED_FOR_SHUTDOWN", {
+        reason: "application shutdown",
+        participantPhase: runtime.scheduler.participantPhase,
+        evidencePhase: runtime.scheduler.evidencePhase,
+        resumed: false,
+        noBackfill: true,
+      });
+      continue;
+    }
     if (["RUNNING", "COMMITTED"].includes(runtime.scheduler?.status)) runtime.scheduler.interrupt("application shutdown");
   }
-  await recoverIncompleteSessions("application shutdown");
   powerManager?.stop();
   powerManager?.detach();
 }

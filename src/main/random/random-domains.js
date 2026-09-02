@@ -2,11 +2,14 @@ import crypto from "node:crypto";
 
 export const RANDOM_SOURCES = Object.freeze({
   TARGET_ASSIGNMENT: "TARGET_ASSIGNMENT",
+  FUTURE_TARGET: "FUTURE_TARGET",
   MACHINE_OUTPUT: "MACHINE_OUTPUT",
   AUDIO_NOISE: "AUDIO_NOISE",
+  ANALYSIS_SIMULATION: "ANALYSIS_SIMULATION",
 });
 
 export const RANDOM_DOMAINS = RANDOM_SOURCES;
+export const CSPRNG_MAX_EXCLUSIVE = Number.MAX_SAFE_INTEGER;
 const DOMAIN_VERSION = "hmac-sha256-domain-v1";
 const DOMAIN_PREFIX = "MIP_RANDOM_DOMAIN";
 const domainSet = new Set(Object.values(RANDOM_SOURCES));
@@ -82,8 +85,8 @@ export class DeterministicDomainSource {
   }
 
   int(maxExclusive) {
-    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1)
-      throw new Error("maxExclusive must be a positive safe integer");
+    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1 || maxExclusive > CSPRNG_MAX_EXCLUSIVE)
+      throw new Error(`maxExclusive must be a positive safe integer <= ${CSPRNG_MAX_EXCLUSIVE}`);
     const bound = 1n << 64n;
     const limit = bound - (bound % BigInt(maxExclusive));
     let value;
@@ -126,6 +129,13 @@ export class OsCsprngDomainSource {
         ? (...args) => cryptoProvider.randomInt(...args)
         : undefined,
     };
+    // A minimal injected provider may expose only randomInt for small-range
+    // tests.  Keep large-range sampling exact by falling back to the
+    // process-wide OS-backed randomBytes implementation rather than failing
+    // or introducing a non-CSPRNG source.
+    if (typeof cryptoProvider.randomBytes !== "function") {
+      this.cryptoProvider.randomBytes = (...args) => crypto.randomBytes(...args);
+    }
   }
 
   bytes(size) {
@@ -134,14 +144,28 @@ export class OsCsprngDomainSource {
   }
 
   int(maxExclusive) {
-    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1)
-      throw new Error("maxExclusive must be a positive safe integer");
-    if (typeof this.cryptoProvider.randomInt === "function")
-      return this.cryptoProvider.randomInt(maxExclusive);
-    const limit = 2 ** 32 - (2 ** 32 % maxExclusive);
+    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1 || maxExclusive > CSPRNG_MAX_EXCLUSIVE)
+      throw new Error(`maxExclusive must be a positive safe integer <= ${CSPRNG_MAX_EXCLUSIVE}`);
+    // Node's crypto.randomInt is rejection-sampling based and therefore
+    // unbiased.  Keep the injectable path for existing deterministic test
+    // fixtures; production providers also expose randomBytes, which is used
+    // below when randomInt is unavailable (or when a range exceeds Node's
+    // randomInt implementation limit).
+    // Node documents randomInt's upper bound as strictly less than 2^48;
+    // larger (still safe-integer) spaces use the explicit 64-bit rejection
+    // sampler below so the boundary is never delegated to a provider that
+    // would reject it.
+    if (typeof this.cryptoProvider.randomInt === "function" && maxExclusive < 2 ** 48) {
+      const value = this.cryptoProvider.randomInt(maxExclusive);
+      if (!Number.isSafeInteger(value) || value < 0 || value >= maxExclusive)
+        throw new Error("OS_CSPRNG provider returned an out-of-range integer");
+      return value;
+    }
+    const bound = 1n << 64n;
+    const limit = bound - (bound % BigInt(maxExclusive));
     let value;
-    do value = this.bytes(4).readUInt32BE(0); while (value >= limit);
-    return value % maxExclusive;
+    do value = this.bytes(8).readBigUInt64BE(0); while (value >= limit);
+    return Number(value % BigInt(maxExclusive));
   }
 
   bits(width) {

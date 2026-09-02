@@ -15,8 +15,8 @@ function writeJson(root, name, value) {
 function removeSecrets(value) {
   if (Array.isArray(value)) return value.map(removeSecrets);
   if (!value || typeof value !== "object") return value;
-  const hidden = new Set(["objective", "hiddenObjective", "hidden_objective", "actualObjective", "actualObjectiveState", "participantTarget", "participant_target", "canonicalConfig", "canonical_config", "configSnapshot", "manifestJson", "manifest_json", "material"]);
-  return Object.fromEntries(Object.entries(value).filter(([key]) => !hidden.has(key)).map(([key, child]) => [key, removeSecrets(child)]));
+  const hidden = new Set(["objective", "hiddenobjective", "hidden_objective", "actualobjective", "actualobjectivestate", "participanttarget", "participant_target", "canonicalconfig", "canonical_config", "configsnapshot", "manifestjson", "manifest_json", "material", "target", "value", "valuejson", "value_json", "recordhash", "record_hash", "outputhash", "output_hash", "finalfingerprint", "final_fingerprint", "streamdigest", "finalstreamdigest", "final_stream_digest", "analysishash", "analysis_hash", "inputhash", "input_hash"]);
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !hidden.has(key) && !hidden.has(key.replaceAll("-", "").toLowerCase())).map(([key, child]) => [key, removeSecrets(child)]));
 }
 
 export class SessionExporter {
@@ -44,8 +44,13 @@ export class SessionExporter {
     const rawReport = this.db.prepare("SELECT * FROM raw_reports_locked WHERE session_id=?").get(sessionId);
     const annotations = this.db.prepare("SELECT * FROM late_annotations WHERE session_id=? ORDER BY id").all(sessionId).map((row) => ({ ...row, payload: json(row.payload_json, {}) }));
     const analysis = this.db.prepare("SELECT * FROM analyses WHERE session_id=?").get(sessionId);
+    const researchDefinition = this.db.prepare("SELECT * FROM research_definitions WHERE session_id=?").get(sessionId);
+    const phases = this.db.prepare("SELECT * FROM session_phase_projections WHERE session_id=?").get(sessionId);
+    const occurrences = this.db.prepare("SELECT * FROM target_occurrences WHERE session_id=? ORDER BY output_seq").all(sessionId).map((row) => ({ ...row, value: json(row.value_json, null) }));
+    const futureTarget = this.db.prepare("SELECT * FROM future_target_events WHERE session_id=?").get(sessionId);
+    const aggregateMetadata = researchDefinition ? this.db.prepare("SELECT aggregate_id,compatibility_fingerprint,workflow,exploratory,analysis_hash,created_utc FROM cross_session_analyses WHERE compatibility_fingerprint=? ORDER BY created_utc").all(researchDefinition.compatibility_fingerprint) : [];
     const health = audioCommit ? this.db.prepare("SELECT h.* FROM audio_health h WHERE h.recipe_id=? AND h.recipe_version=? ORDER BY h.started_utc").all(audioCommit.recipe_id, audioCommit.recipe_version).map((row) => ({ ...row, continuity: json(row.continuity_json, {}), contextStates: json(row.context_states_json, []) })) : [];
-    return { session, details, commitment, profile, audioCommit, recipe, trials, events, outputs, finalization, rawReport, annotations, analysis, health };
+    return { session, details, commitment, profile, audioCommit, recipe, trials, events, outputs, finalization, rawReport, annotations, analysis, health, researchDefinition, phases, occurrences, futureTarget, aggregateMetadata };
   }
 
   exportSession(sessionId, options = {}) {
@@ -57,7 +62,7 @@ export class SessionExporter {
     const revealed = ["REVEALED", "COMPLETE"].includes(data.session.status);
     const includeHidden = options.includeHidden === true && revealed;
     const manifest = {
-      exportSchemaVersion: "1.2",
+      exportSchemaVersion: "1.2-research-v1",
       exportedUtc: now(),
       sessionId,
       sourceSchemaVersion: integrity.schemaVersion,
@@ -76,6 +81,31 @@ export class SessionExporter {
         ...(includeHidden ? { manifest: json(data.session.manifest_json, null) } : {}),
       };
       const report = data.rawReport ? { lockedUtc: data.rawReport.locked_utc, lockHash: data.rawReport.lock_hash, schemaVersion: data.rawReport.schema_version, ...(includeHidden ? { payload: json(data.rawReport.payload_json, {}) } : {}) } : null;
+      const research = data.researchDefinition ? {
+        sessionId,
+        mode: data.researchDefinition.mode,
+        cardinality: data.researchDefinition.cardinality,
+        outcomeSpace: json(data.researchDefinition.outcome_space_json, null),
+        outputCadence: data.researchDefinition.output_cadence,
+        primaryEndpoint: data.researchDefinition.primary_endpoint,
+        compatibilityFingerprint: data.researchDefinition.compatibility_fingerprint,
+        configHash: data.researchDefinition.config_hash,
+        committed: Boolean(data.researchDefinition.committed),
+        ...(includeHidden ? { definition: json(data.researchDefinition.definition_json, null), targetDefinition: json(data.researchDefinition.target_definition_json, null), temporalAnalysis: json(data.researchDefinition.temporal_analysis_json, null), revealPolicy: data.researchDefinition.reveal_policy } : {}),
+      } : null;
+      const future = data.futureTarget ? {
+        sessionId,
+        scheduledUtc: data.futureTarget.scheduled_utc,
+        status: data.futureTarget.status,
+        ...(includeHidden ? {
+          scheduledMonotonicNs: data.futureTarget.scheduled_monotonic_ns,
+          actualUtc: data.futureTarget.actual_utc,
+          actualMonotonicNs: data.futureTarget.actual_monotonic_ns,
+          rng: json(data.futureTarget.rng_metadata_json, null),
+        } : {}),
+        ...(includeHidden ? { eventHash: data.futureTarget.event_hash } : {}),
+        ...(includeHidden ? { prediction: json(data.futureTarget.prediction_json, null), target: json(data.futureTarget.target_json, null) } : {}),
+      } : null;
       const documents = new Map([
         ["manifest.json", manifest],
         ["session.json", includeHidden ? sessionDocument : removeSecrets(sessionDocument)],
@@ -89,6 +119,11 @@ export class SessionExporter {
         ["raw-report.locked.json", report],
         ["late-annotations.json", includeHidden ? data.annotations : data.annotations.map((annotation) => ({ ...annotation, payload: removeSecrets(annotation.payload) }))],
         ["analysis.json", includeHidden ? data.analysis && { ...data.analysis, payload: json(data.analysis.payload_json, null) } : data.analysis && { session_id: data.analysis.session_id, analysis_version: data.analysis.analysis_version, input_hash: data.analysis.input_hash, created_utc: data.analysis.created_utc }],
+        ["research-definition.json", research],
+        ["session-phases.json", data.phases],
+        ["target-occurrences.json", includeHidden ? data.occurrences : { redacted: true, count: 0, records: [] }],
+        ["future-target.json", future],
+        ["aggregate-metadata.json", data.aggregateMetadata],
         ["audio-health.json", data.health],
         ["integrity.json", integrity],
         ["summary.txt", this.readableSummary(data.session, integrity, revealed)],
@@ -119,6 +154,76 @@ export class SessionExporter {
     }
   }
 
+  /**
+   * Export an aggregate report without copying any raw machine evidence.
+   * Aggregate bundles contain the selected cohort identifiers, immutable
+   * compatibility criteria, analysis parameters/results, and integrity
+   * summaries for the already-revealed source sessions.
+   */
+  exportAggregate(aggregateId) {
+    const row = this.db.prepare("SELECT * FROM cross_session_analyses WHERE aggregate_id=?").get(aggregateId);
+    if (!row) throw new Error(`Aggregate analysis not found: ${aggregateId}`);
+    const definition = json(row.definition_json, {}) || {};
+    const analysis = json(row.analysis_json, {}) || {};
+    const selectedSessionIds = Array.isArray(definition.sessionIds)
+      ? definition.sessionIds.map(String)
+      : (Array.isArray(analysis.perSession) ? analysis.perSession.map((session) => String(session.sessionId)) : []);
+    const unrevealed = selectedSessionIds
+      .map((sessionId) => ({ sessionId, row: this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId) }))
+      .filter(({ row: session }) => !session || !["REVEALED", "COMPLETE"].includes(session.status))
+      .map(({ sessionId }) => sessionId);
+    if (unrevealed.length) throw new Error(`Aggregate export requires revealed source sessions: ${unrevealed.join(", ")}`);
+    const integrity = selectedSessionIds.map((sessionId) => this.owner.integrity.verifySession(sessionId, { persist: false }));
+    const aggregate = {
+      aggregateId: row.aggregate_id,
+      workflow: row.workflow,
+      exploratory: Boolean(row.exploratory),
+      compatibilityFingerprint: row.compatibility_fingerprint,
+      analysisHash: row.analysis_hash,
+      createdUtc: row.created_utc,
+      selectedSessionIds,
+      cohortCriteria: definition,
+      analysisParameters: {
+        workflow: row.workflow,
+        exploratory: Boolean(row.exploratory),
+        compatibilityFingerprint: row.compatibility_fingerprint,
+        analysisVersion: analysis.version || analysis.analysisVersion || null,
+        methodVersion: analysis.methodVersion || null,
+      },
+      results: analysis,
+      simulation: analysis.simulation || analysis.nullSimulation || null,
+    };
+    const manifest = {
+      exportSchemaVersion: "1.2-aggregate-v1",
+      exportedUtc: now(),
+      aggregateId: row.aggregate_id,
+      sourceSchemaVersion: this.owner.schemaVersion || null,
+      selectedSessionIds,
+      revealedOnly: true,
+      includesRawEvidence: false,
+      files: [],
+    };
+    const temporary = path.join(this.exportDir, `.${safeName(aggregateId)}.tmp-${process.hrtime.bigint()}`);
+    const target = path.join(this.exportDir, `aggregate-${safeName(aggregateId)}`);
+    fs.mkdirSync(temporary, { recursive: true });
+    try {
+      writeJson(temporary, "manifest.json", manifest);
+      writeJson(temporary, "aggregate.json", aggregate);
+      writeJson(temporary, "integrity.json", { selectedSessionIds, sessions: integrity.map((item) => ({ sessionId: item.sessionId, valid: item.valid, errors: item.errors, schemaVersion: item.schemaVersion })) });
+      const files = fs.readdirSync(temporary).sort().map((name) => ({ path: name, sizeBytes: fs.statSync(path.join(temporary, name)).size, sha256: sha256(fs.readFileSync(path.join(temporary, name))) }));
+      manifest.files = files.filter((file) => file.path !== "manifest.json");
+      writeJson(temporary, "manifest.json", manifest);
+      const manifestSha256 = sha256(fs.readFileSync(path.join(temporary, "manifest.json")));
+      writeJson(temporary, "hashes.json", { manifestSha256, files: [...manifest.files, { path: "manifest.json", sha256: manifestSha256, sizeBytes: fs.statSync(path.join(temporary, "manifest.json")).size }] });
+      if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
+      fs.renameSync(temporary, target);
+      return { directory: target, aggregateId: row.aggregate_id, manifest, aggregate, integrity };
+    } catch (error) {
+      if (fs.existsSync(temporary)) fs.rmSync(temporary, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
   readableSummary(session, integrity, revealed) {
     return [
       `MIP session ${session.session_id}`,
@@ -134,6 +239,7 @@ export class SessionExporter {
   }
 
   export(sessionId, options = {}) { return this.exportSession(sessionId, options); }
+  exportAggregateBundle(aggregateId, options = {}) { return this.exportAggregate(aggregateId, options); }
 }
 
 export class Exporter extends SessionExporter {}

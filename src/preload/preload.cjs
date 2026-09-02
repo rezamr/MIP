@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld(
     commitSession: (value) => call("sessions:commit", value),
     startSession: (value) => call("sessions:start", value),
     returnSession: (value) => call("sessions:return", withId(value)),
+    endParticipantPhase: (value) => call("sessions:end-participant-phase", value),
+    abortEvidence: (value) => call("sessions:abort-evidence", value),
+    getResearchDefinition: (value) => call("research:definition", withId(value)),
+    getResearchPhases: (value) => call("research:phases", withId(value)),
+    getFutureTarget: (value) => call("future-target:get", withId(value)),
+    getTargetOccurrences: (value) => call("research:occurrences", withId(value)),
 
     prepareAudio: (value) => call("audio:prepare", withId(value)),
     audioReady: (value) => call("audio:ready", value),
@@ -55,6 +61,9 @@ contextBridge.exposeInMainWorld(
     getAnalysis: (value) => call("analysis:get", withId(value)),
     getAnalysisHistory: (value) => call("analysis:history", withId(value)),
     runAnalysis: (value) => call("analysis:run", withId(value)),
+    listAggregates: (value) => call("aggregate:list", value),
+    getAggregate: (value) => call("aggregate:get", value),
+    runAggregate: (value) => call("aggregate:run", value),
     addLateAnnotation: (value) => call("annotations:add", value),
     getLateAnnotations: (value) => call("annotations:list", withId(value)),
 
@@ -65,6 +74,7 @@ contextBridge.exposeInMainWorld(
     getSettings: () => call("settings:get"),
     updateSettings: (value) => call("settings:update", value),
     exportSession: (value) => call("exports:session", withId(value)),
+    exportAggregate: (value) => call("exports:aggregate", value),
     importLegacy: (value) => call("legacy:import", value),
     exportDiagnostics: (value) => call("diagnostics:export", value),
 

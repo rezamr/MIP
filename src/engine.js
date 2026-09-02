@@ -1,7 +1,87 @@
 import crypto from "node:crypto";
+import {
+  ANALYSIS_METHOD,
+  EXPERIMENT_MODES,
+  OUTCOME_SPACE_TYPES,
+  PARTICIPANT_PHASES,
+  EVIDENCE_PHASES,
+  TARGET_ANCHORS,
+  OUTPUT_CADENCES,
+  PRIMARY_ENDPOINTS,
+  REVEAL_POLICIES,
+  MAX_OUTCOME_CARDINALITY,
+  MAX_ENUMERATED_VALUES,
+  MAX_TEMPORAL_WINDOWS,
+  MAX_TEMPORAL_WINDOW_MS,
+  MAX_PROBABILITY_TRIALS,
+  MAX_SCHEDULED_OUTPUTS,
+  normalizeOutcomeSpace,
+  validateOutcomeSpace,
+  outcomeSpaceSize,
+  containsOutcome,
+  sampleOutcome,
+  formatOutcome,
+  normalizeExperimentMode,
+  normalizeTargetDefinition,
+  normalizeTemporalWindow,
+  normalizeTemporalAnalysisPlan,
+  normalizeCrossSessionAnalysis,
+  evaluateRevealGate,
+  classifyLatency,
+  anyHitProbability,
+  binomialProbability,
+  binomialTail,
+  expectedHits,
+  singleTargetProbability,
+  resolveEffectiveConfiguration,
+  createCompatibilityFingerprint,
+  OutcomeSpace,
+  TargetDefinition,
+} from "./domain/research-model.js";
 
 export const APP_VERSION = "1.2.0";
 export const ENGINE_VERSION = "1.2.0";
+
+// Public research-model API is re-exported here for existing engine callers.
+export {
+  ANALYSIS_METHOD,
+  EXPERIMENT_MODES,
+  OUTCOME_SPACE_TYPES,
+  PARTICIPANT_PHASES,
+  EVIDENCE_PHASES,
+  TARGET_ANCHORS,
+  OUTPUT_CADENCES,
+  PRIMARY_ENDPOINTS,
+  REVEAL_POLICIES,
+  MAX_OUTCOME_CARDINALITY,
+  MAX_ENUMERATED_VALUES,
+  MAX_TEMPORAL_WINDOWS,
+  MAX_TEMPORAL_WINDOW_MS,
+  MAX_PROBABILITY_TRIALS,
+  MAX_SCHEDULED_OUTPUTS,
+  normalizeOutcomeSpace,
+  validateOutcomeSpace,
+  outcomeSpaceSize,
+  containsOutcome,
+  sampleOutcome,
+  formatOutcome,
+  normalizeExperimentMode,
+  normalizeTargetDefinition,
+  normalizeTemporalWindow,
+  normalizeTemporalAnalysisPlan,
+  normalizeCrossSessionAnalysis,
+  evaluateRevealGate,
+  classifyLatency,
+  anyHitProbability,
+  binomialProbability,
+  binomialTail,
+  expectedHits,
+  singleTargetProbability,
+  resolveEffectiveConfiguration,
+  createCompatibilityFingerprint,
+  OutcomeSpace,
+  TargetDefinition,
+};
 
 export function sha256(value) {
   const data = Buffer.isBuffer(value)
@@ -11,6 +91,7 @@ export function sha256(value) {
 }
 
 export function canonical(value) {
+  if (typeof value === "bigint") return `${value.toString()}n`;
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   return `{${Object.keys(value)
@@ -19,15 +100,34 @@ export function canonical(value) {
     .join(",")}}`;
 }
 
+export const CSPRNG_MAX_EXCLUSIVE = Number.MAX_SAFE_INTEGER;
+
 export class CSPRNG {
-  constructor() {
+  constructor(cryptoProvider = crypto) {
     this.id = "OS_CSPRNG";
     this.version = "node-crypto";
+    this.hasRandomBytesProvider = typeof cryptoProvider?.randomBytes === "function";
+    this.cryptoProvider = {
+      randomBytes: typeof cryptoProvider?.randomBytes === "function" ? cryptoProvider.randomBytes.bind(cryptoProvider) : crypto.randomBytes,
+      randomInt: typeof cryptoProvider?.randomInt === "function" ? cryptoProvider.randomInt.bind(cryptoProvider) : null,
+    };
   }
   int(maxExclusive) {
-    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1)
-      throw new Error("maxExclusive must be a positive safe integer");
-    return crypto.randomInt(maxExclusive);
+    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1 || maxExclusive > CSPRNG_MAX_EXCLUSIVE)
+      throw new Error(`maxExclusive must be a positive safe integer <= ${CSPRNG_MAX_EXCLUSIVE}`);
+    // Rejection sampling over 64 random bits is exact for every supported
+    // safe-integer range, including the one-billion-value temporal profile.
+    if (this.cryptoProvider.randomInt && !this.hasRandomBytesProvider && maxExclusive < 2 ** 48) {
+      const value = this.cryptoProvider.randomInt(maxExclusive);
+      if (!Number.isSafeInteger(value) || value < 0 || value >= maxExclusive)
+        throw new Error("OS_CSPRNG provider returned an out-of-range integer");
+      return value;
+    }
+    const bound = 1n << 64n;
+    const limit = bound - (bound % BigInt(maxExclusive));
+    let value;
+    do value = this.cryptoProvider.randomBytes(8).readBigUInt64BE(0); while (value >= limit);
+    return Number(value % BigInt(maxExclusive));
   }
   bits(n) {
     if (!Number.isInteger(n) || n < 1 || n > 30)
@@ -57,9 +157,19 @@ export class DeterministicRNG {
     return this.state / 0x100000000;
   }
   int(maxExclusive) {
-    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1)
-      throw new Error("maxExclusive must be a positive safe integer");
-    return Math.floor(this.next() * maxExclusive);
+    if (!Number.isSafeInteger(maxExclusive) || maxExclusive < 1 || maxExclusive > 0x100000000)
+      throw new Error("deterministic maxExclusive must be a positive safe integer <= 2^32");
+    // Use the generated uint32 directly with rejection sampling.  This keeps
+    // deterministic fixtures reproducible without floating-point scaling or
+    // modulo bias.
+    const bound = 0x100000000;
+    const limit = bound - (bound % maxExclusive);
+    let value;
+    do {
+      this.next();
+      value = this.state >>> 0;
+    } while (value >= limit);
+    return value % maxExclusive;
   }
   bits(n) {
     if (!Number.isInteger(n) || n < 1 || n > 30)
@@ -130,6 +240,7 @@ const baseProtocol = {
 };
 const common = {
   schemaVersion: "1.0",
+  mode: EXPERIMENT_MODES.INFLUENCE,
   outcomeSpace: { type: "BINARY", values: [0, 1] },
   mapping: mappings.LITERAL_BINARY_V1,
   encoding: {
@@ -151,6 +262,8 @@ const common = {
   audio: { recipeId: "A-U396-4", version: 1 },
   analysis: {
     primaryWindow: "primary",
+    primaryEndpoint: "EXACT_SLOT",
+    outputCadence: "FIXED_INTERVAL",
     exploratory: ["pre", "post"],
     threshold: 0.15,
     sustainedBlocks: 2,
@@ -287,6 +400,49 @@ export const profiles = {
     ...common,
     reveal: { policy: "AFTER_BLOCK_LOCK" },
   },
+  TEMPORAL_INTEGER_RANGE_V1: {
+    id: "TEMPORAL_INTEGER_RANGE_V1",
+    version: 1,
+    name: "Temporal Integer Range Demonstration",
+    purpose: "Generic symbolic integer range with target-anchored temporal evidence.",
+    status: "Validated",
+    mode: EXPERIMENT_MODES.INFLUENCE,
+    timing: {
+      mode: "IMMEDIATE_REQUEST",
+      wording: "Make the system output/favor {target} now.",
+    },
+    outcomeSpace: {
+      type: "INTEGER_RANGE",
+      minInclusive: 0,
+      maxInclusive: 999_999_999,
+    },
+    mapping: {
+      id: "INTEGER_IDENTITY_V1",
+      version: 1,
+      labels: [],
+      entries: {},
+    },
+    output: {
+      type: "CONTINUOUS_STREAM",
+      blockSize: 1,
+      preBlocks: 2,
+      primaryBlocks: 4,
+      postBlocks: 2,
+      intervalMs: 100,
+    },
+    rng: { provider: "OS_CSPRNG" },
+    protocol: baseProtocol,
+    audio: { recipeId: "A-U396-4", version: 1 },
+    analysis: {
+      primaryEndpoint: "FIXED_TIME_WINDOW",
+      outputCadence: "FIXED_INTERVAL",
+      primaryWindow: { id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 },
+      windows: [{ id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 }],
+      version: "temporal-analysis-v1",
+    },
+    reveal: { policy: "AFTER_EVIDENCE_COMPLETE" },
+    reporting: { version: "report-v1" },
+  },
 };
 
 export function clone(value) {
@@ -300,19 +456,25 @@ export function resolveProfile(id) {
 export function validateProfile(profile) {
   const errors = [];
   if (!profile?.id) errors.push("profile.id is required");
-  if (!profile?.outcomeSpace?.values?.length)
-    errors.push("outcomeSpace.values must contain at least one outcome");
+  const spaceValidation = validateOutcomeSpace(profile?.outcomeSpace);
+  if (!spaceValidation.valid) errors.push(...spaceValidation.errors);
+  const normalizedSpace = spaceValidation.normalized;
   if (!profile?.mapping?.entries) errors.push("mapping.entries is required");
-  if (
-    profile?.outcomeSpace?.type === "BINARY" &&
-    profile.outcomeSpace.values.length !== 2
-  )
-    errors.push(
-      "outcomeSpace.values must contain exactly two values for BINARY",
-    );
-  for (const value of profile?.outcomeSpace?.values ?? [])
-    if (profile.mapping.entries[String(value)] === undefined)
-      errors.push(`mapping.entries is missing objective value ${value}`);
+  if (normalizedSpace && profile?.mapping?.entries) {
+    // Enumerated and binary spaces can be checked exhaustively.  Integer
+    // ranges remain symbolic; only explicitly supplied labels are validated.
+    const values = normalizedSpace.type === "INTEGER_RANGE"
+      ? Object.keys(profile.mapping.entries).map((key) => Number(key))
+      : normalizedSpace.values;
+    for (const value of values) {
+      if (normalizedSpace.type === "INTEGER_RANGE" && !containsOutcome(normalizedSpace, value))
+        errors.push(`mapping.entries contains an out-of-range objective value ${value}`);
+      else if (profile.mapping.entries[String(value)] === undefined && normalizedSpace.type !== "INTEGER_RANGE")
+        errors.push(`mapping.entries is missing objective value ${value}`);
+    }
+  }
+  const mode = profile?.mode || profile?.experimentMode || EXPERIMENT_MODES.INFLUENCE;
+  try { if (!Object.values(EXPERIMENT_MODES).includes(String(mode).toUpperCase())) errors.push(`unsupported experiment mode ${mode}`); } catch { errors.push("experiment mode is invalid"); }
   if (
     ![
       "IMMEDIATE_REQUEST",
@@ -335,12 +497,36 @@ export function validateProfile(profile) {
     errors.push("timing.timezone is required for absolute timing");
   if (profile?.reveal?.policy === "AFTER_RAW_REPORT_LOCK" && !profile.protocol)
     errors.push("protocol is required before raw-report reveal");
+  if (profile?.analysis?.primaryEndpoint && !["EXACT_SLOT", "FIXED_TIME_WINDOW", "FIXED_SEQUENCE_WINDOW", "TARGET_FREQUENCY"].includes(String(profile.analysis.primaryEndpoint).toUpperCase()))
+    errors.push("analysis.primaryEndpoint is unsupported");
+  try {
+    const output = profile?.output || {};
+    const blockSize = Number(output.blockSize ?? 1);
+    const preBlocks = Number(output.preBlocks ?? 0);
+    const primaryBlocks = Number(output.primaryBlocks ?? 0);
+    const postBlocks = Number(output.postBlocks ?? 0);
+    if (![blockSize, preBlocks, primaryBlocks, postBlocks].every((value) => Number.isSafeInteger(value) && value >= 0) || blockSize < 1)
+      errors.push("output block/count values must be non-negative safe integers (blockSize must be positive)");
+    else {
+      const configuredTotal = (preBlocks + primaryBlocks + postBlocks) * blockSize;
+      const total = configuredTotal === 0 && output.type === "SINGLE_OUTCOME" ? 1 : configuredTotal;
+      if (!Number.isSafeInteger(total) || total < 1 || total > MAX_SCHEDULED_OUTPUTS)
+        errors.push(`output opportunity count must be in [1, ${MAX_SCHEDULED_OUTPUTS}]`);
+    }
+    if (output.intervalMs !== undefined) {
+      const interval = Number(output.intervalMs);
+      if (!Number.isFinite(interval) || interval <= 0 || interval > MAX_TEMPORAL_WINDOW_MS)
+        errors.push(`output.intervalMs must be positive and <= ${MAX_TEMPORAL_WINDOW_MS} ms`);
+    }
+    normalizeTemporalAnalysisPlan(profile?.analysis || {});
+  } catch (error) {
+    errors.push(`profile timing/analysis is invalid: ${error.message}`);
+  }
   return { valid: errors.length === 0, errors };
 }
 
 export function assignOutcome(profile, rng = new CSPRNG()) {
-  const values = profile.outcomeSpace.values;
-  return values[rng.int(values.length)];
+  return sampleOutcome(profile.outcomeSpace, rng);
 }
 export function encodeExactToken(value, width) {
   if (!Number.isInteger(width) || width < 1 || width > 30)
@@ -356,7 +542,7 @@ export function decodeExactToken(token) {
   return parseInt(token, 2);
 }
 export function participantTarget(profile, objective) {
-  return profile.mapping.entries[String(objective)]?.label ?? String(objective);
+  return profile?.mapping?.entries?.[String(objective)]?.label ?? formatOutcome(profile?.outcomeSpace || { type: "BINARY" }, objective);
 }
 export function requestInstruction(profile, objective) {
   return profile.timing.wording.replace(
@@ -376,50 +562,55 @@ export function analyzeStream({
   values,
   primary = [0, values.length],
   exploratory = [],
+  outcomeSpace = { type: "BINARY", values: [0, 1] },
 }) {
-  const direction = values.map((v) => (v === requested ? 1 : -1));
-  const cumulative = [];
+  const normalizedSpace = normalizeOutcomeSpace(outcomeSpace);
+  const isBinary = normalizedSpace.type === "BINARY" || outcomeSpace?.type === "BINARY";
+  const direction = isBinary ? values.map((v) => (v === requested ? 1 : -1)) : undefined;
+  const cumulative = isBinary ? [] : undefined;
   let total = 0;
-  for (let i = 0; i < direction.length; i++) {
-    total += direction[i];
-    cumulative.push(total);
-  }
+  if (isBinary) for (const value of direction) { total += value; cumulative.push(total); }
   const region = ([start, end]) => {
     const slice = values.slice(start, end);
     const matches = slice.filter((v) => v === requested).length;
+    const k = outcomeSpaceSize(normalizedSpace);
     return {
       start,
       end,
       count: slice.length,
       matches,
       proportion: slice.length ? matches / slice.length : null,
-      deviation: slice.length
-        ? (matches - slice.length / 2) / slice.length
-        : null,
+      expectedCount: slice.length / k,
+      deviation: isBinary && slice.length ? (matches - slice.length / 2) / slice.length : null,
+      probability: slice.length ? binomialTail(k, slice.length, matches, "GE").value : null,
     };
   };
   const primaryResult = region(primary);
   const exploratoryResults = exploratory.map(region);
-  const threshold = 0.15 * Math.max(1, primaryResult.count);
-  const peak = cumulative.reduce(
+  const threshold = isBinary ? 0.15 * Math.max(1, primaryResult.count) : null;
+  const peak = isBinary ? cumulative.reduce(
     (best, x, i) =>
       Math.abs(x) > Math.abs(best.value) ? { value: x, index: i } : best,
     { value: 0, index: -1 },
-  );
+  ) : null;
+  const matches = values.filter((v) => v === requested).length;
+  const k = outcomeSpaceSize(normalizedSpace);
   return {
     requested,
     total: values.length,
-    matches: values.filter((v) => v === requested).length,
-    proportion: values.length
-      ? values.filter((v) => v === requested).length / values.length
-      : null,
+    matches,
+    proportion: values.length ? matches / values.length : null,
+    expectedCount: values.length / k,
+    cardinality: k,
     direction,
     cumulative,
     primary: primaryResult,
     exploratory: exploratoryResults,
     peakDeviation: peak,
     threshold,
-    analysisVersion: "analysis-v1",
+    probability: anyHitProbability(k, values.length),
+    expected: expectedHits(k, values.length),
+    analysisVersion: isBinary ? "analysis-v1" : ANALYSIS_METHOD.VERSION,
   };
 }
 

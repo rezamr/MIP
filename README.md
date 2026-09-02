@@ -120,6 +120,8 @@ The active v1.2 implementation is developed on branch `feature/electron-v1.2`; `
 - Challenge-response tests
 - Sham, blinding, leakage, and falsification controls
 - SQLite append-only/tamper-evident research evidence
+- Generic finite-outcome, target-anchored temporal research model and
+  cross-session workflow (see `engineering/RESEARCH_MODEL_AND_TEMPORAL_WORKFLOW_V1.2.md`)
 - Legacy JSON/JSONL import and explicit evidence export
 - Deterministic analytical session/block reporting
 - High-quality English-only desktop UI/UX
@@ -158,6 +160,7 @@ For work on REQUEST / READ testing, audio comparison, temporal mapping, target e
 - `engineering/HISTORICAL_HEMISYNC_RENDER_REQUIREMENTS_V0.1.md`
 - `engineering/HUMAN_ENCODING_AND_MAPPING_REQUIREMENTS_V0.1.md`
 - `engineering/SESSION_TELEMETRY_AND_REPORTING_V0.1.md`
+- `engineering/RESEARCH_MODEL_AND_TEMPORAL_WORKFLOW_V1.2.md`
 
 `engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md` is the conflict-resolution authority.
 

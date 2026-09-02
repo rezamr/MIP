@@ -92,6 +92,15 @@ function regionSummary(data = {}) {
  * decimated series is drawn here.
  */
 export function renderAnalysisBands(data = {}) {
+  const cardinality = Number(data.cardinality || data.outcomeSpace?.cardinality || 2);
+  if (Number.isFinite(cardinality) && cardinality !== 2) {
+    const p0 = 1 / cardinality;
+    const rows = ["pre", "primary", "post"].map((name) => {
+      const band = data[name] || {};
+      return `<div class="review-row"><span>${esc(BAND_LABELS[name])}</span><strong>${esc(band.matches ?? 0)} hits · ${band.proportion === null || band.proportion === undefined ? "UNKNOWN" : `${numberText(Number(band.proportion) * 100, 2)}%`} · null p₀ ${numberText(p0 * 100, 4)}%</strong></div>`;
+    }).join("");
+    return `<div class="analysis-chart"><div class="callout">Generic outcome space (K=${esc(cardinality)}). Signed binary direction is intentionally not used.</div>${rows}</div>`;
+  }
   return `<div class="analysis-chart"><h4>Cumulative requested-direction deviation</h4>${cumulativeChart(data)}<h4 style="margin-top:16px">Region match proportions</h4>${regionSummary(data)}</div>`;
 }
 

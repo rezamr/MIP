@@ -50,11 +50,21 @@ export class SessionRepository {
                 d.actual_start_monotonic_ns,d.actual_start_utc,
                 d.actual_end_monotonic_ns,d.actual_end_utc,
                 d.app_version,d.engine_version,d.audio_version,
-                (SELECT COUNT(*) FROM evidence_events ee WHERE ee.session_id=s.session_id) AS event_count,
+        (SELECT COUNT(*) FROM evidence_events ee WHERE ee.session_id=s.session_id) AS event_count,
+                rd.mode AS research_mode,rd.cardinality AS research_cardinality,
+                rd.outcome_space_json AS research_outcome_space_json,
+                rd.output_cadence AS research_output_cadence,
+                rd.primary_endpoint AS research_primary_endpoint,
+                rd.compatibility_fingerprint AS research_compatibility_fingerprint,
+                rd.committed AS research_committed,
+                sp.session_lifecycle,sp.participant_phase_status,sp.evidence_phase_status,
+                sp.report_status,sp.reveal_status,sp.integrity_status,
                 CASE WHEN r.session_id IS NULL THEN 0 ELSE 1 END AS raw_report_locked
            FROM sessions s
            LEFT JOIN session_commitments c ON c.session_id=s.session_id
            LEFT JOIN session_details d ON d.session_id=s.session_id
+           LEFT JOIN research_definitions rd ON rd.session_id=s.session_id
+           LEFT JOIN session_phase_projections sp ON sp.session_id=s.session_id
            LEFT JOIN raw_reports_locked r ON r.session_id=s.session_id
           ${where}
           ORDER BY s.created_utc DESC`,
@@ -87,6 +97,23 @@ export class SessionRepository {
       // owner actually completed the separate REVEALED transition.
       hasReveal: revealed,
       eventCount: Number(row.event_count || 0),
+      research: row.research_mode ? {
+        mode: row.research_mode,
+        cardinality: row.research_cardinality,
+        outcomeSpace: json(row.research_outcome_space_json, null),
+        outputCadence: row.research_output_cadence,
+        primaryEndpoint: row.research_primary_endpoint,
+        compatibilityFingerprint: row.research_compatibility_fingerprint,
+        committed: Boolean(row.research_committed),
+        phases: {
+          sessionLifecycle: row.session_lifecycle || null,
+          participantPhaseStatus: row.participant_phase_status || null,
+          evidencePhaseStatus: row.evidence_phase_status || null,
+          reportStatus: row.report_status || null,
+          revealStatus: row.reveal_status || null,
+          integrityStatus: row.integrity_status || null,
+        },
+      } : null,
     };
     // Legacy imports carry no hidden active experiment state; retaining their
     // provenance classification is safe and keeps migration tooling able to
@@ -113,6 +140,9 @@ export class SessionRepository {
       dto.configSnapshot = snapshot;
       dto.hiddenObjective = row.hidden_objective === null ? null : parseStoredValue(row.hidden_objective);
       dto.participantTarget = row.participant_target;
+      if (row.research_mode) {
+        dto.researchDefinition = json(this.db.prepare("SELECT definition_json FROM research_definitions WHERE session_id=?").get(row.session_id)?.definition_json, null);
+      }
     }
     return dto;
   }
