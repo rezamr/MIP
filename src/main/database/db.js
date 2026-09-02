@@ -20,6 +20,7 @@ import { ResearchRepository } from "../repositories/ResearchRepository.js";
 import {
   resolveEngineeringVerification,
   bindEngineeringVerification,
+  REFERENCE_NOT_APPLICABLE,
 } from "../repositories/AudioRecipeVersionPolicy.js";
 
 export const CURRENT_SCHEMA_VERSION = 14;
@@ -1016,20 +1017,26 @@ function recipeDto(row, includeConfig = true) {
     { valid: validation.valid && provenanceValidation.valid && metadataValidation.valid !== false },
   );
   const repositoryActive = String(row.status || "ACTIVE").toUpperCase() === "ACTIVE" && Boolean(row.is_active) && !Boolean(row.is_draft);
-  const formalEligible = repositoryActive && !Boolean(row.incomplete) && validation.valid && provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true && effective.formalEligibility !== false && engineeringVerification.status === "PASS";
-  const formalEligibilityReason = formalEligible
-    ? "Immutable active version, valid configuration, complete provenance, and current reference verification gates passed."
+  const referenceGate = !engineeringVerification.referenceRequired || engineeringVerification.referenceStatus === "PASS";
+  const operationalGate = engineeringVerification.configurationStatus === "PASS" && engineeringVerification.runtimeCompatibility === "PASS" && engineeringVerification.deterministicSelfCheck === "PASS";
+  const formalOperationalEligibility = repositoryActive && !Boolean(row.incomplete) && validation.valid && provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true && operationalGate && referenceGate;
+  const formalEligibilityReason = formalOperationalEligibility
+    ? engineeringVerification.referenceStatus === REFERENCE_NOT_APPLICABLE
+      ? "Immutable active custom version, valid configuration, provenance, runtime compatibility, and deterministic self-check passed. No golden reference fixture applies to this custom recipe."
+      : "Immutable active version, valid configuration, complete provenance, runtime compatibility, deterministic self-check, and current reference verification gates passed."
     : !repositoryActive
       ? "Version is not active; formal sessions require an active immutable version."
       : row.incomplete || !validation.valid
         ? "Recipe is incomplete or failed configuration validation."
         : !provenanceValidation.valid || provenanceValidation.summary.provenanceEligible !== true
           ? "Recipe provenance is invalid or contains UNKNOWN_BLOCKED parameters."
-          : engineeringVerification.status === "STALE"
+          : !operationalGate
+            ? "Configuration, runtime compatibility, or deterministic self-check failed."
+            : engineeringVerification.referenceStatus === "STALE"
             ? "Engineering verification is stale after a material recipe change."
-            : engineeringVerification.status !== "PASS"
-              ? "Current reference verification has not been run for this effective recipe."
-              : effective.formalEligibilityReason || "Formal use is blocked by repository policy.";
+            : engineeringVerification.referenceStatus === REFERENCE_NOT_APPLICABLE
+              ? "No golden reference fixture applies to this custom recipe; required operational checks are not complete."
+              : "Current applicable reference verification has not been run for this effective recipe.";
   return {
     ...(includeConfig ? effective : {}),
     recipeId: row.recipe_id,
@@ -1050,7 +1057,8 @@ function recipeDto(row, includeConfig = true) {
     provenanceAudit: effective.provenanceAudit || versionMetadata.provenanceAudit || null,
     historicalStatus: effective.historicalStatus || "NOT_HISTORICALLY_EXACT",
     historicalExactness: effective.historicalExactness || "NOT_CLAIMED",
-    formalEligibility: formalEligible,
+    formalEligibility: formalOperationalEligibility,
+    formalOperationalEligibility,
     formalEligibilityReason,
     activeLayers: activeLayers(effective),
     engineeringVerification,
@@ -1531,7 +1539,7 @@ export class MipDatabase {
     // Repository DTOs carry projection-only fields alongside the immutable
     // effective recipe.  Never include those fields in a formal audio commit;
     // the committed fingerprint must describe only recipe material.
-    for (const key of ["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance"])
+    for (const key of ["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance", "formalOperationalEligibility"])
       delete config[key];
     const hashConfig = { ...config };
     delete hashConfig.configFingerprint;

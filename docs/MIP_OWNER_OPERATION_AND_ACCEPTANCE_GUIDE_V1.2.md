@@ -135,11 +135,13 @@ old session are unchanged.
 **Purpose.** Inspect, audition, duplicate, and version synthesis definitions.
 
 Each card shows identity/version, provenance badge, active layers, carriers,
-noise/effects/modulation, gain staging, execution mode, fingerprint, engineering
-verification, and formal eligibility.  `Source & Provenance` distinguishes
-documented, derived, MIP-defined, reconstruction, user-defined, and unknown
-blocked parameters.  `Engineering verification` is software-only and remains
-separate from owner audible result.
+noise/effects/modulation, gain staging, execution mode, fingerprint, activation,
+formal operational eligibility, and engineering verification.  `Source &
+Provenance` distinguishes documented, derived, MIP-defined, reconstruction,
+user-defined, and unknown blocked parameters.  `Engineering verification` is
+software-only and remains separate from owner audible result.  For a genuinely
+custom recipe, the reference status is `NOT_APPLICABLE` and the card explicitly
+states: **No golden reference fixture applies to this custom recipe.**
 
 The three simple conditions are clean component tests:
 

@@ -181,7 +181,7 @@ export class IntegrityService {
     const fingerprintForHash = config && typeof config === "object" ? { ...config } : config;
     if (configForHash && typeof configForHash === "object") delete configForHash.configFingerprint;
     if (fingerprintForHash && typeof fingerprintForHash === "object") {
-      for (const key of ["configFingerprint", "parameterProvenance", "provenanceByParameter", "historicalStatus", "historicalExactness", "formalEligibility", "formalEligibilityReason", "provenanceEligibility", "provenanceAudit", "engineeringVerification", "activeLayers"]) delete fingerprintForHash[key];
+      for (const key of ["configFingerprint", "parameterProvenance", "provenanceByParameter", "historicalStatus", "historicalExactness", "formalEligibility", "formalEligibilityReason", "formalOperationalEligibility", "provenanceEligibility", "provenanceAudit", "engineeringVerification", "activeLayers"]) delete fingerprintForHash[key];
     }
     const configHashValid = !commit || (config !== undefined && sha256(canonical(configForHash)) === commit.config_hash);
     const committedFingerprint = config?.configFingerprint;

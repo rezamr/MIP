@@ -527,7 +527,8 @@ function audioSummary(audio, options = {}) {
     historicalStatus: audio.historicalStatus,
     historicalExactness: audio.historicalExactness,
     activeLayers: activeLayers(audio),
-    formalEligibility: audio.formalEligibility !== false,
+    formalEligibility: audio.formalOperationalEligibility === true || audio.formalEligibility === true,
+    formalOperationalEligibility: audio.formalOperationalEligibility === true || audio.formalEligibility === true,
     protocolCueVersion: audio.protocolCueVersion || null,
     protocolCueCount: Array.isArray(audio.protocolCues) ? audio.protocolCues.length : 0,
   };
@@ -1456,8 +1457,8 @@ function registerSessionHandlers() {
     if (!recipeValidation.valid) throw new Error(`Audio recipe validation failed: ${recipeValidation.errors.join("; ")}`);
     if (recipe.isDraft || recipe.status !== "ACTIVE" || recipe.isActive !== true || recipe.incomplete)
       throw new Error(`Formal session requires an active, complete recipe: ${recipe.recipeId} v${recipe.version}.`);
-    if (recipe.formalEligibility !== true)
-      throw new Error(`Formal session requires a currently verified audio recipe: ${recipe.recipeId} v${recipe.version}. ${recipe.formalEligibilityReason || "Engineering verification is not current."}`);
+    if (recipe.formalOperationalEligibility !== true)
+      throw new Error(`Formal session requires an operationally eligible audio recipe: ${recipe.recipeId} v${recipe.version}. ${recipe.formalEligibilityReason || "One or more configuration, provenance, runtime, deterministic, activation, or applicable reference gates are not current."}`);
     // RNG provider is part of the effective (session > profile > app)
     // research definition.  Reading only the profile silently ignored a
     // deliberate session/application override and could make the persisted

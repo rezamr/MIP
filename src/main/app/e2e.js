@@ -276,6 +276,58 @@ export async function runElectronE2E(mainWindow, options = {}) {
 
       output.recipeEditing = await runRecipeEditorFlow();
 
+      // Regression guard for the actual Guided Editor DOM.  The IPC flow above
+      // proves the repository contract; this flow proves that the visible L/R
+      // inputs update carriers[0] rather than stale top-level projections.
+      const runGuidedEditorDomFlow = async () => {
+        document.querySelector('[data-page="recipes"]')?.click();
+        await waitForSelector("#recipeCards");
+        let editButton = null;
+        for (let attempt = 0; attempt < 80 && !editButton; attempt += 1) {
+          editButton = [...document.querySelectorAll("[data-edit-recipe]")]
+            .find((button) => button.dataset.editRecipe === output.recipeEditing.editedRecipeId && button.dataset.version === "1");
+          if (!editButton) await sleep(25);
+        }
+        if (!editButton) throw new Error("Guided Editor DOM fixture was not rendered");
+        editButton.click();
+        const left = await waitForSelector("#recipeLeftHz");
+        const right = await waitForSelector("#recipeRightHz");
+        if (!left || !right) throw new Error("Guided Editor canonical carrier inputs are unavailable");
+        const change = (element, value) => {
+          element.value = String(value);
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          element.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        change(left, 396);
+        change(right, 400);
+        document.querySelector("#validateRecipeDraft")?.click();
+        await sleep(180);
+        const validationText = document.querySelector("#recipeValidation")?.textContent || "";
+        document.querySelector("#saveRecipeVersion")?.click();
+        await waitForSelector("#recipeCards");
+        await sleep(180);
+        const reopened = await window.mip.getRecipe({ id: output.recipeEditing.editedRecipeId });
+        let aliasConflict = false;
+        try {
+          const { normalizeRecipe } = await import(new URL("./audio-core.js", location.href).href);
+          normalizeRecipe(reopened);
+        } catch {
+          aliasConflict = true;
+        }
+        const result = {
+          recipeId: reopened.recipeId,
+          savedVersion: reopened.version,
+          validationPassed: /Draft is valid/i.test(validationText),
+          canonicalCarriers: { leftHz: reopened.carriers?.[0]?.leftHz, rightHz: reopened.carriers?.[0]?.rightHz },
+          aliasesMatch: reopened.leftHz === reopened.carriers?.[0]?.leftHz && reopened.rightHz === reopened.carriers?.[0]?.rightHz && reopened.centerHz === (reopened.leftHz + reopened.rightHz) / 2 && reopened.beatHz === Math.abs(reopened.rightHz - reopened.leftHz),
+          aliasConflict,
+        };
+        if (!result.validationPassed || result.savedVersion !== 3 || result.canonicalCarriers.leftHz !== 396 || result.canonicalCarriers.rightHz !== 400 || !result.aliasesMatch || result.aliasConflict)
+          throw new Error("Guided Editor DOM regression failed: " + JSON.stringify(result));
+        return result;
+      };
+      output.guidedEditorDom = await runGuidedEditorDomFlow();
+
       const session = await window.mip.createSession({
         profileId: "BASELINE_NOW_BINARY_V1",
         recordType: "dry",
@@ -411,6 +463,60 @@ export async function runElectronE2E(mainWindow, options = {}) {
       const restored = await window.mip.restoreBackup({ backupId: output.backup.backupId, sha256: output.backup.sha256 });
       output.restore = { restored: restored.restored, schemaVersion: restored.schemaVersion, postRestore: restored.postRestore };
       output.afterRestore = await window.mip.getSession({ id: session.sessionId });
+
+      // Prove the independent formal-operational path with a genuinely custom
+      // identity.  This is deliberately last because the dry fixture is
+      // inspected through the real main-process session IPC and then moved to
+      // an explicit AUDIO_FAILED terminal/recovery state; no participant or
+      // AudioWorklet is started and it must not block the backup/restore gate.
+      const runCustomFormalRecipeFlow = async () => {
+        const customRecipeId = output.recipeEditing.editedRecipeId;
+        const activatedRecipe = await window.mip.activateRecipeVersion({ id: customRecipeId, version: output.guidedEditorDom.savedVersion });
+        const customProfileId = "E2E_CUSTOM_FORMAL_PROFILE_" + Date.now();
+        const profileCopy = await window.mip.duplicateProfile({ profileId: "BASELINE_NOW_BINARY_V1", version: 1, newId: customProfileId, activate: false });
+        const profileDraft = jsonSafe(profileCopy);
+        profileDraft.audio = { recipeId: customRecipeId, version: output.guidedEditorDom.savedVersion };
+        const savedProfile = await window.mip.saveProfileVersion({ profile: profileDraft, parentVersion: 1, activate: true });
+        const customDraft = await window.mip.createSession({
+          profileId: customProfileId,
+          profileVersion: savedProfile.version,
+          recordType: "dry",
+          participantLabel: "Electron custom formal fixture",
+          seed: "electron-custom-formal-seed",
+          deferCommit: true,
+        });
+        const customCommit = await window.mip.commitSession({
+          id: customDraft.sessionId,
+          memoryConfirmed: true,
+          safetyConfirmed: true,
+          safetyNote: "Automated dry custom-recipe gate.",
+        });
+        const prepared = await window.mip.prepareAudio({ id: customDraft.sessionId });
+        const committedAudio = prepared.audio;
+        const result = {
+          recipeId: committedAudio.recipeId,
+          recipeVersion: committedAudio.version,
+          configFingerprint: committedAudio.configFingerprint,
+          referenceStatus: activatedRecipe.engineeringVerification?.referenceStatus,
+          configurationStatus: activatedRecipe.engineeringVerification?.configurationStatus,
+          runtimeCompatibility: activatedRecipe.engineeringVerification?.runtimeCompatibility,
+          deterministicSelfCheck: activatedRecipe.engineeringVerification?.deterministicSelfCheck,
+          formalOperationalEligibility: activatedRecipe.formalOperationalEligibility === true,
+          profileId: savedProfile.id,
+          profileVersion: savedProfile.version,
+          sessionId: customDraft.sessionId,
+          createAccepted: customDraft.status === "DRAFT",
+          commitAccepted: customCommit.status === "COMMITTED",
+          exactIdentity: committedAudio.recipeId === customRecipeId && committedAudio.version === output.guidedEditorDom.savedVersion,
+          fingerprintPresent: /^[a-f0-9]{64}$/i.test(String(committedAudio.configFingerprint || "")),
+        };
+        // Close the dry fixture without starting a participant/audio phase.
+        await window.mip.audioFailed({ id: customDraft.sessionId, error: "E2E custom formal fixture cleanup" });
+        if (result.referenceStatus !== "NOT_APPLICABLE" || result.configurationStatus !== "PASS" || result.runtimeCompatibility !== "PASS" || result.deterministicSelfCheck !== "PASS" || !result.formalOperationalEligibility || !result.createAccepted || !result.commitAccepted || !result.exactIdentity || !result.fingerprintPresent)
+          throw new Error("Custom formal recipe IPC workflow failed: " + JSON.stringify(result));
+        return result;
+      };
+      output.customFormalRecipe = await runCustomFormalRecipeFlow();
       document.querySelector('[data-page="reports"]')?.click();
       await sleep(300);
       output.reportNavigation = document.querySelector("#page-title")?.textContent || "";

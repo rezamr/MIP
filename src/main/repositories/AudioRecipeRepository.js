@@ -8,7 +8,7 @@ import {
   materialDiff as authoritativeMaterialDiff,
 } from "./AudioRecipeVersionPolicy.js";
 
-const DTO_KEYS = new Set(["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance"]);
+const DTO_KEYS = new Set(["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance", "formalOperationalEligibility"]);
 
 function material(value) {
   return Object.fromEntries(Object.entries(clone(value || {})).filter(([key]) => !DTO_KEYS.has(key)));
@@ -153,14 +153,19 @@ export class AudioRecipeRepository {
       },
     );
     normalizedValue.engineeringVerification = verification;
-    normalizedValue.formalEligibility = verification.status === "PASS" && provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true;
-    normalizedValue.formalEligibilityReason = normalizedValue.formalEligibility
-      ? "Immutable version, active policy, provenance, and current reference verification gates passed."
-      : verification.status === "STALE"
+    // Persist provenance completeness separately from repository/activation
+    // gates.  A custom immutable recipe may be operationally eligible without
+    // having a golden reference fixture; recipeDto applies the active-version
+    // gate when it is reopened.
+    normalizedValue.formalEligibility = provenanceValidation.valid && provenanceValidation.summary.provenanceEligible === true;
+    normalizedValue.formalOperationalEligibility = verification.formalOperationalEligibility === true;
+    normalizedValue.formalEligibilityReason = verification.referenceStatus === "NOT_APPLICABLE"
+      ? "No golden reference fixture applies to this custom recipe; repository activation and operational checks are evaluated separately."
+      : verification.referenceStatus === "STALE"
         ? "Engineering verification is stale after a material recipe change."
-        : verification.status === "PASS"
-          ? "Version is valid but remains subject to repository activation and session policy."
-          : "Current reference verification has not been run for this effective recipe.";
+        : verification.referenceStatus === "PASS"
+          ? "Applicable reference and operational checks passed; repository activation is evaluated separately."
+          : "Current applicable reference verification has not been run for this effective recipe.";
     value = normalizedValue;
     const provenanceIncomplete = !provenanceValidation.valid || provenanceValidation.summary.provenanceEligible !== true;
     const incomplete = options.incomplete === true || options.allowIncomplete === true || !validation.valid || provenanceIncomplete || policy.errors.length > 0;

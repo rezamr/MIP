@@ -269,6 +269,7 @@ const FINGERPRINT_EXCLUDED_METADATA = new Set([
   "historicalExactness",
   "formalEligibility",
   "formalEligibilityReason",
+  "formalOperationalEligibility",
   "provenanceEligibility",
   "engineeringVerification",
   "provenanceAudit",
@@ -355,17 +356,26 @@ export function summarizeProvenance(recipe) {
   const reconstruction = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "MIP_RECONSTRUCTION_PARAMETER").map((entry) => entry.path);
   const sourceVerified = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "PRIMARY_SOURCE_VERIFIED").map((entry) => entry.path);
   const provenanceEligible = unknown.length === 0;
-  let formalEligible = recipe?.formalEligibility === false ? false : provenanceEligible;
+  const formalEligible = recipe?.formalEligibility === false ? false : provenanceEligible;
+  // A raw/unsaved normalized recipe has no repository activation or immutable
+  // version evidence, so it is never operationally eligible by default.
+  let formalOperationalEligible = false;
   // A repository DTO carries the operational gates that a raw normalized
   // recipe cannot know (immutable version, active status, and current
   // engineering verification).  When those fields are present, require all
   // of them instead of treating provenance completeness as formal eligibility.
   const repositoryProjection = recipe && ["status", "isDraft", "isActive", "incomplete"].some((key) => Object.prototype.hasOwnProperty.call(recipe, key));
   if (repositoryProjection) {
-    formalEligible = formalEligible &&
+    const repositoryGate = provenanceEligible &&
       String(recipe.status || "").toUpperCase() === "ACTIVE" &&
-      recipe.isDraft !== true && recipe.isActive === true && recipe.incomplete !== true &&
-      String(recipe.engineeringVerification?.status || "").toUpperCase() === "PASS";
+      recipe.isDraft !== true && recipe.isActive === true && recipe.incomplete !== true;
+    // The repository computes this field from immutable metadata and current
+    // verification.  A renderer/owner-supplied `true` must never override the
+    // activation/incomplete/provenance gate; it is only an additional
+    // authoritative projection when the repository gate is satisfied.
+    formalOperationalEligible = repositoryGate && (Object.prototype.hasOwnProperty.call(recipe, "formalOperationalEligibility")
+      ? recipe.formalOperationalEligibility === true
+      : String(recipe.engineeringVerification?.status || "").toUpperCase() === "PASS");
   }
   return {
     classes,
@@ -378,7 +388,7 @@ export function summarizeProvenance(recipe) {
     // repository adds active/version/verification gates before a recipe is
     // considered formally usable; a preview may never imply that state.
     formalEligible,
-    formalOperationalEligible: formalEligible,
+    formalOperationalEligible,
   };
 }
 

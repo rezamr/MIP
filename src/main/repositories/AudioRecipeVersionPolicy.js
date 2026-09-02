@@ -3,6 +3,7 @@ import {
   EXPERIMENTAL_RECIPES,
   PROCESSOR_VERSION,
   PROVENANCE_CLASSES,
+  renderOffline,
   normalizeRecipe,
 } from "../../../public/audio-core.js";
 
@@ -14,6 +15,8 @@ export const AUDIO_CORE_VERSION = "mip-audio-core-2.0";
 export const ENGINEERING_VERIFICATION_VERSION = "AUDIO_ENGINEERING_FIXTURES_V1";
 export const VERIFICATION_NOT_RUN = "REFERENCE VERIFICATION NOT RUN";
 export const VERIFICATION_STALE = "STALE";
+export const REFERENCE_NOT_APPLICABLE = "NOT_APPLICABLE";
+export const REFERENCE_NOT_RUN = "NOT_RUN";
 
 const MATERIAL_KEYS = Object.freeze([
   "sampleRate",
@@ -64,6 +67,7 @@ const CONVENIENCE_KEYS = new Set([
   "historicalExactness",
   "formalEligibility",
   "formalEligibilityReason",
+  "formalOperationalEligibility",
   "provenanceEligibility",
   "engineeringVerification",
   "provenanceAudit",
@@ -139,6 +143,24 @@ function diffWalk(before, after, pathName, changes) {
   if (canonical(before) !== canonical(after)) changes.push({ path: pathName, before: clone(before), after: clone(after) });
 }
 
+function newMaterialPaths(value, pathName = "", paths = []) {
+  if (value === null || value === undefined || typeof value !== "object") {
+    if (pathName) paths.push({ path: pathName, before: undefined, after: clone(value) });
+    return paths;
+  }
+  if (Array.isArray(value)) {
+    if (!value.length && pathName) paths.push({ path: pathName, before: undefined, after: [] });
+    for (let index = 0; index < value.length; index += 1)
+      newMaterialPaths(value[index], `${pathName}[${index}]`, paths);
+    return paths;
+  }
+  const keys = Object.keys(value).sort();
+  if (!keys.length && pathName) paths.push({ path: pathName, before: undefined, after: {} });
+  for (const key of keys)
+    newMaterialPaths(value[key], pathName ? `${pathName}.${key}` : key, paths);
+  return paths;
+}
+
 export function materialDiff(parentRecipe, proposedRecipe) {
   const before = materialProjection(parentRecipe);
   const after = materialProjection(proposedRecipe);
@@ -188,17 +210,19 @@ function validateEntry(entry, pathName) {
   return { valid: true };
 }
 
-function fallbackEntry(parentEntry, pathName, parentRecipe = null) {
+function fallbackEntry(parentEntry, pathName, parentRecipe = null, parentless = false) {
   const parentClass = parentEntry ? entryClass(parentEntry) : null;
   const top = `${parentRecipe?.provenance || ""} ${parentRecipe?.historicalStatus || ""}`.toUpperCase();
   const reconstruction = parentClass === "MIP_RECONSTRUCTION_PARAMETER" || (
     top.includes("RECONSTRUCTION") && !["UNKNOWN_BLOCKED", "PRIMARY_SOURCE_VERIFIED", "PRIMARY_SOURCE_DERIVED"].includes(parentClass)
   );
-  const nextClass = parentClass === "UNKNOWN_BLOCKED"
+  const nextClass = parentless && !parentEntry
     ? "UNKNOWN_BLOCKED"
-    : reconstruction
-      ? "MIP_RECONSTRUCTION_PARAMETER"
-      : "USER_DEFINED";
+    : parentClass === "UNKNOWN_BLOCKED"
+      ? "UNKNOWN_BLOCKED"
+      : reconstruction
+        ? "MIP_RECONSTRUCTION_PARAMETER"
+        : "USER_DEFINED";
   const entry = {
     provenanceClass: nextClass,
     class: nextClass,
@@ -206,7 +230,9 @@ function fallbackEntry(parentEntry, pathName, parentRecipe = null) {
     sourceRef: "MIP recipe version editor",
   };
   if (nextClass === "UNKNOWN_BLOCKED") {
-    entry.sourceStatus = "Historical semantics remain unresolved; formal use is blocked.";
+    entry.sourceStatus = parentless
+      ? "New material path requires an explicit provenance claim; formal use is blocked."
+      : "Historical semantics remain unresolved; formal use is blocked.";
   } else if (nextClass === "MIP_RECONSTRUCTION_PARAMETER") {
     entry.reconstructionReason = "Material value changed without a newly validated primary-source record; retain reconstruction status.";
     entry.reconstructionVersion = "MIP_AUDIO_RECONSTRUCTION_V1";
@@ -219,10 +245,16 @@ function fallbackEntry(parentEntry, pathName, parentRecipe = null) {
 export function applyMaterialProvenancePolicy({ parentRecipe = null, proposedRecipe, submittedRecipe = proposedRecipe, parentVersion = null } = {}) {
   const proposed = canonicalRecipe(proposedRecipe);
   const parent = parentRecipe ? canonicalRecipe(parentRecipe) : null;
-  const changes = parent ? materialDiff(parent, proposed) : [];
+  const changes = parent
+    ? materialDiff(parent, proposed)
+    : newMaterialPaths(materialProjection(proposed));
   const submittedMap = provenanceMap(submittedRecipe);
   const parentMap = provenanceMap(parent);
   const nextMap = clone(provenanceMap(proposed));
+  const errors = [];
+  const addError = (reason) => {
+    if (reason && !errors.includes(reason)) errors.push(reason);
+  };
   const pathIsChanged = (pathName) => changes.some((change) =>
     pathName === change.path || pathName.startsWith(`${change.path}.`) || change.path.startsWith(`${pathName}.`));
   // A caller may submit a complete recipe with a sparse provenance map. Keep
@@ -232,7 +264,29 @@ export function applyMaterialProvenancePolicy({ parentRecipe = null, proposedRec
     if (!pathIsChanged(pathName)) nextMap[pathName] = clone(entry);
   const invalidated = [];
   const newlyValidated = [];
-  const errors = [];
+  // A parentless identity has no trusted provenance baseline.  The material
+  // loop below validates claims that resolve to canonical material paths; this
+  // pass also validates any extra submitted claim so an unsupported or
+  // incomplete PRIMARY_SOURCE_* assertion cannot hide in a future/unknown
+  // parameter path.
+  if (!parent) {
+    for (const [submittedPath, submittedValue] of Object.entries(submittedMap)) {
+      const explicit = {
+        ...(typeof submittedValue === "string" ? { provenanceClass: submittedValue } : clone(submittedValue || {})),
+        path: submittedPath,
+      };
+      const validation = validateEntry(explicit, submittedPath);
+      if (!validation.valid) {
+        addError(validation.reason);
+        const materialClaim = submittedPath === "*" || changes.some((change) => {
+          const wildcard = change.path.replace(/\[\d+\]/g, "[*]");
+          return submittedPath === change.path || submittedPath === wildcard || submittedPath.startsWith(`${change.path}.`);
+        });
+        if (!materialClaim)
+          nextMap[submittedPath] = { ...fallbackEntry({ provenanceClass: "UNKNOWN_BLOCKED" }, submittedPath, null, true), sourceStatus: validation.reason };
+      }
+    }
+  }
   for (const change of changes) {
     const parentEntry = lookupEntry(parentMap, change.path);
     const submittedEntry = lookupEntry(submittedMap, change.path);
@@ -247,12 +301,12 @@ export function applyMaterialProvenancePolicy({ parentRecipe = null, proposedRec
         newlyValidated.push(change.path);
         continue;
       }
-      errors.push(validation.reason);
+      addError(validation.reason);
       nextMap[change.path] = { ...fallbackEntry({ provenanceClass: "UNKNOWN_BLOCKED" }, change.path, parent), sourceStatus: validation.reason };
       invalidated.push(change.path);
       continue;
     }
-    nextMap[change.path] = fallbackEntry(parentEntry, change.path, parent);
+    nextMap[change.path] = fallbackEntry(parentEntry, change.path, parent, !parent);
     invalidated.push(change.path);
   }
   proposed.parameterProvenance = nextMap;
@@ -284,21 +338,39 @@ function statusMap(value, status) {
   return result;
 }
 
+function deterministicSelfCheck(recipe, valid) {
+  if (!valid) return "FAIL";
+  try {
+    const first = renderOffline(recipe, { targetFrames: 128 });
+    const second = renderOffline(recipe, { targetFrames: 128 });
+    return first?.digest && first.digest === second?.digest ? "PASS" : "FAIL";
+  } catch {
+    return "FAIL";
+  }
+}
+
 export function bindEngineeringVerification(recipe, incoming = null, { materialChanged = false, valid = true } = {}) {
   const value = canonicalRecipe(recipe);
   const source = clone(incoming || value.engineeringVerification || {});
   const expected = expectedReference(value);
   const fixtureMatches = Boolean(expected && source.fixtureId === expected.fixtureId && value.configFingerprint === expected.configFingerprint);
+  const sourceReferenceStatus = String(source.referenceStatus || source.status || "").toUpperCase();
   const versionsMatch = source.audioCoreVersion === AUDIO_CORE_VERSION && source.processorVersion === PROCESSOR_VERSION && source.verificationVersion === ENGINEERING_VERIFICATION_VERSION;
   const referencePass = valid && fixtureMatches && versionsMatch;
-  let status;
-  if (!valid) status = "NOT_RUN";
-  else if (referencePass) status = "PASS";
-  else if (!expected) status = VERIFICATION_NOT_RUN;
-  else if (materialChanged && String(source.status || "").toUpperCase() === "PASS") status = VERIFICATION_STALE;
-  else if (source.status && [VERIFICATION_STALE, "NOT_RUN"].includes(String(source.status).toUpperCase())) status = source.status;
-  else status = VERIFICATION_NOT_RUN;
-  const bound = statusMap(source, status);
+  let referenceStatus;
+  // Applicability is an identity/fixture decision, independent of whether
+  // the current configuration is valid.  A malformed custom recipe still has
+  // no golden fixture; its configuration/self-check gates report the failure.
+  if (!expected) referenceStatus = REFERENCE_NOT_APPLICABLE;
+  else if (!valid) referenceStatus = REFERENCE_NOT_RUN;
+  else if (referencePass) referenceStatus = "PASS";
+  else if (materialChanged && (sourceReferenceStatus === "PASS" || sourceReferenceStatus === VERIFICATION_STALE || source.fixtureId)) referenceStatus = VERIFICATION_STALE;
+  else if (sourceReferenceStatus === VERIFICATION_STALE) referenceStatus = VERIFICATION_STALE;
+  else referenceStatus = REFERENCE_NOT_RUN;
+  // `status` remains a compatibility projection for existing consumers. New
+  // policy consumers must use referenceStatus and the independent checks.
+  const legacyStatus = referenceStatus === REFERENCE_NOT_APPLICABLE ? VERIFICATION_NOT_RUN : referenceStatus;
+  const bound = statusMap(source, legacyStatus);
   bound.configFingerprint = value.configFingerprint || null;
   bound.audioCoreVersion = AUDIO_CORE_VERSION;
   bound.processorVersion = PROCESSOR_VERSION;
@@ -311,10 +383,18 @@ export function bindEngineeringVerification(recipe, incoming = null, { materialC
   bound.fixtureId = expected ? (source.fixtureId || expected.fixtureId || null) : null;
   bound.referenceConfigFingerprint = expected?.configFingerprint || null;
   bound.referenceMatch = referencePass;
+  bound.referenceStatus = referenceStatus;
+  bound.referenceRequired = Boolean(expected);
   bound.configurationValidation = valid ? "PASS" : "FAIL";
-  if (status === VERIFICATION_NOT_RUN) {
-    bound.deterministicFixture = "NOT_RUN";
-    bound.pcmDigestFixture = "NOT_RUN";
+  bound.configurationStatus = bound.configurationValidation;
+  bound.runtimeCompatibility = valid ? "PASS" : "FAIL";
+  bound.deterministicSelfCheck = deterministicSelfCheck(value, valid);
+  bound.deterministicCheckVersion = AUDIO_CORE_VERSION;
+  bound.operationalChecksPassed = bound.configurationStatus === "PASS" && bound.runtimeCompatibility === "PASS" && bound.deterministicSelfCheck === "PASS";
+  bound.formalOperationalEligibility = bound.operationalChecksPassed && (!bound.referenceRequired || bound.referenceStatus === "PASS");
+  if (referenceStatus !== "PASS") {
+    for (const key of ["deterministicFixture", "channelAssignment", "carrierVerification", "noiseVerification", "sweepVerification", "amVerification", "fmVerification", "continuity", "clipping", "pcmDigestFixture"])
+      if (bound[key] === "PASS" || bound[key] === legacyStatus || bound[key] === VERIFICATION_NOT_RUN) bound[key] = referenceStatus;
   }
   return bound;
 }
