@@ -647,6 +647,85 @@ export async function runElectronE2E(mainWindow, options = {}) {
       // flow and do not represent a participant session.
       output.optionalExecutionWindow = await runOptionalExecutionWindowFlow();
 
+      // Reproduce the participant-paced manual symptom through the real
+      // Electron bridge.  The live AudioWorklet is allowed to run briefly
+      // (the 45-second no-timer guarantee is covered by the fake-clock unit
+      // regression); the important boundary here is that the committed STOP
+      // profile has no protocol cue track, no fabricated semantic stage
+      // events, and remains active until the explicit Return/finalization.
+      const runParticipantPacedFlow = async () => {
+        const draft = await window.mip.createSession({
+          profileId: "STOP_ANCHORED_INTEGER_RANGE_V1",
+          mode: "INFLUENCE",
+          targetOffsetMs: 0,
+          temporalAnalysis: {
+            primaryEndpoint: "FIXED_TIME_WINDOW",
+            intervalMs: 100,
+            windows: [{ id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 }],
+          },
+          executionWindow: null,
+          recordType: "dry",
+          participantLabel: "Electron participant-paced protocol fixture",
+          deferCommit: true,
+        });
+        const definitionBeforeReturn = await window.mip.getResearchDefinition({ id: draft.sessionId });
+        const committed = await window.mip.commitSession({
+          id: draft.sessionId,
+          memoryConfirmed: true,
+          safetyConfirmed: true,
+          safetyNote: "Automated participant-paced protocol fixture.",
+        });
+        const prepared = await window.mip.prepareAudio({ id: draft.sessionId });
+        const audioController = new AudioController({ timeoutMs: 5000 });
+        const ready = await audioController.prepare(prepared.audio, { timeoutMs: 5000, handshake: prepared.handshake });
+        await window.mip.audioReady({ id: draft.sessionId, ack: jsonSafe(ready) });
+        const started = await window.mip.startSession({ id: draft.sessionId, memoryConfirmed: true });
+        const audioStarted = await audioController.start({ timeoutMs: 5000 });
+        await window.mip.audioStarted({ id: draft.sessionId, ack: jsonSafe(audioStarted) });
+        await sleep(180);
+        const activeBeforeReturn = await window.mip.getResearchPhases({ id: draft.sessionId });
+        await window.mip.audioStopRequested({ id: draft.sessionId, reason: "owner_returned" });
+        const finalization = await audioController.stop({ timeoutMs: 5000 });
+        await window.mip.audioFinalized({ id: draft.sessionId, finalization: jsonSafe(finalization) });
+        const returned = await window.mip.returnSession({ id: draft.sessionId });
+        const events = await window.mip.getEvents({ id: draft.sessionId });
+        const phases = await window.mip.getResearchPhases({ id: draft.sessionId });
+        const protocolStageTypes = events.events
+          .filter((event) => event.type === "PROTOCOL_STAGE")
+          .map((event) => event.payload?.stageType)
+          .filter(Boolean);
+        const forbiddenSemanticStages = [
+          "INDUCTION_START", "SETTLING_START", "REQUEST_START", "REQUEST_END",
+          "RELEASE_START", "NEUTRAL_OBSERVATION", "POST_REQUEST", "RETURN_CUE",
+        ];
+        const protocolComplete = events.events.find((event) => event.type === "PROTOCOL_COMPLETE");
+        const evidenceStatus = String(phases?.evidencePhaseStatus || "").toUpperCase();
+        const result = {
+          created: draft.status === "DRAFT",
+          committed: committed.status === "COMMITTED",
+          targetUtcUnknownBeforeReturn: definitionBeforeReturn?.targetDefinition?.scheduledUtc == null && definitionBeforeReturn?.targetDefinition?.scheduledMonotonicNs == null,
+          protocolCueCount: Number(prepared.audio?.protocolCueCount || 0),
+          protocolCueVersion: prepared.audio?.protocolCueVersion || null,
+          activeBeforeReturn: String(activeBeforeReturn?.participantPhaseStatus || "").toUpperCase() !== "ENDED",
+          semanticStageTimestampsAbsent: protocolStageTypes.every((stage) => !forbiddenSemanticStages.includes(stage)),
+          lifecycleStarted: protocolStageTypes.includes("PARTICIPANT_PROTOCOL_STARTED"),
+          returned: returned?.status === "RETURNED",
+          stopCaptured: Boolean(phases?.participantStopAnchor?.stopUtc || phases?.participantStopAnchor?.utc),
+          targetCaptured: Boolean(phases?.participantStopAnchor?.targetUtc || phases?.targetScheduledUtc),
+          participantPhaseEnded: String(phases?.participantPhaseStatus || "").toUpperCase() === "ENDED",
+          evidenceContinued: ["POST_TARGET_MONITORING", "COMPLETE"].includes(evidenceStatus),
+          noEarlyReturnDeviation: !events.events.some((event) => event.type === "EARLY_RETURN_DEVIATION"),
+          protocolControllerTerminated: protocolComplete?.payload?.status === "PARTICIPANT_RETURNED",
+          protocolReturnReasonPersisted: protocolComplete?.payload?.reason === "formal_return",
+          noBackfill: phases?.participantStopAnchor?.insufficientPreTargetEvidence === true || phases?.insufficientPreTargetEvidence === true,
+          signedOffsetMs: phases?.participantStopAnchor?.targetOffsetMs ?? phases?.targetOffsetMs ?? null,
+        };
+        if (!result.created || !result.committed || !result.targetUtcUnknownBeforeReturn || result.protocolCueCount !== 0 || result.protocolCueVersion !== null || !result.activeBeforeReturn || !result.semanticStageTimestampsAbsent || !result.lifecycleStarted || !result.returned || !result.stopCaptured || !result.targetCaptured || !result.participantPhaseEnded || !result.evidenceContinued || !result.noEarlyReturnDeviation || !result.protocolControllerTerminated || !result.protocolReturnReasonPersisted || !result.noBackfill)
+          throw new Error("Participant-paced protocol E2E failed: " + JSON.stringify(result));
+        return result;
+      };
+      output.participantPacedProtocol = await runParticipantPacedFlow();
+
       // Prove the independent formal-operational path with a genuinely custom
       // identity.  This is deliberately last because the dry fixture is
       // inspected through the real main-process session IPC and then moved to

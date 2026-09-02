@@ -236,6 +236,20 @@ export const mappings = {
 };
 
 const baseProtocol = {
+  stageMode: "TIMED_AUTOMATIC",
+  cueMode: "TIMED_NONSEMANTIC",
+  // Semantic stage records remain timed for these legacy/demo profiles, but
+  // only this explicit set is audible.  Zero-duration REQUEST_END and
+  // POST_REQUEST boundaries are intentionally non-audible, preventing
+  // accidental same-frame double tones.
+  audibleStages: [
+    "INDUCTION_START",
+    "SETTLING_START",
+    "REQUEST_START",
+    "RELEASE_START",
+    "NEUTRAL_OBSERVATION",
+    "RETURN_CUE",
+  ],
   inductionSeconds: 5,
   settleSeconds: 5,
   requestSeconds: 10,
@@ -484,7 +498,15 @@ export const profiles = {
       cadence: "FIXED_INTERVAL",
     },
     rng: { provider: "OS_CSPRNG" },
-    protocol: { ...baseProtocol, participantPaced: true, returnSeconds: 0 },
+    protocol: {
+      ...baseProtocol,
+      stageMode: "PARTICIPANT_PACED",
+      cueMode: "NONE",
+      audibleStages: [],
+      participantPaced: true,
+      returnSeconds: 0,
+      cueVersion: null,
+    },
     audio: { recipeId: "A-U396-4", version: 1 },
     analysis: {
       primaryEndpoint: "FIXED_TIME_WINDOW",
@@ -561,6 +583,19 @@ export function validateProfile(profile) {
       catch (error) { errors.push(`timing.executionWindow is invalid: ${error.message}`); }
     }
   }
+  const stageMode = profile?.protocol?.stageMode === undefined || profile?.protocol?.stageMode === null
+    ? (profile?.protocol?.participantPaced === true ? "PARTICIPANT_PACED" : "TIMED_AUTOMATIC")
+    : String(profile.protocol.stageMode).toUpperCase();
+  if (![
+    "TIMED_AUTOMATIC",
+    "PARTICIPANT_PACED",
+  ].includes(stageMode)) errors.push("protocol.stageMode is unsupported or missing");
+  const cueMode = profile?.protocol?.cueMode === undefined || profile?.protocol?.cueMode === null
+    ? (stageMode === "PARTICIPANT_PACED" ? "NONE" : "TIMED_NONSEMANTIC")
+    : String(profile.protocol.cueMode).toUpperCase();
+  if (!["TIMED_NONSEMANTIC", "NONE"].includes(cueMode)) errors.push("protocol.cueMode is unsupported or missing");
+  if (stageMode === "PARTICIPANT_PACED" && cueMode !== "NONE") errors.push("participant-paced protocols require protocol.cueMode NONE");
+  if (profile?.protocol?.audibleStages !== undefined && !Array.isArray(profile.protocol.audibleStages)) errors.push("protocol.audibleStages must be an array");
   if (profile?.reveal?.policy === "AFTER_RAW_REPORT_LOCK" && !profile.protocol)
     errors.push("protocol is required before raw-report reveal");
   if (profile?.analysis?.primaryEndpoint && !["EXACT_SLOT", "FIXED_TIME_WINDOW", "FIXED_SEQUENCE_WINDOW", "TARGET_FREQUENCY"].includes(String(profile.analysis.primaryEndpoint).toUpperCase()))

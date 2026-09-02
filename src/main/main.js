@@ -55,7 +55,8 @@ import {
   SCHEDULER_MODES,
   SessionScheduler,
 } from "./sessions/session-scheduler.js";
-import { ProtocolStageController } from "./sessions/protocol-stage-controller.js";
+import { ProtocolStageController, shouldRecordEarlyReturnDeviation } from "./sessions/protocol-stage-controller.js";
+import { normalizeProtocolCueMode, protocolCues } from "./sessions/protocol-cues.js";
 import { TemporalEvidenceScheduler } from "./sessions/temporal-evidence-scheduler.js";
 import { classifyStartupRecovery } from "./sessions/recovery-policy.js";
 import { analyzeTemporalEvidence, findTargetOccurrences, aggregateCrossSession } from "./analysis/temporal-analysis.js";
@@ -444,6 +445,7 @@ function assertParticipantStopExecutionWindow(runtime) {
 function requestAudioStop(runtime, reason = "owner_returned") {
   if (!runtime || runtime.audioStopRequested) return false;
   runtime.audioStopRequested = true;
+  runtime.audioStopReason = reason;
   db.evidence.appendEvent(runtime.id, runtime.trialId, "AUDIO_STOP_REQUESTED", {
     reason,
     requestedUtc: new Date().toISOString(),
@@ -529,34 +531,6 @@ async function failRuntimeClosed(runtime, reason, payload = {}) {
   }
 }
 
-function protocolCues(protocol = {}, sampleRate) {
-  const durations = [
-    ["INDUCTION_START", Number(protocol.inductionSeconds || 0)],
-    ["SETTLING_START", Number(protocol.settleSeconds || 0)],
-    ["REQUEST_START", Number(protocol.requestSeconds || 0)],
-    ["REQUEST_END", 0],
-    ["RELEASE_START", Number(protocol.releaseSeconds || 0)],
-    ["NEUTRAL_OBSERVATION", Number(protocol.neutralSeconds || 0)],
-    ["POST_REQUEST", 0],
-    ["RETURN_CUE", Number(protocol.returnSeconds || 0)],
-  ];
-  let elapsed = 0;
-  return durations.map(([stageType, duration]) => {
-    const cue = {
-      id: `protocol-${stageType.toLowerCase()}`,
-      startFrame: Math.max(0, Math.round(elapsed * sampleRate)),
-      durationFrames: Math.max(1, Math.round(Math.min(0.25, Math.max(0.05, duration || 0.1)) * sampleRate)),
-      leftHz: 880,
-      rightHz: 884,
-      gain: 0.015,
-      phase: { left: 0, right: 0 },
-      waveform: "sine",
-    };
-    elapsed += duration;
-    return cue;
-  });
-}
-
 function completeAudioRecipe(recipe, audioSource, requestedSampleRate, protocol = null) {
   const sampleRate = requestedSampleRate === undefined
     ? Number(recipe.sampleRate)
@@ -569,7 +543,8 @@ function completeAudioRecipe(recipe, audioSource, requestedSampleRate, protocol 
   // remain a pure carrier condition), while the committed effective audio
   // configuration still includes the exact shared cue track and fingerprint.
   if (protocol) {
-    input.protocolCueVersion = "MIP_PROTOCOL_CUES_V1";
+    const cueMode = normalizeProtocolCueMode(protocol);
+    input.protocolCueVersion = cueMode === "NONE" ? null : "MIP_PROTOCOL_CUES_V1";
     input.protocolCues = protocolCues(protocol, sampleRate);
   }
   const effective = normalizeRecipe(input);
@@ -1176,7 +1151,8 @@ async function formalReturn(runtime) {
       throw new Error("Formal return requires AUDIO_FINALIZED telemetry from the AudioWorklet.");
     if (isParticipantStopAnchored(runtime) && !runtime.stopAnchor)
       ensureParticipantStopAnchor(runtime, "formal_return");
-    if (runtime.protocolStageController && !runtime.protocolStageController.returnCueObserved) {
+    const earlyReturnDeviation = shouldRecordEarlyReturnDeviation(runtime.protocolStageController);
+    if (earlyReturnDeviation) {
       db.evidence.appendEvent(runtime.id, runtime.trialId, "EARLY_RETURN_DEVIATION", {
         classification: "EARLY_RETURN_BEFORE_RETURN_CUE",
         status: "TIMING_DEVIATION",
@@ -1202,7 +1178,6 @@ async function formalReturn(runtime) {
       schedulerExpected > 0 &&
       (schedulerResult?.status !== "COMPLETE" || schedulerGenerated < schedulerExpected),
     );
-    const earlyReturnDeviation = Boolean(runtime.protocolStageController && !runtime.protocolStageController.returnCueObserved);
     if ((schedulerDeviation || earlyReturnDeviation) && runtime.controller.state === "RUNNING" && !evidenceContinuesAfterReturn) {
       await transitionSession(runtime.id, "TIMING_DEVIATION", {
         trialId: runtime.trialId,
@@ -1269,7 +1244,9 @@ async function formalReturn(runtime) {
             format,
             observations: runtime.audioObservations,
             checkMode: "FORMAL_SESSION",
-            intendedDurationMs: Number(runtime.profile.protocol?.inductionSeconds || 0) * 1000 + Number(runtime.profile.protocol?.settleSeconds || 0) * 1000 + Number(runtime.profile.protocol?.requestSeconds || 0) * 1000 + Number(runtime.profile.protocol?.releaseSeconds || 0) * 1000 + Number(runtime.profile.protocol?.neutralSeconds || 0) * 1000 + Number(runtime.profile.protocol?.returnSeconds || 0) * 1000,
+            intendedDurationMs: runtime.protocolStageController?.participantPaced
+              ? null
+              : Number(runtime.profile.protocol?.inductionSeconds || 0) * 1000 + Number(runtime.profile.protocol?.settleSeconds || 0) * 1000 + Number(runtime.profile.protocol?.requestSeconds || 0) * 1000 + Number(runtime.profile.protocol?.releaseSeconds || 0) * 1000 + Number(runtime.profile.protocol?.neutralSeconds || 0) * 1000 + Number(runtime.profile.protocol?.returnSeconds || 0) * 1000,
             verification: {
               telemetryStructurallyValid: true,
               processorIdentityVerified: finalization.processorVersion === PROCESSOR_VERSION && finalization.recipeId === runtime.audio.recipeId && finalization.recipeVersion === runtime.audio.version && finalization.sampleRate === runtime.audio.sampleRate && finalization.digestVersion === PCM_DIGEST_VERSION && finalization.pcmFormat === PCM_CANONICAL_FORMAT.body && finalization.channels === runtime.audio.channels,
@@ -1304,6 +1281,14 @@ async function formalReturn(runtime) {
     if (evidenceContinuesAfterReturn) {
       db.research.updatePhases(runtime.id, { participantPhaseStatus: "ENDED", sessionLifecycle: "RETURNED", evidencePhaseStatus: runtime.scheduler?.evidencePhase || "RUNNING" });
       runtime.participantPhase = "ENDED";
+    }
+    if (runtime.protocolStageController?.participantPaced) {
+      const stopAnchor = runtime.stopAnchor || {};
+      runtime.protocolStageController.markParticipantReturned({
+        reason: "formal_return",
+        stopUtc: stopAnchor.stopUtc || stopAnchor.utc || null,
+        stopMonotonicNs: stopAnchor.stopMonotonicNs || stopAnchor.monotonicNs || null,
+      });
     }
     if (!evidenceContinuesAfterReturn || !schedulerIsActive(runtime.scheduler))
       powerManager.stop();
@@ -1745,6 +1730,7 @@ function registerSessionHandlers() {
       latestTelemetry: null,
       audioFinalization: null,
       audioStopRequested: false,
+      audioStopReason: null,
       audioObservations: [],
       contextStates: [],
       scheduler: null,
@@ -2030,8 +2016,20 @@ function registerSessionHandlers() {
         }
         try {
           runtime.protocolCompleted = true;
-          db.evidence.appendEvent(id, runtime.trialId, "PROTOCOL_COMPLETE", { status: completion.status, anchor: completion.anchor });
-          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("mip:protocol-complete", { sessionId: id, trialId: runtime.trialId, status: completion.status });
+          db.evidence.appendEvent(id, runtime.trialId, "PROTOCOL_COMPLETE", {
+            status: completion.status,
+            anchor: completion.anchor,
+            reason: completion.reason || null,
+            stopRequestReason: runtime.audioStopReason || null,
+            stopUtc: completion.stopUtc || null,
+            stopMonotonicNs: completion.stopMonotonicNs || null,
+          });
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("mip:protocol-complete", {
+            sessionId: id,
+            trialId: runtime.trialId,
+            status: completion.status,
+            reason: completion.reason || null,
+          });
         } catch (error) {
           runtime.protocolCompleted = false;
           void failRuntimeClosed(runtime, "PROTOCOL_COMPLETION_PERSISTENCE_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" });

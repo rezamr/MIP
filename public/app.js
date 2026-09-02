@@ -44,6 +44,13 @@ const esc = (x) =>
       ],
   );
 const jsonSafe = (value) => JSON.parse(JSON.stringify(value, (_key, child) => typeof child === "bigint" ? child.toString() : child));
+function isParticipantPacedProfile(profile = selectedProfile, session = currentSession) {
+  const stageMode = profile?.protocol?.stageMode || session?.profile?.protocol?.stageMode;
+  const timingMode = profile?.timing?.mode || session?.researchDefinition?.timingMode || session?.timing?.mode;
+  return String(stageMode || "").toUpperCase() === "PARTICIPANT_PACED" ||
+    profile?.protocol?.participantPaced === true ||
+    String(timingMode || "").toUpperCase() === "PARTICIPANT_STOP_ANCHORED";
+}
 function canonicalRecipeEditorDraft(recipe) {
   const draft = jsonSafe(recipe || {});
   if (Array.isArray(draft.carriers) && draft.carriers[0])
@@ -420,9 +427,13 @@ async function renderPre() {
 }
 function renderTarget() {
   const future = currentSession?.mode === "FUTURE_TARGET";
+  const participantPaced = isParticipantPacedProfile();
   const instruction = currentSession?.participantTarget || (future ? `Prediction committed: ${currentSession?.prediction ?? "not recorded"}. The actual future target is generated only at the committed anchor.` : "Target instruction unavailable.");
   const targetText = future ? "Hidden until the future target anchor" : (instruction.match(/favor (.+?)(?: now\.)?$/)?.[1] || instruction);
-  app.innerHTML = `<div class="section-intro"><div><h2>${future ? "Future target commitment" : "Assigned target & encoding"}</h2><p>${future ? "Prediction/recognition mode: no actual target exists before its precommitted anchor." : "The target is assigned in a draft; immutable commitment occurs only after memory and safety confirmation."}</p></div>${pill(future ? "Future target · Draft" : "Target assigned · Draft")}</div>${steps(3)}<div class="grid two"><div class="card target-box"><div class="subtle">Participant-facing target</div><div class="target">${esc(targetText)}</div><p class="subtle">${future ? "The actual target and machine output remain hidden until the evidence gate permits reveal." : "Memorize exactly what is shown. Hidden future output is not displayed."}</p></div><div class="card"><h3>Encoding instruction</h3><p>${esc(instruction)}</p><div class="callout">Release the request and observe neutrally. Fixed non-semantic cues guide hands-free stages.</div><label style="display:flex;gap:8px;margin-top:18px"><input id="memory" type="checkbox"> I have memorized the target and instruction.</label></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next" disabled>Continue to readiness review →</button></div>`;
+  const procedureCallout = participantPaced
+    ? "Proceed at your own pace. Release the request and observe neutrally. Return only when you are ready. No app-selected request or return time is used."
+    : "Release the request and observe neutrally. Fixed non-semantic cues guide hands-free stages.";
+  app.innerHTML = `<div class="section-intro"><div><h2>${future ? "Future target commitment" : "Assigned target & encoding"}</h2><p>${future ? "Prediction/recognition mode: no actual target exists before its precommitted anchor." : "The target is assigned in a draft; immutable commitment occurs only after memory and safety confirmation."}</p></div>${pill(future ? "Future target · Draft" : "Target assigned · Draft")}</div>${steps(3)}<div class="grid two"><div class="card target-box"><div class="subtle">Participant-facing target</div><div class="target">${esc(targetText)}</div><p class="subtle">${future ? "The actual target and machine output remain hidden until the evidence gate permits reveal." : "Memorize exactly what is shown. Hidden future output is not displayed."}</p></div><div class="card"><h3>Encoding instruction</h3><p>${esc(instruction)}</p><div class="callout">${esc(procedureCallout)}</div><label style="display:flex;gap:8px;margin-top:18px"><input id="memory" type="checkbox"> I have memorized the target and instruction.</label></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next" disabled>Continue to readiness review →</button></div>`;
   $("#back").onclick = renderPre;
   $("#memory").onchange = (e) => ($("#next").disabled = !e.target.checked);
   $("#next").onclick = renderReady;
@@ -531,6 +542,7 @@ function renderReady() {
   };
 }
 function renderHandsFree() {
+  const participantPaced = isParticipantPacedProfile();
   const research = currentSession?.researchDefinition || {};
   const temporalWindows = research.temporalAnalysis?.windows?.some?.((window) =>
     window?.enabled !== false && (Number(window?.preMs || 0) > 0 || Number(window?.postMs || 0) > 0 ||
@@ -543,7 +555,11 @@ function renderHandsFree() {
     String(currentSession?.mode || "INFLUENCE").toUpperCase() !== "INFLUENCE" ||
     (research.outcomeSpace?.type || currentSession?.outcomeSpace?.type) !== "BINARY" ||
     research.primaryEndpoint !== "EXACT_SLOT" || temporalWindows;
-  app.innerHTML = `<div class="hands-free"><span class="eyebrow">SESSION ACTIVE · HANDS-FREE</span><div class="breath"></div><h2>Remain comfortable</h2><p>Audio, cues, telemetry, and hidden output are running automatically.<br>No screen interaction is required.</p><div class="progress"><span id="sessionProgress" style="width:0%"></span></div><small id="sessionStage">Stage in progress · hidden output protected</small><div class="actions" style="margin-top:18px"><button class="button" id="returned">End participant phase / Return</button>${temporal ? '<button class="button danger" id="abortEvidence">Abort evidence collection</button>' : ""}</div>${temporal ? '<p class="subtle" style="margin-top:12px">Returning ends the participant phase only. Abort is a separate confirmed action and records a deviation; missed opportunities are never backfilled.</p>' : ""}</div>`;
+  const activeCopy = participantPaced
+    ? "Audio, telemetry, and hidden output are running. Proceed at your own pace; the application does not select request or return times."
+    : "Audio, cues, telemetry, and hidden output are running automatically.<br>No screen interaction is required.";
+  const activeStage = participantPaced ? "Participant-paced procedure active · hidden output protected" : "Stage in progress · hidden output protected";
+  app.innerHTML = `<div class="hands-free"><span class="eyebrow">SESSION ACTIVE · HANDS-FREE</span><div class="breath"></div><h2>Remain comfortable</h2><p>${activeCopy}</p><div class="progress"><span id="sessionProgress" style="width:0%"></span></div><small id="sessionStage">${activeStage}</small><div class="actions" style="margin-top:18px"><button class="button" id="returned">End participant phase / Return</button>${temporal ? '<button class="button danger" id="abortEvidence">Abort evidence collection</button>' : ""}</div>${temporal ? '<p class="subtle" style="margin-top:12px">Returning ends the participant phase only. Abort is a separate confirmed action and records a deviation; missed opportunities are never backfilled.</p>' : ""}</div>`;
   updateFormalProgress();
   $("#returned").onclick = async () => {
     const returned = $("#returned");
@@ -604,7 +620,9 @@ function updateFormalProgress() {
   const span = $("#sessionProgress");
   if (span) span.style.width = `${audioProgress.toFixed(2)}%`;
   const stage = $("#sessionStage");
-  if (stage) stage.textContent = `${scheduler.mode || "Scheduled"} · ${Math.round(audioProgress)}% · hidden output protected`;
+  if (stage) stage.textContent = isParticipantPacedProfile()
+    ? `Participant-paced procedure active · ${Math.round(audioProgress)}% · hidden output protected`
+    : `${scheduler.mode || "Scheduled"} · ${Math.round(audioProgress)}% · hidden output protected`;
 }
 async function renderRaw() {
   const id = currentSession?.sessionId;

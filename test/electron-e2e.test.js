@@ -129,6 +129,24 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
       timezone: "UTC",
     });
     assert.deepEqual(initial.optionalExecutionWindow.rejected, { missingStart: true, invalidEnd: true });
+    assert.equal(initial.participantPacedProtocol.created, true);
+    assert.equal(initial.participantPacedProtocol.committed, true);
+    assert.equal(initial.participantPacedProtocol.targetUtcUnknownBeforeReturn, true);
+    assert.equal(initial.participantPacedProtocol.protocolCueCount, 0);
+    assert.equal(initial.participantPacedProtocol.protocolCueVersion, null);
+    assert.equal(initial.participantPacedProtocol.activeBeforeReturn, true);
+    assert.equal(initial.participantPacedProtocol.semanticStageTimestampsAbsent, true);
+    assert.equal(initial.participantPacedProtocol.lifecycleStarted, true);
+    assert.equal(initial.participantPacedProtocol.returned, true);
+    assert.equal(initial.participantPacedProtocol.stopCaptured, true);
+    assert.equal(initial.participantPacedProtocol.targetCaptured, true);
+    assert.equal(initial.participantPacedProtocol.participantPhaseEnded, true);
+    assert.equal(initial.participantPacedProtocol.evidenceContinued, true);
+    assert.equal(initial.participantPacedProtocol.noEarlyReturnDeviation, true);
+    assert.equal(initial.participantPacedProtocol.protocolControllerTerminated, true);
+    assert.equal(initial.participantPacedProtocol.protocolReturnReasonPersisted, true);
+    assert.equal(initial.participantPacedProtocol.noBackfill, true);
+    assert.equal(initial.participantPacedProtocol.signedOffsetMs, 0);
     assert.equal(initial.customFormalRecipe.referenceStatus, "NOT_APPLICABLE");
     assert.equal(initial.customFormalRecipe.configurationStatus, "PASS");
     assert.equal(initial.customFormalRecipe.runtimeCompatibility, "PASS");

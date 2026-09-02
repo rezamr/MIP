@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ProtocolStageController } from "../src/main/sessions/protocol-stage-controller.js";
+import { ProtocolStageController, shouldRecordEarlyReturnDeviation } from "../src/main/sessions/protocol-stage-controller.js";
 
 class FakeClock {
   constructor() { this.mono = 1_000_000_000n; this.utc = Date.parse("2026-09-01T00:00:00.000Z"); this.queue = []; this.nextId = 1; }
@@ -51,6 +51,7 @@ test("authoritative protocol stages are anchored and complete after return cue p
     onComplete: (completion) => completions.push(completion),
   });
   controller.start({ name: "AUDIO_STARTED", monotonicNs: clock.mono, utcMs: clock.utc });
+  assert.equal(shouldRecordEarlyReturnDeviation(controller), true);
   clock.advance(8);
   assert.deepEqual(stages.map((stage) => stage.stageType), [
     "INDUCTION_START", "SETTLING_START", "REQUEST_START", "REQUEST_END",
@@ -58,10 +59,58 @@ test("authoritative protocol stages are anchored and complete after return cue p
   ]);
   assert.equal(returnCues.length, 1);
   assert.equal(controller.returnCueObserved, true);
+  assert.equal(shouldRecordEarlyReturnDeviation(controller), false);
   assert.equal(completions.length, 0);
   controller.notifyAudioFinalized({ processorSequence: 9 });
   assert.equal(completions.length, 1);
   assert.equal(completions[0].status, "COMPLETE");
   assert.equal(stages.at(-1).stageType, "AUDIO_FINALIZED");
   assert.equal(controller.toDTO().anchor.name, "AUDIO_STARTED");
+});
+
+test("participant-paced controller has no timed semantic stages and terminates only on explicit return", () => {
+  const clock = new FakeClock();
+  const stages = [];
+  const completions = [];
+  const controller = new ProtocolStageController({
+    stageMode: "PARTICIPANT_PACED",
+    cueMode: "NONE",
+    inductionSeconds: 5,
+    settleSeconds: 5,
+    requestSeconds: 10,
+    releaseSeconds: 10,
+    neutralSeconds: 10,
+    returnSeconds: 5,
+  }, {
+    sessionId: "STOP-TEST",
+    trialId: "STOP-TEST-T001",
+    timer: clock.timer,
+    monotonicNs: clock.monotonicNs,
+    utcMs: clock.utcMs,
+    onStage: (stage) => stages.push(stage),
+    onComplete: (completion) => completions.push(completion),
+  });
+  controller.start({ name: "AUDIO_STARTED", monotonicNs: clock.mono, utcMs: clock.utc });
+  clock.advance(45_000);
+  assert.equal(controller.status, "RUNNING");
+  assert.equal(controller.returnCueObserved, false);
+  assert.equal(controller.requiresReturnCue, false);
+  assert.equal(shouldRecordEarlyReturnDeviation(controller), false);
+  assert.deepEqual(controller.toDTO().plannedStages, []);
+  assert.deepEqual(stages.map((stage) => stage.stageType), ["PARTICIPANT_PROTOCOL_STARTED"]);
+  assert.equal(completions.length, 0);
+
+  controller.notifyAudioFinalized({ processorSequence: 10 });
+  assert.equal(controller.status, "RUNNING");
+  controller.markParticipantReturned({ reason: "owner_returned", stopUtc: "2026-09-01T00:00:45.000Z", stopMonotonicNs: "46000000000" });
+  assert.equal(controller.status, "PARTICIPANT_RETURNED");
+  assert.equal(controller.completionPending, false);
+  assert.equal(controller.completionCalled, true);
+  assert.equal(controller.returnReason, "owner_returned");
+  assert.equal(completions.length, 1);
+  assert.equal(completions[0].status, "PARTICIPANT_RETURNED");
+  assert.equal(stages.some((stage) => [
+    "INDUCTION_START", "SETTLING_START", "REQUEST_START", "REQUEST_END",
+    "RELEASE_START", "NEUTRAL_OBSERVATION", "POST_REQUEST", "RETURN_CUE",
+  ].includes(stage.stageType)), false);
 });

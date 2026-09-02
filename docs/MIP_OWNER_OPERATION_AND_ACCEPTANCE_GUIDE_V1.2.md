@@ -33,6 +33,12 @@ any statistical or audio result.
   `targetUtc` is unknown during readiness and becomes immutable only after
   return.  `preTargetMs` and `postTargetMs` are independent windows centered
   on that derived `T`.
+- In `STOP_ANCHORED_INTEGER_RANGE_V1`, the participant procedure is genuinely
+  self-paced: after `START`, the application does not time induction, settling,
+  request, release, neutral observation, or return, and it emits no fixed
+  protocol cue track.  The participant/owner explicitly presses **Return / End
+  participant phase** when ready.  Only that action supplies the authoritative
+  stop clocks; internal mental-stage timestamps are not inferred by MIP.
 
 ## Page Guide
 
@@ -170,9 +176,12 @@ The three simple conditions are clean component tests:
 - `A-SHAM-0`: L=396 Hz, R=396 Hz matched control.
 
 They contain no hidden noise, AM/FM, delay, comb, sweep, monaural, Septon, or
-cue layers.  During a formal hands-free session, `MIP_PROTOCOL_CUES_V1` is a
-separately versioned nonsemantic protocol track; it is not silently added to
-the selected recipe's component layers.  `MIP_LAYERED_EXPERIMENTAL_V1` is repository/version backed and
+cue layers.  A timed formal protocol may add `MIP_PROTOCOL_CUES_V1` as a
+separately versioned nonsemantic track only for its explicitly declared
+audible stages; it is not silently added to the selected recipe's component
+layers.  `STOP_ANCHORED_INTEGER_RANGE_V1` is participant-paced with
+`cueMode = NONE`, so its committed effective audio has no fixed protocol cue
+track (`protocolCueCount = 0`).  `MIP_LAYERED_EXPERIMENTAL_V1` is repository/version backed and
 explicitly experimental; its 200/204 and 100/101.5 channel assignments and
 numerical noise/effect values are reconstruction choices, not verified CENTER
 LANE facts.  A recipe with `UNKNOWN_BLOCKED` material cannot be activated.

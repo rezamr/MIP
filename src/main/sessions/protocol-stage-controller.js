@@ -9,6 +9,7 @@
  */
 
 export const PROTOCOL_STAGE_TYPES = Object.freeze([
+  "PARTICIPANT_PROTOCOL_STARTED",
   "INDUCTION_START",
   "SETTLING_START",
   "REQUEST_START",
@@ -19,6 +20,31 @@ export const PROTOCOL_STAGE_TYPES = Object.freeze([
   "RETURN_CUE",
   "AUDIO_FINALIZED",
 ]);
+
+export const PROTOCOL_STAGE_MODES = Object.freeze({
+  TIMED_AUTOMATIC: "TIMED_AUTOMATIC",
+  PARTICIPANT_PACED: "PARTICIPANT_PACED",
+});
+
+/**
+ * Resolve the stage policy without allowing a legacy boolean to silently
+ * override an explicit policy.  The boolean remains a compatibility fallback
+ * for persisted v1.2 profiles, while all current profiles declare stageMode.
+ */
+export function normalizeProtocolStageMode(protocol = {}) {
+  const value = protocol.stageMode === undefined || protocol.stageMode === null || protocol.stageMode === ""
+    ? (protocol.participantPaced === true ? PROTOCOL_STAGE_MODES.PARTICIPANT_PACED : PROTOCOL_STAGE_MODES.TIMED_AUTOMATIC)
+    : String(protocol.stageMode).toUpperCase();
+  if (!Object.values(PROTOCOL_STAGE_MODES).includes(value))
+    throw new Error(`Unsupported protocol stage mode: ${value}`);
+  return value;
+}
+
+export const isParticipantPacedProtocol = (protocol = {}) =>
+  normalizeProtocolStageMode(protocol) === PROTOCOL_STAGE_MODES.PARTICIPANT_PACED;
+
+export const shouldRecordEarlyReturnDeviation = (controller) =>
+  Boolean(controller?.requiresReturnCue === true && controller.returnCueObserved !== true);
 
 const number = (value, fallback = 0) => {
   const result = Number(value ?? fallback);
@@ -44,6 +70,7 @@ function monotonicNow() { return process.hrtime.bigint(); }
 function utcNow() { return Date.now(); }
 
 function buildStages(protocol = {}) {
+  if (isParticipantPacedProtocol(protocol)) return [];
   const induction = number(protocol.inductionSeconds) * 1000;
   const settling = number(protocol.settleSeconds) * 1000;
   const request = number(protocol.requestSeconds) * 1000;
@@ -63,11 +90,7 @@ function buildStages(protocol = {}) {
   add("RELEASE_START", release, "CUE_RELEASE");
   add("NEUTRAL_OBSERVATION", neutral, "CUE_NEUTRAL");
   add("POST_REQUEST", 0, "CUE_POST_REQUEST");
-  // Participant-paced protocols deliberately have no app-selected return
-  // instant.  The owner activates Return/Stop and the main process captures
-  // the anchor; do not synthesize a countdown/automatic cue for this mode.
-  if (protocol.participantPaced !== true && protocol.returnCueMode !== "PARTICIPANT_STOP")
-    add("RETURN_CUE", returnCue, "CUE_RETURN");
+  if (protocol.returnCueMode !== "PARTICIPANT_STOP") add("RETURN_CUE", returnCue, "CUE_RETURN");
   return stages;
 }
 
@@ -85,7 +108,11 @@ export class ProtocolStageController {
     // advance the stage clock or mark the protocol complete itself.
     this.onReturnCue = dependencies.onReturnCue || null;
     this.onComplete = dependencies.onComplete || null;
+    this.stageMode = normalizeProtocolStageMode(this.protocol);
+    this.participantPaced = this.stageMode === PROTOCOL_STAGE_MODES.PARTICIPANT_PACED;
     this.stages = buildStages(protocol);
+    this.requiresReturnCue = this.stageMode === PROTOCOL_STAGE_MODES.TIMED_AUTOMATIC &&
+      this.stages.some((stage) => stage.stageType === "RETURN_CUE");
     this.status = "IDLE";
     this.anchor = null;
     this.index = 0;
@@ -95,6 +122,7 @@ export class ProtocolStageController {
     this.returnCueObserved = false;
     this.completionPending = false;
     this.completionCalled = false;
+    this.returnReason = null;
   }
 
   _clearTimer() {
@@ -128,6 +156,9 @@ export class ProtocolStageController {
         anchor: "AUDIO_STARTED",
         offsetMs: stage.offsetMs,
         cueVersion: this.protocol.cueVersion || null,
+        ...(stage.stageType === "PARTICIPANT_PROTOCOL_STARTED"
+          ? { kind: "LIFECYCLE", semantics: "participant procedure became active" }
+          : {}),
       },
     };
     this.stageHistory.push(event);
@@ -185,6 +216,13 @@ export class ProtocolStageController {
     this.anchor = { name: anchor.name || "AUDIO_STARTED", monotonicNs, utcMs, utc: utc(utcMs) };
     this.status = "RUNNING";
     this.index = 0;
+    if (this.participantPaced) {
+      // This is deliberately a lifecycle boundary, not a claim about an
+      // induction/settling/request/release/neutral mental state.  No timer is
+      // installed for participant-paced procedures.
+      this._observe({ stageType: "PARTICIPANT_PROTOCOL_STARTED", offsetMs: 0, durationMs: 0, cueId: null });
+      return this.toDTO();
+    }
     this._scheduleNext();
     return this.toDTO();
   }
@@ -213,6 +251,34 @@ export class ProtocolStageController {
     });
   }
 
+  markParticipantReturned(details = {}) {
+    if (!this.participantPaced)
+      throw new Error("Participant return is only available for PARTICIPANT_PACED protocols.");
+    if (this.status === "PARTICIPANT_RETURNED" || this.status === "COMPLETE") return this.toDTO();
+    if (this.status !== "RUNNING" && this.status !== "STOPPED")
+      throw new Error(`Participant return cannot be recorded from ${this.status}.`);
+    this._clearTimer();
+    this.completionPending = false;
+    this.completionCalled = true;
+    this.returnReason = String(details.reason || "participant_return");
+    this.status = "PARTICIPANT_RETURNED";
+    const completion = {
+      ...details,
+      status: this.status,
+      sessionId: this.sessionId,
+      trialId: this.trialId,
+      reason: this.returnReason,
+      anchor: this.anchor ? { ...this.anchor, monotonicNs: this.anchor.monotonicNs.toString() } : null,
+      stages: this.toDTO().stages,
+    };
+    try { this.onComplete?.(completion); }
+    catch (error) {
+      this.status = "FAILED";
+      throw error;
+    }
+    return this.toDTO();
+  }
+
   stop(reason = "stopped") {
     this._clearTimer();
     if (!this.completionCalled && this.status !== "COMPLETE") this.status = "STOPPED";
@@ -227,8 +293,12 @@ export class ProtocolStageController {
       anchor: this.anchor ? { ...this.anchor, monotonicNs: this.anchor.monotonicNs.toString() } : null,
       stages: this.stageHistory.map((stage) => ({ ...stage })),
       plannedStages: this.stages.map((stage) => ({ ...stage })),
+      stageMode: this.stageMode,
+      participantPaced: this.participantPaced,
+      requiresReturnCue: this.requiresReturnCue,
       audioFinalized: this.audioFinalized,
       returnCueObserved: this.returnCueObserved,
+      returnReason: this.returnReason,
     };
   }
 }
