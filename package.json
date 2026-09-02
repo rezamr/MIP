@@ -33,6 +33,9 @@
       "src/**/*",
       "public/**/*",
       "renderer/**/*",
+      "docs/**/*",
+      "engineering/AUDIO_SOURCE_PROVENANCE_AND_VERIFICATION_V0.1.md",
+      "engineering/AUDIO_REFERENCE_FIXTURES_V1.json",
       "Logo.svg",
       "package.json"
     ],

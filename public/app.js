@@ -5,6 +5,8 @@ import { renderDistribution } from "../renderer/charts/distribution-chart.js";
 import { renderReportTabs } from "../renderer/components/ReportTabs.js";
 import { fieldRow as renderFieldRow, renderError } from "../renderer/core.js";
 import { sessionService } from "../renderer/services/session-service.js";
+import { activeLayers as projectActiveLayers, summarizeProvenance } from "./audio-core.js";
+import { getPageHelp, FIELD_HELP } from "../renderer/help-registry.js";
 
 const $ = (s) => document.querySelector(s),
   app = $("#app");
@@ -41,6 +43,55 @@ const esc = (x) =>
       ],
   );
 const jsonSafe = (value) => JSON.parse(JSON.stringify(value, (_key, child) => typeof child === "bigint" ? child.toString() : child));
+const LAYER_LABELS = Object.freeze([
+  ["primaryCarrier", "Primary carrier"],
+  ["additionalCarriers", "Additional carriers"],
+  ["monauralLayers", "Monaural layers"],
+  ["septon", "Septon / multi-carrier"],
+  ["whitePinkRedNoise", "White / pink / red noise"],
+  ["phasedPink", "Phased-pink"],
+  ["am", "AM"],
+  ["fm", "FM"],
+  ["delay", "Delay"],
+  ["comb", "Comb"],
+  ["lowFrequencySweep", "Low-frequency sweep"],
+  ["envelope", "Envelope"],
+  ["cues", "Cues"],
+  ["protocolCues", "Protocol cue track"],
+  ["voiceReferences", "Voice references"],
+]);
+function layerProjection(recipe) {
+  const layers = recipe?.activeLayers || projectActiveLayers(recipe || {});
+  return `<div class="active-layers"><h4>Active layers</h4>${LAYER_LABELS.map(([key, label]) => `<div class="review-row"><span>${label}</span><strong>${layers[key] ? "ACTIVE" : "NONE"}</strong></div>`).join("")}${recipe?.protocolCueVersion ? `<p class="subtle">Protocol cues are a separately versioned, nonsemantic track (${esc(recipe.protocolCueVersion)}); they are not part of the selected recipe's component condition.</p>` : ""}</div>`;
+}
+function provenanceProjection(recipe) {
+  const summary = recipe?.parameterProvenance ? summarizeProvenance(recipe) : { classes: [], unknownBlocked: [], reconstruction: [], sourceVerified: [], formalEligible: recipe?.formalEligibility !== false };
+  const classes = summary.classes.length ? summary.classes.join(", ") : (recipe?.provenance || "UNKNOWN");
+  return `<div class="provenance-panel"><h4>Source &amp; Provenance</h4><div class="review-row"><span>Recipe status</span><strong>${esc(recipe?.historicalStatus || "NOT_HISTORICALLY_EXACT")}</strong></div><div class="review-row"><span>Recipe class</span><strong>${esc(recipe?.provenance || "UNKNOWN")}</strong></div><div class="review-row"><span>Parameter classes</span><strong>${esc(classes)}</strong></div><div class="review-row"><span>Formal use</span><strong>${summary.formalEligible ? "ELIGIBLE (subject to protocol)" : "BLOCKED"}</strong></div><div class="review-row"><span>Historical-exact claim</span><strong>${esc(recipe?.historicalExactness || "NOT_CLAIMED")}</strong></div>${summary.unknownBlocked?.length ? `<p class="callout warning">Unknown fields block formal/historical use: ${esc(summary.unknownBlocked.join(", "))}</p>` : ""}${summary.reconstruction?.length ? `<p class="subtle">Reconstruction choices are engineering parameters, not historical facts: ${esc(summary.reconstruction.slice(0, 8).join(", "))}${summary.reconstruction.length > 8 ? "…" : ""}</p>` : ""}</div>`;
+}
+function verificationProjection(recipe) {
+  const verification = recipe?.engineeringVerification || {};
+  const rows = ["configurationValidation", "deterministicFixture", "channelAssignment", "carrierVerification", "noiseVerification", "sweepVerification", "amVerification", "fmVerification", "continuity", "clipping", "pcmDigestFixture"];
+  return `<div class="verification-panel"><h4>Engineering verification</h4>${rows.map((key) => `<div class="review-row"><span>${esc(key.replace(/[A-Z]/g, (m) => ` ${m}`).replace(/^./, (m) => m.toUpperCase()))}</span><strong>${esc(verification[key] || "NOT RECORDED")}</strong></div>`).join("")}<p class="subtle">Software verification is separate from the owner's physical listening observation.</p></div>`;
+}
+function recipeDetailProjection(recipe) {
+  if (!recipe) return '<div class="empty">Select a recipe to inspect its effective configuration.</div>';
+  return `<div class="grid three" style="margin-top:14px"><div class="card">${provenanceProjection(recipe)}</div><div class="card">${layerProjection(recipe)}</div><div class="card">${verificationProjection(recipe)}</div></div>`;
+}
+function showPageGuide(pageId = document.querySelector("#nav button.active")?.dataset.page || "start") {
+  const guide = getPageHelp(pageId);
+  const existing = document.querySelector("#pageGuide");
+  existing?.remove();
+  const modal = document.createElement("div");
+  modal.id = "pageGuide";
+  modal.className = "help-modal-backdrop";
+  modal.innerHTML = `<section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="pageGuideTitle"><div class="section-intro"><div><p class="eyebrow">HELP / PAGE GUIDE · OFFLINE OWNER GUIDE</p><h2 id="pageGuideTitle">${esc(guide.title)}</h2></div><button class="icon-button" id="closePageGuide" aria-label="Close page guide">×</button></div>${[["Purpose", guide.purpose], ["What the system is doing", guide.doing], ["What you should do", guide.doNow], ["What not to change casually", guide.avoid], ["What the values mean", guide.values], ["Pass / warning / failure", guide.statuses], ["What this does not prove", guide.boundary], ["How to test this page", guide.test]].map(([heading, text]) => `<div class="help-block"><h3>${heading}</h3><p>${esc(text)}</p></div>`).join("")}<details class="help-fields"><summary>Field definitions</summary><div class="grid two">${Object.entries(FIELD_HELP).map(([key, text]) => `<div><strong>${esc(key)}</strong><p>${esc(text)}</p></div>`).join("")}</div></details><p class="subtle help-offline-note">This complete Page Guide is bundled locally for offline operation. The longer owner acceptance document is packaged at <span class="mono">docs/MIP_OWNER_OPERATION_AND_ACCEPTANCE_GUIDE_V1.2.md</span>; no Internet connection is required.</p></section>`;
+  document.body.appendChild(modal);
+  const close = () => modal.remove();
+  $("#closePageGuide")?.addEventListener("click", close);
+  modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+  document.addEventListener("keydown", function escape(event) { if (event.key === "Escape") { close(); document.removeEventListener("keydown", escape); } });
+}
 async function api(url, opt = {}) {
   if (window.mip) {
     const method = (opt.method || "GET").toUpperCase(),
@@ -136,6 +187,7 @@ function setPage(p) {
 document
   .querySelectorAll("#nav button")
   .forEach((b) => (b.onclick = () => setPage(b.dataset.page)));
+document.querySelector("#helpButton")?.addEventListener("click", () => showPageGuide());
 function steps(n) {
   return `<div class="stepper">${["Profile", "Pre-session", "Target & memory", "Readiness", "Commit & start"].map((x, i) => `<div class="step ${i + 1 === n ? "active" : ""} ${i + 1 < n ? "done" : ""}"><span class="number">${i + 1 < n ? "✓" : i + 1}</span>${x}</div>${i < 4 ? '<span class="step-line"></span>' : ""}`).join("")}</div>`;
 }
@@ -694,13 +746,16 @@ async function playRecipe(recipe) {
   return preparePlayer(recipe, { autoStart: true, formal: false });
 }
 function renderAudio() {
-  app.innerHTML = `<div class="section-intro"><div><h2>Audio Lab</h2><p>Live stateful synthesis goes directly to the OS-selected output; no finite WAV loop is used.</p></div>${pill("Live synthesis")}</div><div class="card"><div class="grid two"><div><h3>Live player</h3><div class="field"><label for="recipeSelect">Preset / recipe</label><select id="recipeSelect">${presets.map((a) => `<option value="${a.id}">${a.id} · ${a.leftHz}/${a.rightHz} Hz</option>`).join("")}</select></div><div class="actions" style="margin-top:14px"><button class="button primary" id="livePlay">Play</button><button class="button" id="livePause" disabled>Pause</button><button class="button" id="liveResume" disabled>Resume</button><button class="button danger" id="liveStop" disabled>Stop</button></div></div><div id="playerState"><div class="review-row"><span>Status</span><strong>stopped</strong></div><div class="review-row"><span>Elapsed</span><strong>0.0 s</strong></div><div class="review-row"><span>Generated frames</span><strong>0</strong></div></div></div></div><div class="grid two" style="margin-top:18px"><div class="card"><h3>Quick Generator</h3><p class="subtle">One center value derives the centered 4 Hz pair.</p><div class="field"><label for="center">Center frequency (Hz)</label><input id="center" type="number" value="396" min="1"></div><div class="review-row"><span>Derived channels</span><strong id="derived">394 / 398 Hz</strong></div><button class="button primary" id="quick">Use in live player</button></div><div class="card"><h3>Simple Custom</h3><div class="form-grid"><div class="field"><label for="customCenter">Center (Hz)</label><input id="customCenter" type="number" value="396"></div><div class="field"><label for="customBeat">Difference (Hz)</label><input id="customBeat" type="number" value="4" min="0"></div><div class="field"><label for="customGain">Output gain</label><input id="customGain" type="number" value="0.25" min=".01" max="1" step=".01"></div></div><button class="button" id="custom" style="margin-top:14px">Validate and use</button></div></div><div class="card" style="margin-top:18px"><h3>Experimental layered reconstruction</h3><p class="subtle">Live multi-carrier, Septon, deterministic phased-pink, delay/comb, envelopes, AM/FM, cues, and future voice references use the same synthesis semantics.</p><div class="callout warning"><strong>MIP experimental reconstruction:</strong> not historically verified and not a complete CENTER LANE implementation; unknown parameters are never inferred as historical fact.</div><button class="button" id="layered">Play experimental layered demo</button></div>`;
+  app.innerHTML = `<div class="section-intro"><div><h2>Audio Lab</h2><p>Exploratory listening and engineering workspace. Live stateful synthesis uses the shared AudioWorklet; it is not automatically formal evidence.</p></div>${pill("Live synthesis")}</div><div class="card"><div class="grid two"><div><h3>Live player</h3><div class="field"><label for="recipeSelect">Preset / recipe</label><select id="recipeSelect">${presets.map((a) => `<option value="${a.id}">${a.id} · ${a.leftHz ?? "layered"}/${a.rightHz ?? "layered"} · ${a.provenance || "UNKNOWN"}</option>`).join("")}</select></div><div class="actions" style="margin-top:14px"><button class="button primary" id="livePlay">Play</button><button class="button" id="livePause" disabled>Pause</button><button class="button" id="liveResume" disabled>Resume</button><button class="button danger" id="liveStop" disabled>Stop</button></div></div><div id="playerState"><div class="review-row"><span>Status</span><strong>stopped</strong></div><div class="review-row"><span>Elapsed</span><strong>0.0 s</strong></div><div class="review-row"><span>Generated frames</span><strong>0</strong></div></div></div><div id="recipeDetails"></div></div><div class="grid two" style="margin-top:18px"><div class="card"><h3>Quick Generator</h3><p class="subtle">One center value derives a MIP-defined centered 4 Hz component pair.</p><div class="field"><label for="center">Center frequency (Hz)</label><input id="center" type="number" value="396" min="1"><small>Quick previews are not committed formal evidence.</small></div><div class="review-row"><span>Derived channels</span><strong id="derived">394 / 398 Hz</strong></div><button class="button primary" id="quick">Use in live player</button></div><div class="card"><h3>Simple Custom</h3><p class="subtle">A preview-only centered pair with an explicit master-gain stage.</p><div class="form-grid"><div class="field"><label for="customCenter">Center (Hz)</label><input id="customCenter" type="number" value="396"></div><div class="field"><label for="customBeat">Difference (Hz)</label><input id="customBeat" type="number" value="4" min="0"></div><div class="field"><label for="customGain">Master gain</label><input id="customGain" type="number" value="0.25" min="0" max="1" step=".01"><small>Changes preview PCM amplitude only; it cannot rewrite a committed session.</small></div></div><button class="button" id="custom" style="margin-top:14px">Validate and use</button></div></div><div class="card" style="margin-top:18px"><h3>Experimental layered reconstruction</h3><p class="subtle">The engine supports multi-carrier, Septon, deterministic noise, delay/comb, envelopes, AM/FM, cues, and voice-reference layers. The selected recipe panel below states which layers are actually active.</p><div class="callout warning"><strong>MIP experimental reconstruction:</strong> architecture capability is documented, while numerical reconstruction choices remain explicitly labelled and are not historically exact.</div><button class="button" id="layered">Play repository-backed layered demo</button></div>`;
   const livePlayer = $("#livePlay")?.parentElement?.parentElement;
   livePlayer?.querySelector(".field")?.insertAdjacentHTML("afterend", `<div class="field" style="margin-top:12px"><label for="liveGain">Master gain <output id="liveGainValue">0.80</output></label><input id="liveGain" type="range" min="0" max="1" step="0.01" value="0.8"><small>Changes are ramped in the active AudioWorklet to avoid clicks.</small></div>`);
   const gainApplyTarget = $("#livePlay")?.parentElement;
   gainApplyTarget?.insertAdjacentHTML("beforeend", `<button class="button" id="liveGainApply" disabled>Apply gain</button>`);
   const sel = $("#recipeSelect"),
     get = () => presets.find((x) => x.id === sel.value) || presets[0];
+  const showRecipeDetails = () => { const selected = get(); $("#recipeDetails").innerHTML = recipeDetailProjection(selected); };
+  sel?.addEventListener("change", showRecipeDetails);
+  showRecipeDetails();
   const gain = $("#liveGain"), gainValue = $("#liveGainValue"), gainApply = $("#liveGainApply");
   gain?.addEventListener("input", () => {
     const value = Number(gain.value).toFixed(2);
@@ -796,43 +851,23 @@ function renderAudio() {
           beatHz: $("#customBeat").value,
         }),
       });
-      r.recipe.gain = Number($("#customGain").value);
+      // The normalized carrier gain is intentionally independent from the
+      // preview master stage.  Route this control through masterGain so the
+      // resulting PCM changes measurably and the UI does not suggest that an
+      // ignored top-level `gain` field controls output volume.
+      r.recipe.masterGain = Number($("#customGain").value);
       await playRecipe(r.recipe);
-      toast(`Playing ${r.recipe.leftHz}/${r.recipe.rightHz} Hz`);
+      toast(`Playing ${r.recipe.leftHz}/${r.recipe.rightHz} Hz at master gain ${Number(r.recipe.masterGain).toFixed(2)}`);
     } catch (e) {
       toast(e.message);
     }
   };
-  $("#layered").onclick = () =>
-    playRecipe({
-      ...get(),
-      id: "LAYERED_LIVE",
-      recipeId: "LAYERED_LIVE",
-      recipeVersion: 1,
-      name: "Layered live audition",
-      provenance: "PATENT_GROUNDED_RECONSTRUCTION",
-      architecture: "LAYERED_STEREO_DSP",
-      mode: "PHASED_PINK_PATENT_5356368",
-      synthesisMode: "PHASED_PINK_PATENT_5356368",
-      carriers: [
-        { id: "primary", leftHz: 394, rightHz: 398, gain: 0.18, phase: { left: 0, right: 0 }, waveform: "sine", am: null, fm: null },
-        { id: "secondary", leftHz: 200, rightHz: 204, gain: 0.06, phase: { left: 0.25, right: 0.25 }, waveform: "sine", am: null, fm: null },
-      ],
-      septon: [{ id: "septon-100", leftHz: 100, rightHz: 101.5, gain: 0.03, phase: { left: 0, right: 0 }, waveform: "sine", am: null, fm: null }],
-      noise: {
-        algorithm: "PHASED_PINK_PATENT_5356368",
-        algorithmVersion: 1,
-        seed: 5356368,
-        gain: 0.025,
-        alpha: 0.65,
-        minDelaySamples: 44,
-        maxDelaySamples: 662,
-        sweepHz: 0.125,
-        leftSweepPhase: 0,
-        rightSweepPhase: Math.PI / 2,
-        combMix: 0.5,
-      },
-    }).catch((e) => toast(e.message));
+  $("#layered").onclick = () => {
+    const recipe = presets.find((item) => item.recipeId === "MIP_LAYERED_EXPERIMENTAL_V1" || item.id === "MIP_LAYERED_EXPERIMENTAL_V1");
+    if (!recipe) return toast("The repository-backed layered recipe is unavailable.");
+    if (recipe.incomplete || recipe.formalEligibility === false) return toast(recipe.formalEligibilityReason || "This layered recipe is incomplete and cannot be auditioned formally.");
+    playRecipe(recipe).catch((e) => toast(e.message));
+  };
   // Re-rendering the Audio Lab must reflect the existing runtime. Without
   // this refresh a live preview could continue in the Worklet while the new
   // DOM showed every lifecycle button as if the player were stopped.
@@ -894,7 +929,7 @@ async function renderRecipes() {
   const draw = (query = "") => {
     const term = query.trim().toLowerCase();
     const visible = current.filter((recipe) => !term || JSON.stringify(recipe).toLowerCase().includes(term));
-    cards.innerHTML = visible.map((recipe) => `<article class="card recipe-card"><div style="display:flex;justify-content:space-between;gap:12px"><h3>${esc(recipe.recipeId || recipe.id)} · v${esc(recipe.version)}</h3>${pill(recipe.incomplete ? "INCOMPLETE HISTORICAL" : recipe.status || "ACTIVE")}</div><p class="subtle">${esc(recipe.name || "Unnamed recipe")} · ${esc(recipe.provenance || "UNKNOWN")}</p><div class="review-row"><span>Channels</span><strong>${esc(recipe.leftHz)} / ${esc(recipe.rightHz)} Hz</strong></div><div class="review-row"><span>Execution</span><strong>${esc(recipe.durationMode || recipe.execution?.mode || "UNKNOWN")}</strong></div><div class="review-row"><span>Fingerprint</span><strong class="mono">${esc(recipe.configFingerprint || recipe.configHash || "UNKNOWN")}</strong></div>${recipe.incomplete ? '<div class="callout warning">Incomplete historical material: formal use, audition, and activation are disabled.</div>' : ""}<div class="actions"><button class="button" data-audition="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}" ${recipe.incomplete || recipe.isDraft || recipe.status !== "ACTIVE" ? "disabled" : ""}>Audition</button><button class="button" data-duplicate="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}">Duplicate</button><button class="button" data-edit-recipe="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}">Edit</button><button class="button" data-recipe-versions="${esc(recipe.recipeId || recipe.id)}">Versions</button>${!recipe.incomplete && recipe.status !== "ACTIVE" ? `<button class="button" data-activate-recipe="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}">Activate after review</button>` : ""}</div><details><summary>Complete effective recipe (read-only)</summary><pre class="json">${esc(JSON.stringify(recipe, null, 2))}</pre></details></article>`).join("") || '<div class="card empty">No recipes match the filter.</div>';
+    cards.innerHTML = visible.map((recipe) => `<article class="card recipe-card"><div style="display:flex;justify-content:space-between;gap:12px"><h3>${esc(recipe.recipeId || recipe.id)} · v${esc(recipe.version)}</h3>${pill(recipe.incomplete ? "INCOMPLETE / BLOCKED" : recipe.historicalStatus || recipe.status || "ACTIVE")}</div><p class="subtle">${esc(recipe.name || "Unnamed recipe")} · ${esc(recipe.provenance || "UNKNOWN")}</p><div class="review-row"><span>Channels</span><strong>${esc(recipe.leftHz ?? "layered")} / ${esc(recipe.rightHz ?? "layered")} Hz</strong></div><div class="review-row"><span>Execution</span><strong>${esc(recipe.durationMode || recipe.execution?.mode || "UNKNOWN")}</strong></div><div class="review-row"><span>Formal eligibility</span><strong>${recipe.formalEligibility === false || recipe.incomplete ? "BLOCKED" : "ELIGIBLE (protocol permitting)"}</strong></div><div class="review-row"><span>Fingerprint</span><strong class="mono">${esc(recipe.configFingerprint || recipe.configHash || "UNKNOWN")}</strong></div>${layerProjection(recipe)}${provenanceProjection(recipe)}${verificationProjection(recipe)}${recipe.incomplete || recipe.formalEligibility === false ? '<div class="callout warning">This version remains incomplete or provenance-blocked; it cannot be activated for formal use.</div>' : ""}<div class="actions"><button class="button" data-audition="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}" ${recipe.incomplete || recipe.isDraft || recipe.status !== "ACTIVE" ? "disabled" : ""}>Audition</button><button class="button" data-duplicate="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}">Duplicate</button><button class="button" data-edit-recipe="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}">Edit</button><button class="button" data-recipe-versions="${esc(recipe.recipeId || recipe.id)}">Versions</button>${!recipe.incomplete && recipe.status !== "ACTIVE" ? `<button class="button" data-activate-recipe="${esc(recipe.recipeId || recipe.id)}" data-version="${esc(recipe.version)}">Activate after review</button>` : ""}</div><details><summary>Complete effective recipe (read-only)</summary><pre class="json">${esc(JSON.stringify(recipe, null, 2))}</pre></details></article>`).join("") || '<div class="card empty">No recipes match the filter.</div>';
     cards.querySelectorAll("[data-audition]").forEach((button) => button.onclick = async () => {
       try {
         const recipe = window.mip ? await window.mip.getRecipe({ id: button.dataset.audition, version: Number(button.dataset.version) }) : current.find((item) => (item.recipeId || item.id) === button.dataset.audition);

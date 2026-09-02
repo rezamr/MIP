@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   BUILTIN_RECIPES,
+  EXPERIMENTAL_RECIPES,
   canonical,
   normalizeRecipe,
   phasedPinkSample,
@@ -9,6 +10,13 @@ import {
   renderOffline,
   sha256Hex,
   validateEffectiveRecipe,
+  validateRecipeProvenance,
+  activeLayers,
+  summarizeProvenance,
+  lfsrNextState,
+  lfsrPeriod,
+  LFSR_SEQUENCE_PERIOD,
+  LFSR_UPDATE_SEMANTICS,
 } from "../public/audio-core.js";
 
 export const AUDIO_VERSION = "mip-audio-core-2.0";
@@ -31,7 +39,14 @@ export const PRESETS = Object.freeze(Object.fromEntries(Object.entries(BUILTIN_R
   }),
 ])));
 
-export { canonical, phasedPinkSample, pcmDigest, sha256Hex };
+// Repository/UI library consumers can opt into advanced fixtures without
+// changing the ordinary three-condition preset list.
+export const EXPERIMENTAL_PRESETS = Object.freeze(Object.fromEntries(Object.entries(EXPERIMENTAL_RECIPES).map(([id, recipe]) => [
+  id,
+  Object.freeze({ ...recipe, id, recipeId: id, version: recipe.version, recipeVersion: recipe.version, leftHz: recipe.leftHz, rightHz: recipe.rightHz, centerHz: recipe.centerHz, beatHz: recipe.beatHz }),
+])));
+
+export { canonical, phasedPinkSample, pcmDigest, sha256Hex, validateRecipeProvenance, activeLayers, summarizeProvenance, lfsrNextState, lfsrPeriod, LFSR_SEQUENCE_PERIOD, LFSR_UPDATE_SEMANTICS };
 
 export function quickRecipe(centerHz, beatHz = 4) {
   const center = Number(centerHz);
@@ -86,6 +101,13 @@ export function quickRecipe(centerHz, beatHz = 4) {
     masterGain: 0.8,
     rampSeconds: 0.01,
     durationMode: "live",
+    historicalStatus: "USER_DEFINED_EXPLORATORY",
+    historicalExactness: "NOT_HISTORICALLY_EXACT",
+    parameterProvenance: {
+      "*": { provenanceClass: "USER_DEFINED", sourceRef: "Audio Lab owner input", sourceStatus: "Preview-only owner parameter" },
+      "carriers[0].leftHz": { provenanceClass: "PRIMARY_SOURCE_DERIVED", sourceRef: "Audio Lab center/beat inputs", inputValues: { centerHz: center, beatHz: beat }, derivationRule: "centerHz - beatHz / 2", derivedValue: center - beat / 2, derivationVersion: "QUICK_CUSTOM_V1" },
+      "carriers[0].rightHz": { provenanceClass: "PRIMARY_SOURCE_DERIVED", sourceRef: "Audio Lab center/beat inputs", inputValues: { centerHz: center, beatHz: beat }, derivationRule: "centerHz + beatHz / 2", derivedValue: center + beat / 2, derivationVersion: "QUICK_CUSTOM_V1" },
+    },
   };
 }
 
@@ -97,7 +119,8 @@ export function validateRecipe(recipe) {
     if (rawFrequencies.some((frequency) => frequency !== undefined && Number(frequency) >= sourceRate / 2))
       return { valid: false, errors: ["carrier frequencies must be below the Nyquist limit"], recipe: effective, configFingerprint: effective.configFingerprint };
     const result = validateEffectiveRecipe(effective);
-    return { ...result, recipe: effective, configFingerprint: effective.configFingerprint };
+    const provenance = validateRecipeProvenance(effective);
+    return { ...result, valid: result.valid && provenance.valid, errors: [...result.errors, ...provenance.errors], provenance, recipe: effective, configFingerprint: effective.configFingerprint };
   } catch (error) {
     return { valid: false, errors: [error.message] };
   }
@@ -164,6 +187,8 @@ export function renderWav(recipe, durationSeconds = 1) {
     septon: rendered.recipe.septon,
     noise: rendered.recipe.noise,
     cues: rendered.recipe.cues,
+    protocolCueVersion: rendered.recipe.protocolCueVersion || null,
+    protocolCues: rendered.recipe.protocolCues || [],
     voiceReferences: rendered.recipe.voiceReferences,
     audioDigest: rendered.digest,
     normalization: {

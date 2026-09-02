@@ -35,6 +35,20 @@ export const PCM_CANONICAL_FORMAT = Object.freeze({
   trailer: "uint64le_total_frames",
 });
 
+// Provenance is intentionally represented at parameter level.  A recipe-level
+// label is only a summary and must never imply that every numerical field came
+// from the same source.
+export const PROVENANCE_CLASSES = Object.freeze([
+  "PRIMARY_SOURCE_VERIFIED",
+  "PRIMARY_SOURCE_DERIVED",
+  "MIP_OPERATIONAL_DEFINED",
+  "MIP_RECONSTRUCTION_PARAMETER",
+  "USER_DEFINED",
+  "UNKNOWN_BLOCKED",
+]);
+export const LFSR_SEQUENCE_PERIOD = 65_535;
+export const LFSR_UPDATE_SEMANTICS = "ONE_ADVANCE_PER_RENDERED_PCM_FRAME_MIP_RECONSTRUCTION";
+
 const TAU = Math.PI * 2;
 const SHA_K = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b,
@@ -245,6 +259,151 @@ function clone(value) {
   return value;
 }
 
+const FINGERPRINT_EXCLUDED_METADATA = new Set([
+  "configFingerprint",
+  "parameterProvenance",
+  "provenanceByParameter",
+  "historicalStatus",
+  "historicalExactness",
+  "formalEligibility",
+  "formalEligibilityReason",
+  "engineeringVerification",
+  "activeLayers",
+]);
+
+function provenanceEntry(value, pathName) {
+  const source = typeof value === "string" ? { provenanceClass: value } : (value && typeof value === "object" ? clone(value) : {});
+  const provenanceClass = String(source.provenanceClass ?? source.class ?? source.status ?? "UNKNOWN_BLOCKED").toUpperCase();
+  const entry = {
+    ...source,
+    provenanceClass,
+    class: provenanceClass,
+  };
+  if (!PROVENANCE_CLASSES.includes(provenanceClass)) {
+    entry.provenanceClass = "UNKNOWN_BLOCKED";
+    entry.class = "UNKNOWN_BLOCKED";
+    entry.invalidClass = provenanceClass;
+  }
+  if (entry.provenanceClass === "PRIMARY_SOURCE_DERIVED") {
+    entry.sourceRef = entry.sourceRef ?? entry.sourceReference ?? null;
+    entry.derivationRule = entry.derivationRule ?? null;
+    entry.inputValues = entry.inputValues ?? null;
+    entry.derivedValue = entry.derivedValue ?? null;
+    entry.derivationVersion = entry.derivationVersion ?? null;
+  }
+  if (entry.provenanceClass === "MIP_RECONSTRUCTION_PARAMETER") {
+    entry.reconstructionReason = entry.reconstructionReason ?? "The primary source does not establish this exact value.";
+    entry.reconstructionVersion = entry.reconstructionVersion ?? "MIP_AUDIO_RECONSTRUCTION_V1";
+  }
+  entry.path = entry.path ?? pathName;
+  return entry;
+}
+
+function materialParameterPaths(recipe) {
+  const paths = [
+    "sampleRate", "channels", "synthesisMode", "masterGain", "headroomDb", "rampSeconds",
+    "execution.mode", "execution.targetFrames",
+    "envelope.attackFrames", "envelope.decayFrames", "envelope.sustain", "envelope.releaseFrames",
+    "lowFrequencySweep.frequencyHz", "lowFrequencySweep.depth", "lowFrequencySweep.offset", "lowFrequencySweep.leftPhase", "lowFrequencySweep.rightPhase",
+    "delay.delaySamples", "delay.mix", "delay.feedback", "comb.delaySamples", "comb.mix", "comb.feedback",
+    "noise.algorithm", "noise.algorithmVersion", "noise.updateSemantics", "noise.updateClock", "noise.seed", "noise.gain", "noise.alpha", "noise.filterGain", "noise.minDelaySamples", "noise.maxDelaySamples", "noise.sweepHz", "noise.leftSweepPhase", "noise.rightSweepPhase", "noise.combMix",
+  ];
+  for (const [groupName, group] of [["carriers", recipe.carriers], ["monauralLayers", recipe.monauralLayers], ["septon", recipe.septon]]) {
+    for (const [index, componentValue] of (group || []).entries()) {
+      for (const key of ["leftHz", "rightHz", "gainLeft", "gainRight", "phaseLeft", "phaseRight", "waveform", "am.rateHz", "am.depth", "am.offset", "am.phaseLeft", "am.phaseRight", "fm.rateHz", "fm.depthHz", "fm.phaseLeft", "fm.phaseRight"])
+        paths.push(`${groupName}[${index}].${key}`);
+    }
+  }
+  for (const [index] of (recipe.cues || []).entries()) {
+    for (const key of ["startFrame", "durationFrames", "leftHz", "rightHz", "gainLeft", "gainRight", "phaseLeft", "phaseRight", "waveform"])
+      paths.push(`cues[${index}].${key}`);
+  }
+  for (const [index] of (recipe.voiceReferences || []).entries()) paths.push(`voiceReferences[${index}]`);
+  for (const [index] of (recipe.binauralRelationships || []).entries()) paths.push(`binauralRelationships[${index}]`);
+  if (recipe.protocolCueVersion !== undefined) paths.push("protocolCueVersion");
+  for (const [index] of (recipe.protocolCues || []).entries()) {
+    for (const key of ["startFrame", "durationFrames", "leftHz", "rightHz", "gainLeft", "gainRight", "phaseLeft", "phaseRight", "waveform"])
+      paths.push(`protocolCues[${index}].${key}`);
+  }
+  return paths;
+}
+
+function normalizeParameterProvenance(source, recipe) {
+  const input = source && typeof source === "object" && !Array.isArray(source) ? source : {};
+  const paths = materialParameterPaths(recipe);
+  const result = {};
+  for (const pathName of paths) {
+    const wildcard = pathName.replace(/\[\d+\]/g, "[*]");
+    result[pathName] = provenanceEntry(input[pathName] ?? input[wildcard] ?? input["*"] ?? null, pathName);
+  }
+  // Preserve additional component/group entries so an audit can see a source
+  // claim even when a future engine version introduces a new material field.
+  for (const [key, value] of Object.entries(input)) {
+    if (!result[key] && key !== "*") result[key] = provenanceEntry(value, key);
+  }
+  return result;
+}
+
+export function summarizeProvenance(recipe) {
+  const entries = Object.values(recipe?.parameterProvenance || recipe?.provenanceByParameter || {});
+  const classes = [...new Set(entries.map((entry) => String(entry?.provenanceClass ?? entry?.class ?? "UNKNOWN_BLOCKED").toUpperCase()))];
+  const unknown = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "UNKNOWN_BLOCKED").map((entry) => entry.path);
+  const reconstruction = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "MIP_RECONSTRUCTION_PARAMETER").map((entry) => entry.path);
+  const sourceVerified = entries.filter((entry) => String(entry?.provenanceClass ?? entry?.class).toUpperCase() === "PRIMARY_SOURCE_VERIFIED").map((entry) => entry.path);
+  return {
+    classes,
+    mixed: classes.length > 1,
+    unknownBlocked: unknown,
+    reconstruction,
+    sourceVerified,
+    formalEligible: unknown.length === 0,
+  };
+}
+
+export function activeLayers(recipe) {
+  const value = recipe || {};
+  const has = (item) => Array.isArray(item) ? item.length > 0 : Boolean(item);
+  return {
+    primaryCarrier: Array.isArray(value.carriers) && value.carriers.length > 0,
+    additionalCarriers: Array.isArray(value.carriers) && value.carriers.length > 1,
+    monauralLayers: has(value.monauralLayers),
+    septon: has(value.septon),
+    whitePinkRedNoise: Boolean(value.noise && ["WHITE_NOISE", "PINK_NOISE", "RED_NOISE"].includes(value.noise.algorithm)),
+    phasedPink: value.noise?.algorithm === "PHASED_PINK_PATENT_5356368",
+    am: (value.carriers || []).some((item) => item.am) || (value.monauralLayers || []).some((item) => item.am) || (value.septon || []).some((item) => item.am),
+    fm: (value.carriers || []).some((item) => item.fm) || (value.monauralLayers || []).some((item) => item.fm) || (value.septon || []).some((item) => item.fm),
+    delay: Boolean(value.delay),
+    comb: Boolean(value.comb),
+    lowFrequencySweep: Boolean(value.lowFrequencySweep),
+    envelope: Boolean(value.envelope && (value.envelope.attackFrames || value.envelope.decayFrames || value.envelope.releaseFrames || value.envelope.sustain !== 1)),
+    cues: Array.isArray(value.cues) && value.cues.length > 0,
+    protocolCues: Array.isArray(value.protocolCues) && value.protocolCues.length > 0,
+    voiceReferences: Array.isArray(value.voiceReferences) && value.voiceReferences.length > 0,
+  };
+}
+
+export function validateRecipeProvenance(recipe, options = {}) {
+  const value = recipe && recipe.parameterProvenance ? recipe : normalizeRecipe(recipe, { developmentFixture: true });
+  const errors = [];
+  const entries = Object.values(value.parameterProvenance || {});
+  for (const entry of entries) {
+    const cls = String(entry?.provenanceClass ?? entry?.class ?? "UNKNOWN_BLOCKED").toUpperCase();
+    if (!PROVENANCE_CLASSES.includes(cls)) errors.push(`${entry?.path || "parameter"} has unsupported provenance class ${cls}`);
+    if (cls === "PRIMARY_SOURCE_DERIVED" && (!entry.sourceRef || !entry.derivationRule || entry.inputValues === null || entry.derivedValue === null || !entry.derivationVersion))
+      errors.push(`${entry.path || "parameter"} PRIMARY_SOURCE_DERIVED requires sourceRef, derivationRule, inputValues, derivedValue, and derivationVersion`);
+    if (cls === "MIP_RECONSTRUCTION_PARAMETER" && (!entry.reconstructionReason || !entry.reconstructionVersion))
+      errors.push(`${entry.path || "parameter"} MIP_RECONSTRUCTION_PARAMETER requires reconstructionReason and reconstructionVersion`);
+  }
+  const summary = summarizeProvenance(value);
+  const top = String(value.provenance || "").toUpperCase();
+  if (top.includes("PRIMARY_SOURCE_VERIFIED") && entries.some((entry) => !["PRIMARY_SOURCE_VERIFIED", "PRIMARY_SOURCE_DERIVED"].includes(String(entry.provenanceClass).toUpperCase())))
+    errors.push("recipe-level PRIMARY_SOURCE_VERIFIED claim overstates mixed parameter provenance");
+  const historical = top.includes("HISTORICAL") || top.includes("CENTER_LANE") || top.includes("PATENT_GROUNDED");
+  if (historical && summary.unknownBlocked.length) errors.push(`historical recipe has UNKNOWN_BLOCKED parameters: ${summary.unknownBlocked.join(", ")}`);
+  if (options.formal && !summary.formalEligible) errors.push(`formal use is blocked by UNKNOWN_BLOCKED parameters: ${summary.unknownBlocked.join(", ")}`);
+  return { valid: errors.length === 0, errors, summary };
+}
+
 function assertFiniteMaterial(value, name, seen = new Set()) {
   if (typeof value === "number" && !Number.isFinite(value))
     throw new Error(`${name} contains a non-finite number`);
@@ -376,20 +535,21 @@ function component(source, name, { topGain, monaural = false, developmentFixture
   return result;
 }
 
-function normalizeCues(rawCues, sampleRate, developmentFixture) {
+function normalizeCues(rawCues, sampleRate, developmentFixture, fieldName = "cues") {
   if (rawCues === undefined || rawCues === null) return [];
-  const cues = array(rawCues, "cues");
+  const cues = array(rawCues, fieldName);
   return cues.map((raw, index) => {
-    if (!raw || typeof raw !== "object") throw new Error(`cues[${index}] must be an object`);
-    const start = raw.frame ?? raw.startFrame ?? raw.atFrame ?? (raw.timeSeconds !== undefined ? number(raw.timeSeconds, `cues[${index}].timeSeconds`, { min: 0 }) * sampleRate : undefined);
-    if (start === undefined) throw new Error(`cues[${index}] requires frame or timeSeconds`);
-    const duration = raw.durationFrames ?? raw.lengthFrames ?? (raw.durationSeconds !== undefined ? number(raw.durationSeconds, `cues[${index}].durationSeconds`, { min: Number.MIN_VALUE }) * sampleRate : undefined);
-    if (duration === undefined) throw new Error(`cues[${index}] requires durationFrames or durationSeconds`);
-    const c = component(raw, `cues[${index}]`, { topGain: raw.gain, developmentFixture, modulation: false });
+    if (!raw || typeof raw !== "object") throw new Error(`${fieldName}[${index}] must be an object`);
+    const start = raw.frame ?? raw.startFrame ?? raw.atFrame ?? (raw.timeSeconds !== undefined ? number(raw.timeSeconds, `${fieldName}[${index}].timeSeconds`, { min: 0 }) * sampleRate : undefined);
+    if (start === undefined) throw new Error(`${fieldName}[${index}] requires frame or timeSeconds`);
+    const duration = raw.durationFrames ?? raw.lengthFrames ?? (raw.durationSeconds !== undefined ? number(raw.durationSeconds, `${fieldName}[${index}].durationSeconds`, { min: Number.MIN_VALUE }) * sampleRate : undefined);
+    if (duration === undefined) throw new Error(`${fieldName}[${index}] requires durationFrames or durationSeconds`);
+    const c = component(raw, `${fieldName}[${index}]`, { topGain: raw.gain, developmentFixture, modulation: false });
     return {
-      id: raw.id ?? `cue-${index}`,
-      startFrame: number(start, `cues[${index}].startFrame`, { integer: true, min: 0 }),
-      durationFrames: number(duration, `cues[${index}].durationFrames`, { integer: true, min: 1 }),
+      id: raw.id ?? `${fieldName === "protocolCues" ? "protocol-cue" : "cue"}-${index}`,
+      source: fieldName === "protocolCues" ? "PROTOCOL" : "RECIPE",
+      startFrame: number(start, `${fieldName}[${index}].startFrame`, { integer: true, min: 0 }),
+      durationFrames: number(duration, `${fieldName}[${index}].durationFrames`, { integer: true, min: 1 }),
       leftHz: c.leftHz,
       rightHz: c.rightHz,
       gainLeft: c.gainLeft,
@@ -435,6 +595,8 @@ function normalizeNoise(rawNoise, mode, sampleRate, developmentFixture) {
   const result = {
     algorithm,
     algorithmVersion: number(rawNoise.algorithmVersion ?? 1, "noise.algorithmVersion", { integer: true, min: 1 }),
+    updateSemantics: String(rawNoise.updateSemantics ?? LFSR_UPDATE_SEMANTICS),
+    updateClock: String(rawNoise.updateClock ?? "rendered PCM frame (MIP reconstruction; historical clock unresolved)"),
     seed,
     gain,
     alpha,
@@ -708,6 +870,21 @@ export function normalizeRecipe(input, options = {}) {
     developmentFixture,
     metadata: clone(raw.metadata ?? {}),
   };
+  if (raw.protocolCueVersion !== undefined || raw.protocolCues !== undefined) {
+    normalized.protocolCueVersion = raw.protocolCueVersion === null ? null : String(raw.protocolCueVersion ?? "MIP_PROTOCOL_CUES_V1");
+    normalized.protocolCues = normalizeCues(raw.protocolCues ?? [], sampleRate, developmentFixture, "protocolCues");
+  }
+  normalized.parameterProvenance = normalizeParameterProvenance(
+    raw.parameterProvenance ?? raw.provenanceByParameter,
+    normalized,
+  );
+  normalized.historicalStatus = String(raw.historicalStatus ?? "NOT_HISTORICALLY_EXACT");
+  normalized.historicalExactness = String(raw.historicalExactness ?? "NOT_CLAIMED");
+  normalized.formalEligibility = summarizeProvenance(normalized).formalEligible;
+  normalized.formalEligibilityReason = normalized.formalEligibility
+    ? "All material parameters have an explicit provenance class."
+    : `UNKNOWN_BLOCKED parameters: ${summarizeProvenance(normalized).unknownBlocked.join(", ")}`;
+  normalized.engineeringVerification = clone(raw.engineeringVerification ?? null);
   normalized.leftHz = normalized.carriers[0].leftHz;
   normalized.rightHz = normalized.carriers[0].rightHz;
   normalized.centerHz = (normalized.leftHz + normalized.rightHz) / 2;
@@ -715,7 +892,7 @@ export function normalizeRecipe(input, options = {}) {
   normalized.gain = normalized.carriers[0].gainLeft;
   assertFiniteMaterial(normalized, "recipe");
   const fingerprintMaterial = clone(normalized);
-  delete fingerprintMaterial.configFingerprint;
+  for (const key of FINGERPRINT_EXCLUDED_METADATA) delete fingerprintMaterial[key];
   normalized.configFingerprint = sha256Hex(canonical(fingerprintMaterial));
   return normalized;
 }
@@ -760,11 +937,18 @@ export function validateEffectiveRecipe(recipe) {
       if (!(Number.isSafeInteger(cue.durationFrames) && cue.durationFrames > 0)) errors.push(`cues[${index}].durationFrames is invalid`);
       if (!(cue.leftHz > 0 && cue.leftHz < recipe.sampleRate / 2 && cue.rightHz > 0 && cue.rightHz < recipe.sampleRate / 2)) errors.push(`cues[${index}] must be below Nyquist`);
     }
+    for (const [index, cue] of (recipe.protocolCues ?? []).entries()) {
+      if (!(Number.isSafeInteger(cue.startFrame) && cue.startFrame >= 0)) errors.push(`protocolCues[${index}].startFrame is invalid`);
+      if (!(Number.isSafeInteger(cue.durationFrames) && cue.durationFrames > 0)) errors.push(`protocolCues[${index}].durationFrames is invalid`);
+      if (!(cue.leftHz > 0 && cue.leftHz < recipe.sampleRate / 2 && cue.rightHz > 0 && cue.rightHz < recipe.sampleRate / 2)) errors.push(`protocolCues[${index}] must be below Nyquist`);
+    }
     if (typeof recipe.configFingerprint === "string") {
       const material = clone(recipe);
-      delete material.configFingerprint;
+      for (const key of FINGERPRINT_EXCLUDED_METADATA) delete material[key];
       if (sha256Hex(canonical(material)) !== recipe.configFingerprint) errors.push("configFingerprint does not match effective recipe");
     } else errors.push("configFingerprint is required");
+    if (recipe.parameterProvenance !== undefined && (!recipe.parameterProvenance || typeof recipe.parameterProvenance !== "object" || Array.isArray(recipe.parameterProvenance)))
+      errors.push("parameterProvenance must be an object");
   } catch (error) {
     errors.push(error.message);
   }
@@ -797,7 +981,107 @@ const simplePreset = (id, name, provenance, leftHz, rightHz) => ({
   headroomDb: -3,
   rampSeconds: 0.01,
   durationMode: "live",
+  historicalStatus: provenance === "SHAM_CONTROL" ? "SHAM_CONTROL" : provenance === "DOCUMENTED_PATENT_EXAMPLE" ? "DOCUMENTED_PATENT_COMPARATOR" : "MIP_DEFINED",
+  historicalExactness: "NOT_HISTORICALLY_EXACT",
+  parameterProvenance: {
+    "*": { provenanceClass: "MIP_OPERATIONAL_DEFINED", sourceRef: "engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md §10", sourceStatus: "MIP authority" },
+    "carriers[0].leftHz": { provenanceClass: provenance === "DOCUMENTED_PATENT_EXAMPLE" ? "PRIMARY_SOURCE_VERIFIED" : "MIP_OPERATIONAL_DEFINED", sourceRef: provenance === "DOCUMENTED_PATENT_EXAMPLE" ? "engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md §10" : "engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md §10", sourceStatus: provenance === "DOCUMENTED_PATENT_EXAMPLE" ? "Documented comparator pair" : "MIP-defined component" },
+    "carriers[0].rightHz": { provenanceClass: provenance === "DOCUMENTED_PATENT_EXAMPLE" ? "PRIMARY_SOURCE_VERIFIED" : "MIP_OPERATIONAL_DEFINED", sourceRef: provenance === "DOCUMENTED_PATENT_EXAMPLE" ? "engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md §10" : "engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md §10", sourceStatus: provenance === "DOCUMENTED_PATENT_EXAMPLE" ? "Documented comparator pair" : "MIP-defined component" },
+  },
+  engineeringVerification: {
+    verificationVersion: "AUDIO_ENGINEERING_FIXTURES_V1",
+    configurationValidation: "PASS",
+    deterministicFixture: "PASS",
+    channelAssignment: "PASS",
+    carrierVerification: "PASS",
+    noiseVerification: "N/A",
+    sweepVerification: "N/A",
+    amVerification: "N/A",
+    fmVerification: "N/A",
+    continuity: "PASS",
+    clipping: "PASS",
+    pcmDigestFixture: "PASS",
+    fixtureId: id === "A-U396-4" ? "PURE_394_398" : id === "A-P100-104" ? "PURE_100_104" : "PURE_SHAM_396_396",
+  },
 });
+
+const layeredExperimentalRecipe = {
+  id: "MIP_LAYERED_EXPERIMENTAL_V1",
+  recipeId: "MIP_LAYERED_EXPERIMENTAL_V1",
+  recipeVersion: 1,
+  version: 1,
+  name: "MIP Layered Experimental Reconstruction v1",
+  provenance: "MIP_EXPERIMENTAL_RECONSTRUCTION",
+  historicalStatus: "PATENT-ARCHITECTURE RECONSTRUCTION",
+  historicalExactness: "NOT_HISTORICALLY_EXACT",
+  architecture: "LAYERED_STEREO_DSP",
+  synthesisMode: "PHASED_PINK_PATENT_5356368",
+  sampleRate: 44100,
+  channels: 2,
+  carriers: [
+    { id: "primary-394-398", leftHz: 394, rightHz: 398, gain: { left: 0.18, right: 0.18 }, phase: { left: 0, right: 0 }, waveform: "sine", am: null, fm: null },
+    { id: "secondary-200-204-experimental", leftHz: 200, rightHz: 204, gain: { left: 0.06, right: 0.06 }, phase: { left: 0.25, right: 0.25 }, waveform: "sine", am: null, fm: null },
+  ],
+  binauralRelationships: [
+    { id: "primary-pair", type: "explicit_pair", leftHz: 394, rightHz: 398, beatHz: 4, status: "MIP_DEFINED_COMPONENT" },
+    { id: "secondary-pair", type: "experimental_pair", leftHz: 200, rightHz: 204, beatHz: 4, status: "MIP_RECONSTRUCTION_PARAMETER" },
+  ],
+  monauralLayers: [{ id: "monaural-90", leftHz: 90, rightHz: 90, gain: { left: 0.025, right: 0.025 }, phase: { left: 0, right: 0 }, waveform: "sine", am: null, fm: null }],
+  septon: [
+    { id: "septon-100-1015", leftHz: 100, rightHz: 101.5, gain: { left: 0.03, right: 0.03 }, phase: { left: 0, right: 0 }, waveform: "sine", am: null, fm: null },
+  ],
+  envelope: { attackSeconds: 0.02, decaySeconds: 0.02, sustain: 0.95, releaseSeconds: 0.02 },
+  noise: {
+    algorithm: "PHASED_PINK_PATENT_5356368",
+    algorithmVersion: 1,
+    updateSemantics: LFSR_UPDATE_SEMANTICS,
+    updateClock: "rendered PCM frame (engineering reconstruction; patent timing unresolved)",
+    seed: 5356368,
+    gain: 0.025,
+    alpha: 0.65,
+    minDelaySamples: 44,
+    maxDelaySamples: 662,
+    sweepHz: 0.125,
+    leftSweepPhase: 0,
+    rightSweepPhase: Math.PI / 2,
+    combMix: 0.5,
+  },
+  delay: { delaySamples: 17.5, mix: 0.2, feedback: 0.1 },
+  comb: { delaySamples: 23, mix: 0.35, feedback: 0.25 },
+  lowFrequencySweep: { frequencyHz: 0.125, depth: 0.1, offset: 0.9, leftPhase: 0, rightPhase: Math.PI / 2 },
+  cues: [],
+  voiceReferences: [],
+  masterGain: 0.8,
+  headroomDb: -6,
+  rampSeconds: 0.02,
+  durationMode: "live",
+  parameterProvenance: {
+    "*": { provenanceClass: "MIP_RECONSTRUCTION_PARAMETER", reconstructionReason: "The patent establishes architecture/capability, not this exact MIP numerical value.", reconstructionVersion: "MIP_LAYERED_EXPERIMENTAL_V1" },
+    "carriers[0].leftHz": { provenanceClass: "MIP_OPERATIONAL_DEFINED", sourceRef: "engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md §10", sourceStatus: "MIP component condition" },
+    "carriers[0].rightHz": { provenanceClass: "MIP_OPERATIONAL_DEFINED", sourceRef: "engineering/ACTIVE_IMPLEMENTATION_AUTHORITY_V0.1.md §10", sourceStatus: "MIP component condition" },
+    "noise.algorithm": { provenanceClass: "PRIMARY_SOURCE_VERIFIED", sourceRef: "US 5,356,368; engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md", sourceStatus: "Architecture/capability only; exact parameters unresolved" },
+    "noise.updateSemantics": { provenanceClass: "MIP_RECONSTRUCTION_PARAMETER", reconstructionReason: "The patent timing language does not unambiguously establish the update clock.", reconstructionVersion: "MIP_LAYERED_EXPERIMENTAL_V1" },
+    "noise.alpha": { provenanceClass: "MIP_RECONSTRUCTION_PARAMETER", reconstructionReason: "Filter coefficient is not established by the cited source.", reconstructionVersion: "MIP_LAYERED_EXPERIMENTAL_V1" },
+    "noise.minDelaySamples": { provenanceClass: "MIP_RECONSTRUCTION_PARAMETER", reconstructionReason: "Delay minimum is not established by the cited source.", reconstructionVersion: "MIP_LAYERED_EXPERIMENTAL_V1" },
+    "noise.maxDelaySamples": { provenanceClass: "MIP_RECONSTRUCTION_PARAMETER", reconstructionReason: "Delay maximum is not established by the cited source.", reconstructionVersion: "MIP_LAYERED_EXPERIMENTAL_V1" },
+    "noise.sweepHz": { provenanceClass: "PRIMARY_SOURCE_DERIVED", sourceRef: "US 5,356,368; engineering/AUDIO_SYNTHESIS_REQUIREMENTS_V0.1.md", derivationRule: "Use the approximately 1/8 Hz sweep rate stated by the source.", inputValues: { sourceRate: "approximately 1/8 Hz" }, derivedValue: 0.125, derivationVersion: "MIP_LAYERED_EXPERIMENTAL_V1" },
+  },
+  engineeringVerification: {
+    verificationVersion: "AUDIO_ENGINEERING_FIXTURES_V1",
+    configurationValidation: "PASS",
+    deterministicFixture: "PASS",
+    channelAssignment: "PASS",
+    carrierVerification: "PASS",
+    noiseVerification: "PASS",
+    sweepVerification: "PASS",
+    amVerification: "N/A",
+    fmVerification: "N/A",
+    continuity: "PASS",
+    clipping: "PASS",
+    pcmDigestFixture: "PASS",
+    fixtureId: "LAYERED_MIP_EXPERIMENTAL",
+  },
+};
 
 export const BUILTIN_RECIPES = Object.freeze(Object.fromEntries([
   ["A-U396-4", simplePreset("A-U396-4", "MIP User Baseline", "USER_EXPERIMENTAL", 394, 398)],
@@ -805,11 +1089,32 @@ export const BUILTIN_RECIPES = Object.freeze(Object.fromEntries([
   ["A-SHAM-0", simplePreset("A-SHAM-0", "Matched Sham Control", "SHAM_CONTROL", 396, 396)],
 ].map(([id, recipe]) => [id, Object.freeze(normalizeRecipe(recipe))])));
 
-function lfsrNextState(state) {
+// The layered demonstration is a repository-backed engineering fixture, not
+// one of the three ordinary user-facing component presets.  Keeping it in a
+// separate collection prevents the simple preset contract from being widened
+// accidentally while allowing SQLite/UI consumers to inspect it explicitly.
+export const EXPERIMENTAL_RECIPES = Object.freeze({
+  MIP_LAYERED_EXPERIMENTAL_V1: Object.freeze(normalizeRecipe(layeredExperimentalRecipe)),
+});
+
+export function lfsrNextState(state) {
   let x = state & 0xffff;
   const bit = (x ^ (x >>> 2) ^ (x >>> 3) ^ (x >>> 5)) & 1;
   x = (x >>> 1) | (bit << 15);
   return x & 0xffff;
+}
+
+export function lfsrPeriod(seed = 1) {
+  let state = number(seed, "seed", { integer: true, min: 1, max: 0xffff }) & 0xffff;
+  if (state === 0) throw new Error("seed must be non-zero");
+  const initial = state;
+  let period = 0;
+  do {
+    state = lfsrNextState(state);
+    period += 1;
+    if (period > LFSR_SEQUENCE_PERIOD) throw new Error("LFSR exceeded the supported maximal period");
+  } while (state !== initial);
+  return period;
 }
 
 export function phasedPinkSample(index, seed = 1) {
@@ -954,7 +1259,7 @@ export class AudioEngine {
     this.components = [];
     for (const c of [...this.recipe.carriers, ...this.recipe.monauralLayers, ...this.recipe.septon])
       this.components.push({ c, leftPhase: c.phaseLeft, rightPhase: c.phaseRight, leftAmPhase: c.am?.phaseLeft ?? 0, rightAmPhase: c.am?.phaseRight ?? 0, leftFmPhase: c.fm?.phaseLeft ?? 0, rightFmPhase: c.fm?.phaseRight ?? 0 });
-    this.cueStates = this.recipe.cues.map((cue) => ({ cue, leftPhase: cue.phaseLeft, rightPhase: cue.phaseRight, triggered: false, completed: false }));
+    this.cueStates = [...this.recipe.cues, ...(this.recipe.protocolCues || [])].map((cue) => ({ cue, leftPhase: cue.phaseLeft, rightPhase: cue.phaseRight, triggered: false, completed: false }));
     this.noiseState = this.recipe.noise ? { lfsr: this.recipe.noise.seed & 0xffff, pink: 0, red: 0, delayIndex: 0 } : null;
     this.sweepState = this.recipe.lowFrequencySweep ? { leftPhase: this.recipe.lowFrequencySweep.leftPhase, rightPhase: this.recipe.lowFrequencySweep.rightPhase } : null;
     this._noiseLeft = 0;

@@ -38,6 +38,62 @@ export async function runElectronE2E(mainWindow, options = {}) {
       output.rendererReady = document.readyState === "complete" && Boolean(document.querySelector("#app"));
       if (!output.rendererReady) throw new Error("renderer did not initialize");
 
+      // Every top-level page must render its own content and its own offline
+      // Page Guide.  This catches stale help state, missing renderer wiring,
+      // and packaged-build differences before the formal flow is exercised.
+      const pageErrors = [];
+      const unhandledErrors = [];
+      const previousConsoleError = console.error;
+      console.error = (...args) => { pageErrors.push(args.map((arg) => String(arg)).join(" ")); previousConsoleError(...args); };
+      window.addEventListener("error", (event) => unhandledErrors.push(String(event.error?.message || event.message || "window error")));
+      window.addEventListener("unhandledrejection", (event) => unhandledErrors.push(String(event.reason?.message || event.reason || "unhandled rejection")));
+      const pageSelectors = {
+        start: "#profileSelect",
+        audio: "#livePlay",
+        profiles: ".profile-card",
+        recipes: "#recipeCards",
+        calibration: "#runCal",
+        health: "#runHealth",
+        reports: "#rows",
+        aggregate: "#aggregateSessions",
+        settings: "#saveSettings",
+      };
+      const pageNavigation = [];
+      const pageButtons = [...document.querySelectorAll("#nav button")];
+      const waitForSelector = async (selector, attempts = 40) => {
+        for (let attempt = 0; attempt < attempts; attempt += 1) {
+          const element = document.querySelector(selector);
+          if (element) return element;
+          await sleep(25);
+        }
+        return null;
+      };
+      for (const button of pageButtons) {
+        const pageId = button.dataset.page;
+        button.click();
+        const critical = await waitForSelector(pageSelectors[pageId]);
+        await sleep(40);
+        const title = document.querySelector("#page-title")?.textContent?.trim() || "";
+        const guideButton = document.querySelector("#helpButton");
+        guideButton?.click();
+        const guideTitleElement = await waitForSelector("#pageGuideTitle");
+        const guideTitle = guideTitleElement?.textContent?.trim() || "";
+        const guideBody = document.querySelector("#pageGuide")?.innerText || "";
+        document.querySelector("#closePageGuide")?.click();
+        pageNavigation.push({ pageId, title, guideTitle, rendered: Boolean(critical && document.querySelector("#app")?.innerText?.trim()), criticalControl: pageSelectors[pageId], explanatoryText: guideBody.length > 80, guideMatchesPage: Boolean(title && title === guideTitle) });
+      }
+      console.error = previousConsoleError;
+      output.pageNavigation = pageNavigation;
+      output.pageGuideCoverage = {
+        pages: pageNavigation.length,
+        rendered: pageNavigation.every((page) => page.rendered),
+        guides: pageNavigation.filter((page) => page.guideMatchesPage && page.explanatoryText).length,
+        consoleErrors: pageErrors,
+        unhandledErrors,
+      };
+      if (!pageNavigation.every((page) => page.rendered && page.guideMatchesPage && page.explanatoryText)) throw new Error("Top-level page/Page Guide E2E failed: " + JSON.stringify(pageNavigation));
+      if (pageErrors.length || unhandledErrors.length) throw new Error("Renderer emitted an error during page E2E: " + JSON.stringify({ pageErrors, unhandledErrors }));
+
       // Exercise the actual Audio Lab buttons through the renderer instead of
       // only testing AudioController directly.  This catches stale-controller
       // references and UI lifecycle races where audio continues after Stop.
@@ -84,6 +140,39 @@ export async function runElectronE2E(mainWindow, options = {}) {
       audioControlSmoke.stop = await waitForPlayerState("stopped");
       output.audioControlSmoke = audioControlSmoke;
       if (!Object.values(audioControlSmoke).every(Boolean)) throw new Error("Audio Lab control smoke failed: " + JSON.stringify(audioControlSmoke));
+
+      // The Audio Lab and Recipes checks below are deliberately DOM-backed:
+      // they verify the explanatory panels rather than only the IPC payloads.
+      output.audioLabPanels = {
+        pureRecipeDetails: false,
+        sourceProvenance: false,
+        engineeringVerification: false,
+        activeLayers: false,
+        masterGainText: false,
+      };
+      const recipeSelect = document.querySelector("#recipeSelect");
+      if (recipeSelect) {
+        recipeSelect.value = "A-U396-4";
+        recipeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        await sleep(30);
+        const detailsText = document.querySelector("#recipeDetails")?.innerText || "";
+        output.audioLabPanels.pureRecipeDetails = detailsText.includes("Source & Provenance");
+        output.audioLabPanels.sourceProvenance = detailsText.includes("Source & Provenance");
+        output.audioLabPanels.engineeringVerification = detailsText.includes("Engineering verification");
+        output.audioLabPanels.activeLayers = detailsText.includes("Active layers");
+        output.audioLabPanels.masterGainText = document.querySelector("#liveGain")?.previousElementSibling?.innerText?.includes("Master gain") || false;
+      }
+      if (!Object.values(output.audioLabPanels).every(Boolean)) throw new Error("Audio Lab provenance panel E2E failed: " + JSON.stringify(output.audioLabPanels));
+      document.querySelector('[data-page="recipes"]')?.click();
+      await waitForSelector("#recipeCards");
+      const layeredCard = [...document.querySelectorAll(".recipe-card")].find((card) => card.innerText.includes("MIP_LAYERED_EXPERIMENTAL_V1"));
+      output.layeredRecipePanels = {
+        repositoryBacked: Boolean(layeredCard && layeredCard.innerText.includes("PATENT-ARCHITECTURE RECONSTRUCTION")),
+        activeLayers: Boolean(layeredCard && layeredCard.innerText.includes("Active layers")),
+        sourceClasses: Boolean(layeredCard && layeredCard.innerText.includes("MIP_RECONSTRUCTION_PARAMETER")),
+        engineeringVerification: Boolean(layeredCard && layeredCard.innerText.includes("Engineering verification")),
+      };
+      if (!Object.values(output.layeredRecipePanels).every(Boolean)) throw new Error("Layered recipe panel E2E failed: " + JSON.stringify(output.layeredRecipePanels));
 
       if (${JSON.stringify(phase)} === "restart") {
         const expected = ${JSON.stringify(options.expectedSessionId || null)};

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { sha256, canonical, profiles, APP_VERSION, ENGINE_VERSION, normalizeTemporalAnalysisPlan } from "../../engine.js";
-import { PRESETS, AUDIO_VERSION } from "../../audio.js";
+import { PRESETS, EXPERIMENTAL_PRESETS, AUDIO_VERSION } from "../../audio.js";
+import { activeLayers } from "../../../public/audio-core.js";
 import { IntegrityService } from "../integrity/IntegrityService.js";
 import { SessionRepository } from "../repositories/SessionRepository.js";
 import { EvidenceRepository } from "../repositories/EvidenceRepository.js";
@@ -988,6 +989,7 @@ function profileDto(row, includeConfig = true) {
 
 function recipeDto(row, includeConfig = true) {
   const config = json(row.config_json, {});
+  const versionMetadata = json(row.provenance_json, {});
   return {
     ...(includeConfig ? config : {}),
     recipeId: row.recipe_id,
@@ -1003,6 +1005,13 @@ function recipeDto(row, includeConfig = true) {
     isActive: Boolean(row.is_active),
     incomplete: Boolean(row.incomplete),
     configHash: row.config_hash,
+    parameterProvenance: config.parameterProvenance || versionMetadata.parameterProvenance || {},
+    historicalStatus: config.historicalStatus || "NOT_HISTORICALLY_EXACT",
+    historicalExactness: config.historicalExactness || "NOT_CLAIMED",
+    formalEligibility: config.formalEligibility !== false && !Boolean(row.incomplete),
+    formalEligibilityReason: config.formalEligibilityReason || (row.incomplete ? "Recipe is incomplete or failed validation." : "All persisted validation gates passed."),
+    activeLayers: activeLayers(config),
+    engineeringVerification: config.engineeringVerification || versionMetadata.engineeringVerification || null,
   };
 }
 
@@ -1083,12 +1092,12 @@ export class MipDatabase {
     const insertIdentity = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_identities(recipe_id,identity_type,identity_label,provenance_json,source_kind,source_ref,created_utc) VALUES(?,?,?,?,?,?,?)");
     const insertVersion = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_versions(recipe_id,version,config_json,config_hash,created_utc,immutable) VALUES(?,?,?,?,?,1)");
     const insertMeta = this.db.prepare("INSERT OR IGNORE INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?)");
-    for (const recipe of Object.values(PRESETS)) {
+    for (const recipe of [...Object.values(PRESETS), ...Object.values(EXPERIMENTAL_PRESETS)]) {
       const config = { ...clone(recipe), recipeId: recipe.id };
-      insertRecipe.run(recipe.id, "MIP built-in");
-      insertIdentity.run(recipe.id, "BUILT_IN", recipe.name || recipe.id, JSON.stringify({ source: "audio.PRESETS" }), "BUILT_IN", recipe.id, now());
+      insertRecipe.run(recipe.id, recipe.provenance || "MIP built-in");
+      insertIdentity.run(recipe.id, recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "EXPERIMENTAL_FIXTURE" : "BUILT_IN", recipe.name || recipe.id, JSON.stringify({ source: recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS", historicalStatus: recipe.historicalStatus, parameterProvenance: recipe.parameterProvenance }), recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "MIP_RECONSTRUCTION" : "BUILT_IN", recipe.id, now());
       insertVersion.run(recipe.id, recipe.version, JSON.stringify(config), sha256(canonical(config)), now());
-      insertMeta.run(recipe.id, recipe.version, recipe.id, JSON.stringify({ source: "audio.PRESETS" }), "ACTIVE", 0, 1, null, JSON.stringify({ valid: true, errors: [] }), now());
+      insertMeta.run(recipe.id, recipe.version, recipe.id, JSON.stringify({ source: recipe.id === "MIP_LAYERED_EXPERIMENTAL_V1" ? "audio.EXPERIMENTAL_PRESETS" : "audio.PRESETS", parameterProvenance: recipe.parameterProvenance, engineeringVerification: recipe.engineeringVerification }), "ACTIVE", 0, 1, null, JSON.stringify({ valid: true, errors: [] }), now());
     }
   }
 

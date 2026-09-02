@@ -1,6 +1,7 @@
 import { canonical, sha256 } from "../../engine.js";
 import { clone, json, now, recipeDto } from "../database/db.js";
 import { validateRecipe } from "../../audio.js";
+import { validateRecipeProvenance } from "../../../public/audio-core.js";
 
 const DTO_KEYS = new Set(["configHash", "status", "isDraft", "isActive", "incomplete", "repositoryProvenance"]);
 
@@ -12,7 +13,7 @@ export class AudioRecipeRepository {
   constructor(owner) { this.owner = owner; this.db = owner.db || owner; }
 
   _rows(where = "", params = []) {
-    return this.db.prepare(`SELECT r.recipe_id,r.provenance,v.version,v.config_json,v.config_hash,m.status,m.is_draft,m.is_active,m.incomplete,m.validation_json FROM audio_recipes r JOIN audio_recipe_versions v ON v.recipe_id=r.recipe_id LEFT JOIN audio_recipe_version_metadata m ON m.recipe_id=v.recipe_id AND m.version=v.version ${where} ORDER BY r.recipe_id,v.version DESC`).all(...params);
+    return this.db.prepare(`SELECT r.recipe_id,r.provenance,v.version,v.config_json,v.config_hash,m.status,m.is_draft,m.is_active,m.incomplete,m.validation_json,m.provenance_json FROM audio_recipes r JOIN audio_recipe_versions v ON v.recipe_id=r.recipe_id LEFT JOIN audio_recipe_version_metadata m ON m.recipe_id=v.recipe_id AND m.version=v.version ${where} ORDER BY r.recipe_id,v.version DESC`).all(...params);
   }
 
   list(options = {}) {
@@ -68,24 +69,31 @@ export class AudioRecipeRepository {
   }
 
   saveNewVersion(recipe, options = {}) {
-    const value = material(recipe);
+    const submitted = material(recipe);
+    const initialValidation = validateRecipe(submitted);
+    const value = material(initialValidation.recipe || submitted);
     value.recipeId = value.recipeId || value.id;
     value.id = value.recipeId;
     if (!value.recipeId) throw new Error("recipeId is required");
     const validation = validateRecipe(value);
-    const incomplete = options.incomplete === true || options.allowIncomplete === true || !validation.valid;
-    if (!validation.valid && !options.allowIncomplete && !options.incomplete) throw new Error(`Recipe validation failed: ${validation.errors.join("; ")}`);
+    const provenanceValidation = validateRecipeProvenance(validation.recipe || value);
+    validation.provenance = provenanceValidation;
+    const provenanceIncomplete = !provenanceValidation.valid || provenanceValidation.summary.formalEligible !== true;
+    const incomplete = options.incomplete === true || options.allowIncomplete === true || !validation.valid || provenanceIncomplete;
+    if ((!validation.valid || !provenanceValidation.valid) && !options.allowIncomplete && !options.incomplete) throw new Error(`Recipe validation failed: ${[...(validation.errors || []), ...(provenanceValidation.errors || [])].join("; ")}`);
     const latest = this.db.prepare("SELECT MAX(version) AS version FROM audio_recipe_versions WHERE recipe_id=?").get(value.recipeId)?.version;
     const version = Number(options.version ?? (latest || 0) + 1);
     if (this.db.prepare("SELECT 1 FROM audio_recipe_versions WHERE recipe_id=? AND version=?").get(value.recipeId, version)) throw new Error(`Audio recipe version already exists: ${value.recipeId} v${version}`);
     if (latest !== null && latest !== undefined && version <= Number(latest)) throw new Error(`Audio recipe version must increase beyond v${latest}`);
     if (incomplete && options.activate) throw new Error(`Cannot activate incomplete audio recipe: ${value.recipeId}`);
+    if (options.activate && String(value.provenance || "").toUpperCase().includes("PRIMARY_SOURCE_VERIFIED") && provenanceValidation.summary.mixed)
+      throw new Error(`Cannot activate a mixed-provenance recipe as PRIMARY_SOURCE_VERIFIED: ${value.recipeId}`);
     this._ensureRecipe(value.recipeId, options.provenance || value.provenance || "USER");
     const createdUtc = now();
     const stored = { ...value, version };
     const tx = this.db.transaction(() => {
       this.db.prepare("INSERT INTO audio_recipe_versions(recipe_id,version,config_json,config_hash,created_utc,immutable) VALUES(?,?,?,?,?,1)").run(value.recipeId, version, JSON.stringify(stored), sha256(canonical(stored)), createdUtc);
-      this.db.prepare("INSERT INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,incomplete,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(value.recipeId, version, value.recipeId, JSON.stringify(options.provenance || value.provenance || {}), options.activate ? "ACTIVE" : "DRAFT", options.activate ? 0 : 1, options.activate ? 1 : 0, incomplete ? 1 : 0, options.parentVersion ?? latest ?? null, JSON.stringify(validation), createdUtc);
+      this.db.prepare("INSERT INTO audio_recipe_version_metadata(recipe_id,version,identity_id,provenance_json,status,is_draft,is_active,incomplete,parent_version,validation_json,created_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?)").run(value.recipeId, version, value.recipeId, JSON.stringify({ recipeProvenance: options.provenance || value.provenance || {}, parameterProvenance: value.parameterProvenance || {}, historicalStatus: value.historicalStatus, historicalExactness: value.historicalExactness, engineeringVerification: value.engineeringVerification }), options.activate ? "ACTIVE" : "DRAFT", options.activate ? 0 : 1, options.activate ? 1 : 0, incomplete ? 1 : 0, options.parentVersion ?? latest ?? null, JSON.stringify(validation), createdUtc);
       if (options.activate) this.activate(value.recipeId, version);
     });
     tx();
@@ -110,8 +118,11 @@ export class AudioRecipeRepository {
     if (!row) throw new Error(`Audio recipe version not found: ${id} v${version}`);
     const config = json(row.config_json, {});
     const validation = validateRecipe(config);
-    if (row.incomplete || !validation.valid || json(row.validation_json, {})?.valid === false)
+    const provenanceValidation = validateRecipeProvenance(validation.recipe || config);
+    if (row.incomplete || !validation.valid || !provenanceValidation.valid || !provenanceValidation.summary.formalEligible || json(row.validation_json, {})?.valid === false)
       throw new Error(`Cannot activate incomplete audio recipe: ${id} v${version}`);
+    if (String(config.provenance || "").toUpperCase().includes("PRIMARY_SOURCE_VERIFIED") && provenanceValidation.summary.mixed)
+      throw new Error(`Cannot activate a mixed-provenance recipe as PRIMARY_SOURCE_VERIFIED: ${id} v${version}`);
     const tx = this.db.transaction(() => {
       this.db.prepare("UPDATE audio_recipe_version_metadata SET is_active=0,status=CASE WHEN is_draft=1 THEN 'DRAFT' ELSE 'INACTIVE' END WHERE recipe_id=?").run(id);
       this.db.prepare("UPDATE audio_recipe_version_metadata SET is_active=1,is_draft=0,status='ACTIVE' WHERE recipe_id=? AND version=?").run(id, value);

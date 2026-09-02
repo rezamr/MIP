@@ -72,6 +72,13 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.equal(initial.ok, true, JSON.stringify(initial));
     assert.equal(initial.bridge, true);
     assert.equal(initial.rendererReady, true);
+    assert.equal(initial.pageGuideCoverage.pages, 9, JSON.stringify(initial.pageGuideCoverage));
+    assert.equal(initial.pageGuideCoverage.rendered, true, JSON.stringify(initial.pageNavigation));
+    assert.equal(initial.pageGuideCoverage.guides, 9, JSON.stringify(initial.pageNavigation));
+    assert.deepEqual(initial.pageGuideCoverage.consoleErrors, []);
+    assert.deepEqual(initial.pageGuideCoverage.unhandledErrors, []);
+    assert.deepEqual(initial.audioLabPanels, { pureRecipeDetails: true, sourceProvenance: true, engineeringVerification: true, activeLayers: true, masterGainText: true });
+    assert.deepEqual(initial.layeredRecipePanels, { repositoryBacked: true, activeLayers: true, sourceClasses: true, engineeringVerification: true });
     assert.deepEqual(initial.audioControlSmoke, { doublePlay: true, play: true, rerender: true, pause: true, resume: true, gain: true, stop: true });
     assert.ok(initial.settings.schemaVersion >= 12);
     assert.ok(initial.profiles.length > 0);

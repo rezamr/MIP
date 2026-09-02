@@ -1,0 +1,127 @@
+{
+  "schemaVersion": "AUDIO_ENGINEERING_REFERENCE_V1",
+  "algorithmVersion": "mip-audio-worklet-2.0",
+  "targetFrames": 1024,
+  "fixtures": {
+    "PURE_SHAM_396_396": {
+      "fixtureId": "PURE_SHAM_396_396",
+      "recipeId": "PURE_SHAM_396_396",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "55444a6e64617082c07b992c5a79713411e69169ff5ba2a33276c0820d36ff97",
+      "pcmDigest": "d496d084a1d74cb1808f5f9cb4751d30223abf14fb197ac289d6b596ad9eed17",
+      "firstSamples": [[0, 0], [1.6421726911630685e-7, 1.6421726911630685e-7], [7.37801883587963e-7, 7.37801883587963e-7], [1.9622520994744264e-6, 1.9622520994744264e-6]],
+      "peak": 0.14158904047293136,
+      "clipping": false
+    },
+    "PURE_394_398": {
+      "fixtureId": "PURE_394_398",
+      "recipeId": "PURE_394_398",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "a0ea753f9a8bd13d925536ac0572a4e95e3c767b364b16223a2dc55e263247d2",
+      "pcmDigest": "60bf7aa12fd00e457186810d754c8a36843c95b7ae83d7976c2d5311782a9b41",
+      "firstSamples": [[0, 0], [1.6338876207555586e-7, 1.6504576194620313e-7], [7.34091315734986e-7, 7.415121672238456e-7], [1.952435923158191e-6, 1.972066911548609e-6]],
+      "peak": 0.14158759189377992,
+      "clipping": false
+    },
+    "PURE_100_104": {
+      "fixtureId": "PURE_100_104",
+      "recipeId": "PURE_100_104",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "1f1ecd7907513484c0d42d9b257a301e85f0b114c0e1887b09e53bb035830086",
+      "pcmDigest": "bcf1af703cb36cb7d81169bf022f4d73a72775196c27e90d18f56902f6d9043e",
+      "firstSamples": [[0, 0], [4.1489613522571744e-8, 4.31490789765121e-8], [1.8668431778223749e-7, 1.9414953555951797e-7], [4.977406433681608e-7, 5.176373747417529e-7]],
+      "peak": 0.14158912094969572,
+      "clipping": false
+    },
+    "PHASED_PINK_NO_CARRIER": {
+      "fixtureId": "PHASED_PINK_NO_CARRIER",
+      "recipeId": "PHASED_PINK_NO_CARRIER",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "994f9b34539ee564294d16c34cb5de8f690c4a7739c933a3f205aaaa673d6720",
+      "pcmDigest": "6f177a1470afe7731ecc4bac9386df338393e5af3a9b34bfc658639522b424eb",
+      "firstSamples": [[-1.0185971177634201e-7, -1.0185971177634201e-7], [-6.724109198330552e-7, -6.724109198330552e-7], [-9.832330079007079e-7, -9.832330079007079e-7], [-1.9514561699907063e-6, -1.9514561699907063e-6]],
+      "peak": 0.08100398228340921,
+      "clipping": false
+    },
+    "LAYERED_MIP_EXPERIMENTAL": {
+      "fixtureId": "LAYERED_MIP_EXPERIMENTAL",
+      "recipeId": "LAYERED_MIP_EXPERIMENTAL",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "ac3ca846dfefa50b6bfd0328204c0486cb51478abdf3ea605caa133798d5fc1b",
+      "pcmDigest": "e6b42c3e5ee47f46e172ae58e70b6739533eeb748e22c3a4f588fcef0ad29307",
+      "firstSamples": [[0, 0], [2.6040298389817806e-11, 2.910584620541279e-11], [1.8851424588017807e-10, 2.1100110547678241e-10], [6.485598724736974e-10, 7.267350610185019e-10]],
+      "peak": 0.007870031379857942,
+      "clipping": false
+    },
+    "AM_TEST": {
+      "fixtureId": "AM_TEST",
+      "recipeId": "AM_TEST",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "f5416a2bf961bfa6764d8b19b4e8b562142192c86133b2da77bfdb0a299b1f6b",
+      "pcmDigest": "a86c5dbab9ea9a9a1128f0813ee218deb1b5f49ee305d010e77cbaba21289c78",
+      "firstSamples": [[0, 0], [6.540206243244029e-8, 1.320365896617659e-7], [2.940548711194424e-7, 5.932094495619822e-7], [7.826434398339188e-7, 1.5776518011989538e-6]],
+      "peak": 0.11011186131474399,
+      "clipping": false
+    },
+    "FM_TEST": {
+      "fixtureId": "FM_TEST",
+      "recipeId": "FM_TEST",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "c87cf788590af959668e5e637a5015e320e6831d0464d560356dc35b322ea805",
+      "pcmDigest": "ed5e9b7284614ee1406c43e0cef20dc256704e7d5e28cee66eb883c8c6b4a449",
+      "firstSamples": [[0, 0], [1.3150108202353294e-7, 1.345984088629848e-7], [5.90815204759565e-7, 6.046840894669003e-7], [1.5713292214059038e-6, 1.608007892173191e-6]],
+      "peak": 0.11327132172700427,
+      "clipping": false
+    },
+    "DELAY_IMPULSE_TEST": {
+      "fixtureId": "DELAY_IMPULSE_TEST",
+      "recipeId": "DELAY_IMPULSE_TEST",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "4f4e6dd16425ca5ac8984d8e760f251620cc2d7629bc7149fe0001846cba34ed",
+      "pcmDigest": "01b3a3a519f78ec0eefe3eb3d2ceb9f00733d421d157aa54d2c629615c3ed1ad",
+      "firstSamples": [[0, 0], [0, 0], [0, 0], [0, 0]],
+      "peak": 0.00023588364327668072,
+      "clipping": false
+    },
+    "COMB_IMPULSE_TEST": {
+      "fixtureId": "COMB_IMPULSE_TEST",
+      "recipeId": "COMB_IMPULSE_TEST",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "e46fd94a3fafd63a60b76d29a15d58f5baab7980dc8e816fb24d4e083970d034",
+      "pcmDigest": "b8124f0ac5bf3dd7c1d335f27e60b50ef0fb2c695321079cb23f7a0f8aab8151",
+      "firstSamples": [[1.4560719137080014e-6, 1.4560719137080014e-6], [0, 0], [0, 0], [0, 0]],
+      "peak": 0.00011794182163834036,
+      "clipping": false
+    },
+    "STEREO_SWEEP_TEST": {
+      "fixtureId": "STEREO_SWEEP_TEST",
+      "recipeId": "STEREO_SWEEP_TEST",
+      "recipeVersion": 1,
+      "sampleRate": 44100,
+      "frames": 1024,
+      "configFingerprint": "3cd4111882477bd6bdc62f6fdcc4c7732ef277e8b635e99e3c5d4e6786058b96",
+      "pcmDigest": "4d629d343f3792471ff63a698ba2d13336a4ee869229d89c52d8b0b2cbdbe2e2",
+      "firstSamples": [[0, 0], [1.1438610414415962e-7, 1.6504576194620313e-7], [5.139893914929416e-7, 7.415121672238456e-7], [1.3672058685187949e-6, 1.972066911548609e-6]],
+      "peak": 0.14120560469390894,
+      "clipping": false
+    }
+  }
+}

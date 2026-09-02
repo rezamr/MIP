@@ -41,6 +41,8 @@ import {
   PROCESSOR_VERSION,
   normalizeRecipe,
   validateEffectiveRecipe,
+  activeLayers,
+  summarizeProvenance,
 } from "../../public/audio-core.js";
 import {
   SESSION_STATES,
@@ -499,7 +501,14 @@ function completeAudioRecipe(recipe, audioSource, requestedSampleRate, protocol 
   const input = clone(recipe);
   if (input.noise) input.noise.seed = audioSource.int(65_535) + 1;
   input.sampleRate = sampleRate;
-  if (protocol) input.cues = [...(Array.isArray(input.cues) ? input.cues : []), ...protocolCues(protocol, sampleRate)];
+  // Protocol cues are a separately versioned track.  They must not mutate the
+  // selected recipe's declared component layers (for example A-U396-4 must
+  // remain a pure carrier condition), while the committed effective audio
+  // configuration still includes the exact shared cue track and fingerprint.
+  if (protocol) {
+    input.protocolCueVersion = "MIP_PROTOCOL_CUES_V1";
+    input.protocolCues = protocolCues(protocol, sampleRate);
+  }
   const effective = normalizeRecipe(input);
   const validation = validateEffectiveRecipe(effective);
   if (!validation.valid) throw new Error(`Committed audio recipe is invalid: ${validation.errors.join("; ")}`);
@@ -514,8 +523,16 @@ function audioSummary(audio, options = {}) {
     sampleRate: audio.sampleRate,
     channels: audio.channels,
     processorVersion: PROCESSOR_VERSION,
+    provenance: audio.provenance,
+    historicalStatus: audio.historicalStatus,
+    historicalExactness: audio.historicalExactness,
+    activeLayers: activeLayers(audio),
+    formalEligibility: audio.formalEligibility !== false,
+    protocolCueVersion: audio.protocolCueVersion || null,
+    protocolCueCount: Array.isArray(audio.protocolCues) ? audio.protocolCues.length : 0,
   };
   if (options.includeFingerprint !== false) summary.configFingerprint = audio.configFingerprint;
+  if (options.includeProvenance !== false) summary.provenanceSummary = summarizeProvenance(audio);
   return summary;
 }
 

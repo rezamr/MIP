@@ -178,11 +178,15 @@ export class IntegrityService {
     if (!commit && !finalization) return component(true, { commitPresent: false, finalizationPresent: false, finalStreamDigestPresent: false, finalStreamFormatPresent: false });
     const config = safeJson(commit?.config_json, undefined);
     const configForHash = config && typeof config === "object" ? { ...config } : config;
+    const fingerprintForHash = config && typeof config === "object" ? { ...config } : config;
     if (configForHash && typeof configForHash === "object") delete configForHash.configFingerprint;
+    if (fingerprintForHash && typeof fingerprintForHash === "object") {
+      for (const key of ["configFingerprint", "parameterProvenance", "provenanceByParameter", "historicalStatus", "historicalExactness", "formalEligibility", "formalEligibilityReason", "engineeringVerification", "activeLayers"]) delete fingerprintForHash[key];
+    }
     const configHashValid = !commit || (config !== undefined && sha256(canonical(configForHash)) === commit.config_hash);
     const committedFingerprint = config?.configFingerprint;
     const configFingerprintPresent = !commit || (typeof committedFingerprint === "string" && /^[a-f0-9]{64}$/i.test(committedFingerprint));
-    const configFingerprintValid = !commit || (configFingerprintPresent && sha256(canonical(configForHash)) === committedFingerprint);
+    const configFingerprintValid = !commit || (configFingerprintPresent && sha256(canonical(fingerprintForHash)) === committedFingerprint);
     const format = safeJson(finalization?.format_json, null);
     const digestPresent = !finalization ? false : typeof finalization.final_stream_digest === "string" && /^[a-f0-9]{64}$/i.test(finalization.final_stream_digest);
     const formatPresent = !finalization ? false : Boolean(format && typeof format === "object" && Object.keys(format).length > 0);
