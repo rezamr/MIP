@@ -63,7 +63,11 @@ function buildStages(protocol = {}) {
   add("RELEASE_START", release, "CUE_RELEASE");
   add("NEUTRAL_OBSERVATION", neutral, "CUE_NEUTRAL");
   add("POST_REQUEST", 0, "CUE_POST_REQUEST");
-  add("RETURN_CUE", returnCue, "CUE_RETURN");
+  // Participant-paced protocols deliberately have no app-selected return
+  // instant.  The owner activates Return/Stop and the main process captures
+  // the anchor; do not synthesize a countdown/automatic cue for this mode.
+  if (protocol.participantPaced !== true && protocol.returnCueMode !== "PARTICIPANT_STOP")
+    add("RETURN_CUE", returnCue, "CUE_RETURN");
   return stages;
 }
 

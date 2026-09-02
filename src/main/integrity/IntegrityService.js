@@ -1,7 +1,7 @@
 import { canonical, sha256, APP_VERSION, ENGINE_VERSION } from "../../engine.js";
 import { AUDIO_VERSION } from "../../audio.js";
 import { json, now } from "../database/db.js";
-import { normalizeOutcomeSpace, createCompatibilityFingerprint } from "../../domain/research-model.js";
+import { normalizeOutcomeSpace, createCompatibilityFingerprint, normalizeTargetOffsetMs, isParticipantStopAnchor } from "../../domain/research-model.js";
 
 const component = (valid, details = {}, errors = []) => ({ valid: Boolean(valid), ...details, errors });
 const safeJson = (value, fallback = null) => {
@@ -258,6 +258,49 @@ export class IntegrityService {
       };
       if (sha256(canonical(payload)) !== future.event_hash) futureErrors.push("Future target event hash mismatch");
     }
+    const stopAnchorErrors = [];
+    const stopAnchors = this.db.prepare("SELECT * FROM participant_stop_anchors WHERE session_id=?").all(sessionId);
+    for (const row of stopAnchors) {
+      const payload = {
+        sessionId: row.session_id,
+        trialId: row.trial_id || null,
+        anchor: row.anchor,
+        anchorReference: row.anchor_reference || row.anchor || "PARTICIPANT_STOP_RETURN",
+        utc: row.utc,
+        monotonicNs: String(row.monotonic_ns),
+        stopUtc: row.utc,
+        stopMonotonicNs: String(row.monotonic_ns),
+        targetOffsetMs: normalizeTargetOffsetMs(row.target_offset_ms ?? 0),
+        targetUtc: row.target_utc || new Date(Date.parse(row.utc) + Number(row.target_offset_ms ?? 0)).toISOString(),
+        targetMonotonicNs: row.target_monotonic_ns || (BigInt(row.monotonic_ns) + BigInt(Number(row.target_offset_ms ?? 0)) * 1_000_000n).toString(),
+        preTargetMs: row.pre_target_ms,
+        postTargetMs: row.post_target_ms,
+        executionWindowStartUtc: row.execution_window_start_utc || null,
+        executionWindowEndUtc: row.execution_window_end_utc || null,
+        timezone: row.timezone || "UTC",
+        insufficientPreTargetEvidence: Boolean(row.insufficient_pre_target_evidence),
+      };
+      const validAnchor = isParticipantStopAnchor(row.anchor) && isParticipantStopAnchor(payload.anchorReference);
+      const validHash = sha256(canonical(payload)) === row.anchor_hash;
+      // Rows written by the zero-offset stop-only implementation predate the
+      // signed-offset columns.  Accept their original hash as a migration
+      // compatibility path while all new rows use the expanded payload above.
+      const legacyPayload = {
+        sessionId: row.session_id,
+        trialId: row.trial_id || null,
+        anchor: row.anchor,
+        utc: row.utc,
+        monotonicNs: String(row.monotonic_ns),
+        preTargetMs: row.pre_target_ms,
+        postTargetMs: row.post_target_ms,
+        executionWindowStartUtc: row.execution_window_start_utc || null,
+        executionWindowEndUtc: row.execution_window_end_utc || null,
+        timezone: row.timezone || "UTC",
+        insufficientPreTargetEvidence: Boolean(row.insufficient_pre_target_evidence),
+      };
+      if (!validAnchor || (!validHash && sha256(canonical(legacyPayload)) !== row.anchor_hash))
+        stopAnchorErrors.push(`Participant stop anchor ${row.session_id} hash or type mismatch`);
+    }
     const aggregateErrors = [];
     const aggregates = this.db.prepare("SELECT * FROM cross_session_analyses WHERE aggregate_id IN (SELECT aggregate_id FROM cross_session_analyses)").all();
     for (const row of aggregates) {
@@ -265,12 +308,13 @@ export class IntegrityService {
       if (value === undefined || sha256(canonical(value)) !== row.analysis_hash)
         aggregateErrors.push(`Cross-session analysis ${row.aggregate_id} hash mismatch`);
     }
-    const allErrors = [...definitionErrors, ...occurrenceErrors, ...futureErrors, ...aggregateErrors];
+    const allErrors = [...definitionErrors, ...occurrenceErrors, ...futureErrors, ...stopAnchorErrors, ...aggregateErrors];
     if (allErrors.length) errors.push(...allErrors);
     return component(allErrors.length === 0, {
       definitionPresent: Boolean(definition),
       targetOccurrenceCount: occurrences.length,
       futureTargetPresent: Boolean(future),
+      participantStopAnchorCount: stopAnchors.length,
       aggregateCount: aggregates.length,
     }, allErrors);
   }

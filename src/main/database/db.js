@@ -49,6 +49,8 @@ export function requiresStrictResearchGate(researchMeta) {
   const outcomeSpace = json(researchMeta.outcome_space_json, null);
   if (outcomeSpace?.type && String(outcomeSpace.type).toUpperCase() !== "BINARY") return true;
   if (researchMeta.mode !== "INFLUENCE" || researchMeta.primary_endpoint !== "EXACT_SLOT") return true;
+  const targetDefinition = json(researchMeta.target_definition_json, {});
+  if (["PARTICIPANT_STOP", "PARTICIPANT_STOP_RETURN"].includes(String(targetDefinition?.anchor || targetDefinition?.anchorReference || "").toUpperCase())) return true;
   const analysis = json(researchMeta.temporal_analysis_json, {});
   return Array.isArray(analysis?.windows) && analysis.windows.some((window) => {
     const preMs = Number(window?.preMs ?? 0);
@@ -651,6 +653,28 @@ function ensureV14Tables(db) {
       defaults_hash TEXT NOT NULL,
       updated_utc TEXT NOT NULL
     );
+    -- Participant-paced sessions do not have a target timestamp until the
+    -- owner activates Return/Stop.  The anchor is a single immutable record
+    -- separate from the precommitted research definition.
+    CREATE TABLE IF NOT EXISTS participant_stop_anchors(
+      session_id TEXT PRIMARY KEY REFERENCES sessions(session_id),
+      trial_id TEXT REFERENCES trials(trial_id),
+      anchor TEXT NOT NULL CHECK(anchor IN ('PARTICIPANT_STOP','PARTICIPANT_STOP_RETURN')),
+      anchor_reference TEXT NOT NULL DEFAULT 'PARTICIPANT_STOP_RETURN',
+      utc TEXT NOT NULL,
+      monotonic_ns TEXT NOT NULL,
+      target_offset_ms INTEGER NOT NULL DEFAULT 0,
+      target_utc TEXT,
+      target_monotonic_ns TEXT,
+      pre_target_ms REAL NOT NULL,
+      post_target_ms REAL NOT NULL,
+      execution_window_start_utc TEXT,
+      execution_window_end_utc TEXT,
+      timezone TEXT,
+      insufficient_pre_target_evidence INTEGER NOT NULL DEFAULT 0,
+      anchor_hash TEXT NOT NULL,
+      created_utc TEXT NOT NULL
+    );
   `);
 }
 
@@ -664,12 +688,25 @@ function ensureV14Indexes(db) {
     CREATE INDEX IF NOT EXISTS idx_outputs_scheduled ON machine_outputs(session_id,scheduled_utc,output_seq);
     CREATE INDEX IF NOT EXISTS idx_outputs_actual ON machine_outputs(session_id,actual_utc,output_seq);
     CREATE INDEX IF NOT EXISTS idx_aggregate_fingerprint ON cross_session_analyses(compatibility_fingerprint,created_utc);
+    CREATE INDEX IF NOT EXISTS idx_stop_anchor_time ON participant_stop_anchors(utc,session_id);
+    CREATE INDEX IF NOT EXISTS idx_stop_anchor_target_time ON participant_stop_anchors(target_utc,session_id);
   `);
 }
 
 function ensureV14Columns(db) {
   addColumn(db, "target_occurrences", "scheduled_latency_ms", "REAL");
   addColumn(db, "future_target_events", "rng_metadata_json", "TEXT");
+  addColumn(db, "participant_stop_anchors", "anchor_reference", "TEXT NOT NULL DEFAULT 'PARTICIPANT_STOP_RETURN'");
+  addColumn(db, "participant_stop_anchors", "target_offset_ms", "INTEGER NOT NULL DEFAULT 0");
+  addColumn(db, "participant_stop_anchors", "target_utc", "TEXT");
+  addColumn(db, "participant_stop_anchors", "target_monotonic_ns", "TEXT");
+  if (tableExists(db, "participant_stop_anchors")) {
+    // Existing v1.2 stop anchors were the zero-offset special case.  Populate
+    // the derived columns deterministically while the table is still outside
+    // the immutable-trigger boundary; legacy hashes remain verifiable through
+    // the compatibility branch in IntegrityService.
+    db.prepare("UPDATE participant_stop_anchors SET anchor_reference=COALESCE(NULLIF(anchor_reference,''),'PARTICIPANT_STOP_RETURN'),target_offset_ms=COALESCE(target_offset_ms,0),target_utc=COALESCE(target_utc,utc),target_monotonic_ns=COALESCE(target_monotonic_ns,monotonic_ns) WHERE anchor_reference IS NULL OR anchor_reference='' OR target_offset_ms IS NULL OR target_utc IS NULL OR target_monotonic_ns IS NULL").run();
+  }
 }
 
 function backfillSessionIdSequence(db) {
@@ -1053,6 +1090,8 @@ function ensureTriggers(db) {
       ["immutable_cross_session_analysis_update", "cross_session_analyses", "UPDATE", "cross-session analyses are immutable"],
       ["immutable_cross_session_analysis_delete", "cross_session_analyses", "DELETE", "cross-session analyses are immutable"],
       ["immutable_research_defaults_delete", "research_defaults", "DELETE", "research defaults are immutable history"],
+      ["immutable_stop_anchor_update", "participant_stop_anchors", "UPDATE", "participant stop anchors are immutable"],
+      ["immutable_stop_anchor_delete", "participant_stop_anchors", "DELETE", "participant stop anchors are immutable"],
   ];
   for (const [name, table, action, message] of immutable) {
     if (tableExists(db, table)) immutableTrigger(db, name, table, action, message);
@@ -1564,7 +1603,7 @@ export class MipDatabase {
     const lockHash = sha256(payloadJson);
     const current = this.db.prepare("SELECT status,reveal_policy FROM sessions WHERE session_id=?").get(sessionId);
     if (!current) throw new Error(`Session not found: ${sessionId}`);
-    const researchMeta = this.db.prepare("SELECT mode,primary_endpoint,outcome_space_json,temporal_analysis_json FROM research_definitions WHERE session_id=?").get(sessionId) || null;
+    const researchMeta = this.db.prepare("SELECT mode,primary_endpoint,outcome_space_json,temporal_analysis_json,target_definition_json FROM research_definitions WHERE session_id=?").get(sessionId) || null;
     const temporalGate = requiresStrictResearchGate(researchMeta);
     if (current.reveal_policy && current.reveal_policy !== "AFTER_RAW_REPORT_LOCK" && !temporalGate)
       throw new Error(`Reveal policy ${current.reveal_policy} is not implemented by the report-lock gate.`);

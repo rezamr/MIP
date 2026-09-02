@@ -10,6 +10,8 @@ import {
   sampleOutcome,
   normalizeTemporalAnalysisPlan,
   normalizeTargetDefinition,
+  normalizeTargetOffsetMs,
+  isParticipantStopAnchor,
   formatOutcome,
   MAX_SCHEDULED_OUTPUTS,
 } from "../../domain/research-model.js";
@@ -66,6 +68,7 @@ export class TemporalEvidenceScheduler {
   constructor(config = {}, dependencies = {}) {
     this.config = config;
     this.mode = normalizeExperimentMode(config.mode || config.experimentMode || EXPERIMENT_MODES.INFLUENCE);
+    this.timingMode = String(config.timing?.mode || config.timingMode || config.schedulerMode || "").toUpperCase();
     this.outcomeSpace = normalizeOutcomeSpace(config.outcomeSpace || { type: "BINARY" });
     this.cardinality = outcomeSpaceSize(this.outcomeSpace);
     this.analysisPlan = normalizeTemporalAnalysisPlan(config.temporalAnalysis || config.analysis || {}, { plannedBeforeCommit: true });
@@ -82,6 +85,7 @@ export class TemporalEvidenceScheduler {
     this.onFailure = dependencies.onFailure;
     this.onComplete = dependencies.onComplete;
     this.onParticipantPhase = dependencies.onParticipantPhase;
+    this.onParticipantStopAnchor = dependencies.onParticipantStopAnchor;
     this.sessionId = dependencies.sessionId || config.sessionId || null;
     this.trialId = dependencies.trialId || config.trialId || null;
     const defaultTolerance = this.mode === EXPERIMENT_MODES.FUTURE_TARGET ? 0 : 100;
@@ -108,6 +112,21 @@ export class TemporalEvidenceScheduler {
     this.completed = null;
     this.abortClassification = null;
     this.nextSequence = 0;
+    this.stopAnchored = this.timingMode === "PARTICIPANT_STOP_ANCHORED" || isParticipantStopAnchor(this.targetDefinition.anchor || this.targetDefinition.anchorReference);
+    this.anchorReference = this.stopAnchored
+      ? (this.targetDefinition.anchorReference || this.config.timing?.anchorReference || TARGET_ANCHORS.PARTICIPANT_STOP_RETURN)
+      : null;
+    this.targetOffsetMs = this.stopAnchored
+      ? normalizeTargetOffsetMs(this.targetDefinition.targetOffsetMs ?? this.config.targetOffsetMs ?? this.config.timing?.targetOffsetMs ?? 0)
+      : null;
+    this.stopAnchor = null;
+    this.targetUtcMs = null;
+    this.targetMonotonicNs = null;
+    this.nextScheduledMonotonicNs = null;
+    this.nextScheduledUtcMs = null;
+    this.postDeadlineMonotonicNs = null;
+    this.insufficientPreTargetEvidence = false;
+    this.anchorCommitReason = null;
     this.plan = this._buildPlan();
   }
 
@@ -116,6 +135,29 @@ export class TemporalEvidenceScheduler {
     const blockSize = Math.max(1, safeInt(output.blockSize, 1));
     const intervalMs = asMs(this.analysisPlan.intervalMs ?? output.intervalMs ?? this.config.intervalMs, 1);
     if (!Number.isFinite(intervalMs) || intervalMs <= 0) throw new Error("Temporal evidence output cadence must be positive");
+    if (this.stopAnchored) {
+      const primaryWindow = this.analysisPlan.windows.find((window) => window.id === this.analysisPlan.primaryWindowId) || this.analysisPlan.windows[0] || {};
+      const preMs = asMs(primaryWindow.preMs, 0);
+      const postMs = asMs(primaryWindow.postMs, 0);
+      return Object.freeze({
+        mode: "PARTICIPANT_STOP_ANCHORED",
+        anchorReference: this.anchorReference,
+        targetOffsetMs: this.targetOffsetMs,
+        totalCount: null,
+        preCount: Math.max(0, Math.ceil(preMs / intervalMs)),
+        primaryCount: 1,
+        postCount: Math.max(0, Math.ceil(postMs / intervalMs)),
+        intervalMs,
+        targetIndex: null,
+        targetUtcMs: null,
+        targetUtc: null,
+        targetMonotonicNs: null,
+        preMs,
+        postMs,
+        executionWindow: this.config.executionWindow || null,
+        outputs: Object.freeze([]),
+      });
+    }
     const explicitCounts = ["preCount", "primaryCount", "postCount", "preBlocks", "primaryBlocks", "postBlocks"]
       .some((key) => output[key] !== undefined && output[key] !== null);
     let preCount = safeInt(output.preCount, safeInt(output.preBlocks, 0) * blockSize);
@@ -179,6 +221,48 @@ export class TemporalEvidenceScheduler {
   }
 
   toRendererDTO({ revealed = false } = {}) {
+    if (this.stopAnchored) {
+      const nowMono = clockMonoNs(this.clock);
+      const elapsedPreMs = this.started?.monotonicNs === undefined
+        ? null
+        : Math.max(0, Number((this.stopAnchor?.monotonicNs ? BigInt(this.stopAnchor.monotonicNs) : nowMono) - BigInt(this.started.monotonicNs)) / 1e6);
+      return {
+        mode: this.mode,
+        timingMode: "PARTICIPANT_STOP_ANCHORED",
+        cardinality: this.cardinality,
+        outcomeSpace: this.outcomeSpace.type === "INTEGER_RANGE" ? this.outcomeSpace : { type: this.outcomeSpace.type, values: this.outcomeSpace.values },
+        status: this.status,
+        participantPhase: this.participantPhase,
+        evidencePhase: this.evidencePhase,
+        totalCount: this.stopAnchor ? this.records.length : null,
+        plannedCount: this.stopAnchor ? this.records.length : null,
+        targetAnchor: this.anchorReference,
+        anchorReference: this.anchorReference,
+        targetOffsetMs: this.targetOffsetMs,
+        targetSequence: null,
+        targetScheduledUtc: this.targetUtcMs === null ? null : iso(this.targetUtcMs),
+        targetScheduledMonotonicNs: this.targetMonotonicNs === null ? null : this.targetMonotonicNs.toString(),
+        targetCapturedUtc: this.stopAnchor?.utc || null,
+        targetCapturedMonotonicNs: this.stopAnchor?.monotonicNs || null,
+        stopUtc: this.stopAnchor?.utc || null,
+        stopMonotonicNs: this.stopAnchor?.monotonicNs || null,
+        target: revealed ? this.target : undefined,
+        targetGenerated: this.targetGenerated,
+        targetMissed: this.targetMissed,
+        targetGenerationToleranceMs: this.toleranceMs,
+        generatedCount: this.outputs.length,
+        missedCount: this.records.filter((record) => record.status === "MISSED").length,
+        preTargetMs: this.plan.preMs,
+        postTargetMs: this.plan.postMs,
+        preEvidenceElapsedMs: elapsedPreMs,
+        remainingPostMs: this.postDeadlineMonotonicNs === null
+          ? null
+          : Math.max(0, Number(this.postDeadlineMonotonicNs - nowMono) / 1e6),
+        insufficientPreTargetEvidence: this.insufficientPreTargetEvidence,
+        executionWindow: this.plan.executionWindow,
+        abortClassification: this.abortClassification,
+      };
+    }
     return {
       mode: this.mode,
       cardinality: this.cardinality,
@@ -210,8 +294,12 @@ export class TemporalEvidenceScheduler {
     this._emit("EVIDENCE_SCHEDULE_COMMITTED", {
       totalCount: this.plan.totalCount,
       targetScheduledUtc: this.plan.targetUtc,
-      targetScheduledMonotonicNs: this.plan.targetMonotonicNs.toString(),
+      targetScheduledMonotonicNs: this.plan.targetMonotonicNs === null || this.plan.targetMonotonicNs === undefined ? null : this.plan.targetMonotonicNs.toString(),
       targetSequence: this.plan.targetIndex,
+      targetAnchor: this.stopAnchored ? this.anchorReference : this.targetDefinition.anchor,
+      anchorReference: this.stopAnchored ? this.anchorReference : undefined,
+      targetOffsetMs: this.stopAnchored ? this.targetOffsetMs : undefined,
+      executionWindow: this.plan.executionWindow || null,
       cardinality: this.cardinality,
     });
     return this.toRendererDTO();
@@ -220,20 +308,28 @@ export class TemporalEvidenceScheduler {
   async start() {
     if (this.status === "PLANNED") await this.commit();
     if (this.status !== "COMMITTED") throw new Error(`Cannot start temporal scheduler in state ${this.status}`);
-    this.status = "RUNNING";
-    this.evidencePhase = this.mode === EXPERIMENT_MODES.FUTURE_TARGET ? EVIDENCE_PHASES.TARGET_PENDING : EVIDENCE_PHASES.RUNNING;
+    this.status = this.stopAnchored ? "RUNNING_UNANCHORED" : "RUNNING";
+    this.evidencePhase = this.stopAnchored
+      ? EVIDENCE_PHASES.RUNNING_UNANCHORED
+      : this.mode === EXPERIMENT_MODES.FUTURE_TARGET ? EVIDENCE_PHASES.TARGET_PENDING : EVIDENCE_PHASES.RUNNING;
     this.participantPhase = PARTICIPANT_PHASES.ACTIVE;
     this.started = { utc: iso(clockUtcMs(this.clock)), monotonicNs: clockMonoNs(this.clock).toString() };
     this._emit("EVIDENCE_STARTED", { mode: this.mode });
+    if (this.stopAnchored) {
+      this.nextScheduledMonotonicNs = BigInt(this.started.monotonicNs);
+      this.nextScheduledUtcMs = clockUtcMs(this.clock);
+    }
     this._scheduleNext();
     return this.toRendererDTO();
   }
 
   endParticipantPhase(reason = "participant_return") {
     if ([PARTICIPANT_PHASES.ENDED, PARTICIPANT_PHASES.RETURNED].includes(this.participantPhase)) return this.participantPhase;
+    if (this.stopAnchored && !this.stopAnchor && this.status === "RUNNING_UNANCHORED") this.commitStopAnchor({ reason });
     this.participantPhase = PARTICIPANT_PHASES.ENDED;
-    this._emit("PARTICIPANT_PHASE_ENDED", { reason, evidenceContinues: this.status === "RUNNING" });
-    if (typeof this.onParticipantPhase === "function") this.onParticipantPhase({ participantPhase: this.participantPhase, reason, evidenceContinues: this.status === "RUNNING" });
+    const evidenceContinues = ["RUNNING", "RUNNING_UNANCHORED", "POST_TARGET_MONITORING"].includes(this.status);
+    this._emit("PARTICIPANT_PHASE_ENDED", { reason, evidenceContinues });
+    if (typeof this.onParticipantPhase === "function") this.onParticipantPhase({ participantPhase: this.participantPhase, reason, evidenceContinues });
     return this.participantPhase;
   }
 
@@ -241,10 +337,14 @@ export class TemporalEvidenceScheduler {
 
   abortEvidence(reason = "owner_abort", options = {}) {
     if ([EVIDENCE_PHASES.COMPLETE, EVIDENCE_PHASES.ABORTED].includes(this.evidencePhase)) return this.getResult();
-    const atAnchor = this.mode === EXPERIMENT_MODES.FUTURE_TARGET
+    const atAnchor = this.stopAnchored
+      ? Boolean(this.stopAnchor)
+      : this.mode === EXPERIMENT_MODES.FUTURE_TARGET
       ? (this.targetGenerated || clockMonoNs(this.clock) >= this.plan.targetMonotonicNs)
       : clockMonoNs(this.clock) >= this.plan.targetMonotonicNs;
-    this.abortClassification = atAnchor ? "ABORTED_AFTER_TARGET" : "ABORTED_BEFORE_TARGET";
+    this.abortClassification = this.stopAnchored
+      ? (atAnchor ? "ABORTED_AFTER_STOP_ANCHOR" : "ABORTED_BEFORE_STOP_ANCHOR")
+      : atAnchor ? "ABORTED_AFTER_TARGET" : "ABORTED_BEFORE_TARGET";
     this.evidencePhase = EVIDENCE_PHASES.ABORTED;
     this.status = "ABORTED";
     this._clearTimer();
@@ -286,6 +386,7 @@ export class TemporalEvidenceScheduler {
 
   _clearTimer() { if (this.timerHandle !== null) { this.timer.clearTimeout(this.timerHandle); this.timerHandle = null; } }
   _scheduleNext() {
+    if (this.stopAnchored) return this._scheduleStopNext();
     if (this.status !== "RUNNING") return;
     const slot = this.plan.outputs[this.nextSequence];
     if (!slot) { this._finish(); return; }
@@ -309,6 +410,126 @@ export class TemporalEvidenceScheduler {
         }
       });
     }, Math.min(Math.max(0, Math.ceil(delay)), 2_147_483_647));
+  }
+
+  _scheduleStopNext() {
+    if (!this.stopAnchored || !["RUNNING_UNANCHORED", "POST_TARGET_MONITORING"].includes(this.status)) return;
+    if (this.nextScheduledMonotonicNs === null) return;
+    const nowMono = clockMonoNs(this.clock);
+    let deadline = null;
+    if (this.stopAnchor && this.postDeadlineMonotonicNs !== null) deadline = this.postDeadlineMonotonicNs;
+    if (deadline !== null && this.nextScheduledMonotonicNs > deadline) {
+      this._finish();
+      return;
+    }
+    const delay = Math.max(0, Number(this.nextScheduledMonotonicNs - nowMono) / 1e6);
+    const untilDeadline = deadline === null ? delay : Math.max(0, Number(deadline - nowMono) / 1e6);
+    this._clearTimer();
+    this.timerHandle = this.timer.setTimeout(() => {
+      this.timerHandle = null;
+      void this._processDue().catch(async (error) => {
+        const failure = { error: error.message, classification: "OUTPUT_FAILURE", noBackfill: true };
+        try {
+          if (typeof this.onFailure === "function") await promiseResult(this.onFailure(failure));
+          else this.abortEvidence("OUTPUT_FAILURE", failure);
+        } catch (failureHandlerError) {
+          this.abortEvidence("OUTPUT_FAILURE", { ...failure, failureHandlerError: failureHandlerError.message });
+        }
+      });
+    }, Math.min(Math.max(0, Math.ceil(Math.min(delay, untilDeadline))), 2_147_483_647));
+  }
+
+  /**
+   * Capture the participant Return/Stop reference from the authoritative main
+   * process clock exactly once, then derive T from the immutable signed offset.
+   */
+  commitStopAnchor(input = {}) {
+    if (!this.stopAnchored) throw new Error("Participant stop anchor is not enabled for this scheduler");
+    if (this.stopAnchor) return { ...this.stopAnchor };
+    if (!["RUNNING_UNANCHORED", "RUNNING", "POST_TARGET_MONITORING"].includes(this.status))
+      throw new Error(`Cannot commit participant stop anchor in state ${this.status}`);
+    const monotonicInput = input.monotonicNs ?? input.stopMonotonicNs ?? input.actualMonotonicNs;
+    const monotonicNs = monotonicInput === undefined || monotonicInput === null ? clockMonoNs(this.clock) : BigInt(monotonicInput);
+    const utcInput = input.utcMs ?? input.stopUtcMs ?? input.stopUtc ?? input.actualUtc ?? input.utc;
+    const utcMs = utcInput === undefined || utcInput === null
+      ? clockUtcMs(this.clock)
+      : utcInput instanceof Date
+        ? utcInput.getTime()
+        : typeof utcInput === "string"
+          ? Date.parse(utcInput)
+          : Number(utcInput);
+    if (!Number.isFinite(utcMs)) throw new Error("Participant stop UTC clock is invalid");
+    if (monotonicNs < 0n) throw new Error("Participant stop monotonic clock is invalid");
+    const startedMono = this.started?.monotonicNs === undefined ? null : BigInt(this.started.monotonicNs);
+    if (startedMono !== null && monotonicNs < startedMono) throw new Error("Participant stop anchor cannot be backdated before START");
+    const targetOffsetNs = BigInt(this.targetOffsetMs) * 1_000_000n;
+    const targetUtcMs = utcMs + this.targetOffsetMs;
+    const targetMonotonicNs = monotonicNs + targetOffsetNs;
+    const requiredPreStartNs = targetMonotonicNs - BigInt(Math.round(this.plan.preMs * 1e6));
+    const preElapsedMs = startedMono === null ? null : Number(monotonicNs - startedMono) / 1e6;
+    // For a negative offset, evidence required before T must genuinely have
+    // existed before START.  Comparing START to T-pre (rather than STOP-START)
+    // keeps the same rule correct for negative, zero, and positive offsets.
+    this.insufficientPreTargetEvidence = startedMono !== null && startedMono > requiredPreStartNs;
+    this.anchorCommitReason = input.reason || "participant_return";
+    this.stopAnchor = {
+      anchor: this.anchorReference,
+      anchorReference: this.anchorReference,
+      utc: iso(utcMs),
+      utcMs,
+      monotonicNs: monotonicNs.toString(),
+      stopUtc: iso(utcMs),
+      stopMonotonicNs: monotonicNs.toString(),
+      targetOffsetMs: this.targetOffsetMs,
+      targetUtc: iso(targetUtcMs),
+      targetUtcMs,
+      targetMonotonicNs: targetMonotonicNs.toString(),
+      preTargetMs: this.plan.preMs,
+      postTargetMs: this.plan.postMs,
+      preEvidenceElapsedMs: preElapsedMs,
+      insufficientPreTargetEvidence: this.insufficientPreTargetEvidence,
+      reason: this.anchorCommitReason,
+      executionWindow: this.plan.executionWindow || null,
+    };
+    this.status = "POST_TARGET_MONITORING";
+    this.evidencePhase = EVIDENCE_PHASES.POST_TARGET_MONITORING;
+    this.targetUtcMs = targetUtcMs;
+    this.targetMonotonicNs = targetMonotonicNs;
+    this.postDeadlineMonotonicNs = targetMonotonicNs + BigInt(Math.round(this.plan.postMs * 1e6));
+    this._emit("PARTICIPANT_STOP_ANCHOR_COMMITTED", {
+      anchor: this.anchorReference,
+      anchorReference: this.anchorReference,
+      utc: this.stopAnchor.utc,
+      monotonicNs: this.stopAnchor.monotonicNs,
+      stopUtc: this.stopAnchor.stopUtc,
+      stopMonotonicNs: this.stopAnchor.stopMonotonicNs,
+      targetOffsetMs: this.targetOffsetMs,
+      targetUtc: this.stopAnchor.targetUtc,
+      targetMonotonicNs: this.stopAnchor.targetMonotonicNs,
+      sessionId: this.sessionId,
+      trialId: this.trialId,
+      preTargetMs: this.plan.preMs,
+      postTargetMs: this.plan.postMs,
+      insufficientPreTargetEvidence: this.insufficientPreTargetEvidence,
+      executionWindow: this.plan.executionWindow || null,
+    });
+    if (this.insufficientPreTargetEvidence)
+      this._emit("INSUFFICIENT_PRE_TARGET_EVIDENCE", { requiredPreTargetMs: this.plan.preMs, observedPreTargetMs: preElapsedMs, noBackfill: true });
+    if (typeof this.onParticipantStopAnchor === "function") {
+      const result = this.onParticipantStopAnchor({ ...this.stopAnchor, sessionId: this.sessionId, trialId: this.trialId });
+      // Persistence callbacks are intentionally synchronous at the main
+      // process boundary.  Surface accidental async callbacks rather than
+      // claiming an anchor was durably committed before the promise settles.
+      if (result && typeof result.then === "function") throw new Error("Participant stop anchor persistence callback must be synchronous");
+    }
+    // Reclassify the next already-committed cadence slot relative to T; no
+    // slot is created for the elapsed pre-window and no backfill occurs.
+    if (this.nextScheduledMonotonicNs === null) {
+      this.nextScheduledMonotonicNs = monotonicNs;
+      this.nextScheduledUtcMs = utcMs;
+    }
+    this._scheduleStopNext();
+    return { ...this.stopAnchor };
   }
 
   async _generateTargetIfDue(observed) {
@@ -345,6 +566,7 @@ export class TemporalEvidenceScheduler {
   }
 
   async _processDue() {
+    if (this.stopAnchored) return this._processStopDue();
     if (this.status !== "RUNNING") return;
     const observed = { monotonicNs: clockMonoNs(this.clock), utcMs: clockUtcMs(this.clock) };
     await this._generateTargetIfDue(observed);
@@ -391,11 +613,79 @@ export class TemporalEvidenceScheduler {
     }
   }
 
+  async _processStopDue() {
+    if (!this.stopAnchored || !["RUNNING_UNANCHORED", "POST_TARGET_MONITORING"].includes(this.status)) return;
+    const observed = { monotonicNs: clockMonoNs(this.clock), utcMs: clockUtcMs(this.clock) };
+    const deadline = this.stopAnchor ? this.postDeadlineMonotonicNs : null;
+    while (this.status !== "COMPLETE" && this.status !== "ABORTED" && this.nextScheduledMonotonicNs !== null && observed.monotonicNs >= this.nextScheduledMonotonicNs) {
+      if (deadline !== null && this.nextScheduledMonotonicNs > deadline) break;
+      const scheduledMono = this.nextScheduledMonotonicNs;
+      const scheduledUtcMs = this.nextScheduledUtcMs;
+      const sequence = this.nextSequence;
+      this.nextSequence += 1;
+      this.nextScheduledMonotonicNs += BigInt(Math.round(this.plan.intervalMs * 1e6));
+      this.nextScheduledUtcMs += this.plan.intervalMs;
+      if (sequence >= MAX_SCHEDULED_OUTPUTS) {
+        this.abortEvidence("MAX_SCHEDULED_OUTPUTS", { classification: "OUTPUT_LIMIT", noBackfill: true });
+        return;
+      }
+      const scheduledLatencyMs = this.stopAnchor && this.targetMonotonicNs !== null
+        ? Number(scheduledMono - this.targetMonotonicNs) / 1e6
+        : null;
+      const region = !this.stopAnchor || scheduledLatencyMs < -Math.max(this.toleranceMs, this.plan.intervalMs / 2)
+        ? "pre"
+        : scheduledLatencyMs > Math.max(this.toleranceMs, this.plan.intervalMs / 2)
+          ? "post"
+          : "primary";
+      const latenessMs = Number(observed.monotonicNs - scheduledMono) / 1e6;
+      const base = {
+        sequence,
+        region,
+        scheduledMonotonicNs: scheduledMono,
+        scheduledUtcMs,
+        scheduledUtc: iso(scheduledUtcMs),
+        targetSlot: region === "primary",
+        sessionId: this.sessionId,
+        trialId: this.trialId,
+        actualUtc: iso(observed.utcMs),
+        actualMonotonicNs: observed.monotonicNs.toString(),
+        latenessMs,
+      };
+      if (latenessMs > this.toleranceMs) {
+        const missed = { ...base, status: "MISSED", value: null };
+        this.records.push(missed);
+        if (typeof this.onOutput === "function") await promiseResult(this.onOutput({ ...missed }));
+        this._emit("OUTPUT_MISSED", { sequence, region, scheduledUtc: base.scheduledUtc, actualUtc: base.actualUtc, latenessMs, noBackfill: true });
+        continue;
+      }
+      const value = await promiseResult(this.outputProvider({ sessionId: this.sessionId, trialId: this.trialId, sequence, region, scheduledUtc: base.scheduledUtc, scheduledMonotonicNs: scheduledMono.toString(), target: this.target, randomSource: this.machineRandomSource }));
+      const record = { ...base, value, status: latenessMs === 0 ? "ON_TIME" : "LATE" };
+      this.outputs.push(record);
+      this.records.push(record);
+      if (typeof this.onOutput === "function") await promiseResult(this.onOutput({ ...record }));
+      this._emit("OUTPUT_RECORDED", { sequence, region, status: record.status });
+    }
+    if (this.stopAnchor && deadline !== null && observed.monotonicNs >= deadline) {
+      this._finish();
+      return;
+    }
+    this._scheduleStopNext();
+  }
+
   /** Deterministic test/dev hook; production uses the timer callback. */
   async tick() { return this._processDue(); }
 
   _finish() {
     this._clearTimer();
+    if (this.stopAnchored) {
+      if (!["POST_TARGET_MONITORING", "RUNNING_UNANCHORED"].includes(this.status)) return;
+      this.status = "COMPLETE";
+      this.evidencePhase = EVIDENCE_PHASES.COMPLETE;
+      this.completed = { utc: iso(clockUtcMs(this.clock)), monotonicNs: clockMonoNs(this.clock).toString() };
+      this._emit("EVIDENCE_COMPLETE", { generatedCount: this.outputs.length, missedCount: this.records.filter((record) => record.status === "MISSED").length, insufficientPreTargetEvidence: this.insufficientPreTargetEvidence });
+      if (typeof this.onComplete === "function") this.onComplete(this.getResult());
+      return;
+    }
     if (this.status !== "RUNNING") return;
     this.status = "COMPLETE";
     this.evidencePhase = EVIDENCE_PHASES.COMPLETE;
@@ -426,13 +716,15 @@ export class TemporalEvidenceScheduler {
     };
     return {
       ...this.toRendererDTO({ revealed }),
-      plan: { ...this.plan, targetMonotonicNs: this.plan.targetMonotonicNs.toString(), outputs: this.plan.outputs.map((slot) => ({ ...slot, scheduledMonotonicNs: slot.scheduledMonotonicNs.toString() })) },
+      plan: { ...this.plan, targetMonotonicNs: this.plan.targetMonotonicNs === null || this.plan.targetMonotonicNs === undefined ? null : this.plan.targetMonotonicNs.toString(), outputs: this.plan.outputs.map((slot) => ({ ...slot, scheduledMonotonicNs: slot.scheduledMonotonicNs === null || slot.scheduledMonotonicNs === undefined ? null : slot.scheduledMonotonicNs.toString() })) },
       outputs: revealed ? this.outputs.map((record) => serializeRecord(record, true)) : [],
       records: revealed
         ? this.records.map((record) => serializeRecord(record, true))
         : this.records.map((record) => ({ ...serializeRecord(record, false), hidden: true })),
       target: revealed ? this.target : undefined,
       targetLabel: revealed && this.target !== null ? formatOutcome(this.outcomeSpace, this.target) : undefined,
+      stopAnchor: this.stopAnchored && this.stopAnchor ? { ...this.stopAnchor } : undefined,
+      insufficientPreTargetEvidence: this.stopAnchored ? this.insufficientPreTargetEvidence : undefined,
     };
   }
 }

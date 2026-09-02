@@ -35,6 +35,11 @@ export const EVIDENCE_PHASES = Object.freeze({
   NOT_STARTED: "NOT_STARTED",
   PLANNED: "PLANNED",
   SCHEDULED: "SCHEDULED",
+  // A participant-stop protocol has no target timestamp while the
+  // participant is active.  Keep this state explicit instead of encoding it
+  // as a fake future/absolute target.
+  RUNNING_UNANCHORED: "RUNNING_UNANCHORED",
+  STOP_ANCHOR_COMMITTED: "STOP_ANCHOR_COMMITTED",
   RUNNING: "RUNNING",
   TARGET_PENDING: "TARGET_PENDING",
   TARGET_GENERATED: "TARGET_GENERATED",
@@ -55,6 +60,8 @@ export const TARGET_ANCHORS = Object.freeze({
   AUDIO_STARTED: "AUDIO_STARTED",
   ABSOLUTE_UTC: "ABSOLUTE_UTC",
   EVIDENCE_SEQUENCE: "EVIDENCE_SEQUENCE",
+  PARTICIPANT_STOP: "PARTICIPANT_STOP",
+  PARTICIPANT_STOP_RETURN: "PARTICIPANT_STOP_RETURN",
 });
 export const TargetAnchor = TARGET_ANCHORS;
 
@@ -90,6 +97,105 @@ export const MAX_TEMPORAL_WINDOWS = 128;
 export const MAX_TEMPORAL_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 export const MAX_PROBABILITY_TRIALS = 1_000_000;
 export const MAX_SCHEDULED_OUTPUTS = 1_000_000;
+
+/**
+ * Normalize an owner-entered execution window without ever turning it into a
+ * target anchor.  UTC boundaries are the canonical persisted values; the
+ * IANA timezone is retained solely as display/audit metadata.
+ */
+export function normalizeExecutionWindow(value = {}, options = {}) {
+  if (value === null || value === undefined || value === "") {
+    if (options.required === true) fail("executionWindow is required");
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) fail("executionWindow must be an object");
+  const suppliedTimezone = String(value.timezone || value.timeZone || "").trim();
+  const timezone = suppliedTimezone || "UTC";
+  try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(0)); }
+  catch { fail("executionWindow.timezone must be a valid IANA timezone"); }
+
+  const localText = (date, time) => {
+    const dateText = String(date || "").trim();
+    const timeText = String(time || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText) || !/^\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?$/.test(timeText)) return null;
+    return `${dateText}T${timeText.length === 5 ? `${timeText}:00` : timeText}`;
+  };
+  const parseLocal = (local) => {
+    if (!local) return null;
+    const naive = Date.parse(`${local}Z`);
+    if (!Number.isFinite(naive)) return null;
+    let candidate = naive;
+    // Resolve DST offsets by iterating the formatter-derived offset.  Three
+    // passes are sufficient for all IANA transitions while keeping the
+    // conversion deterministic and dependency-free.
+    for (let pass = 0; pass < 3; pass += 1) {
+      const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+        timeZone: timezone,
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).formatToParts(new Date(candidate)).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+      const renderedUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour) % 24, Number(parts.minute), Number(parts.second));
+      candidate = naive - (renderedUtc - candidate);
+    }
+    return candidate;
+  };
+  const parseBoundary = (utcValue, localValue, name) => {
+    if (utcValue !== undefined && utcValue !== null && utcValue !== "") {
+      const parsed = Date.parse(String(utcValue));
+      if (!Number.isFinite(parsed)) fail(`${name} must be a valid UTC datetime`);
+      return parsed;
+    }
+    const parsed = parseLocal(localValue);
+    if (!Number.isFinite(parsed)) fail(`${name} must be a valid local datetime or UTC datetime`);
+    return parsed;
+  };
+  const startLocal = value.startLocal || value.start || localText(value.date, value.startTime);
+  const endLocal = value.endLocal || value.end || localText(value.date, value.endTime);
+  const hasExplicitLocalCalendar = Boolean(value.startLocal || value.endLocal || value.date || value.startTime || value.endTime);
+  if (!suppliedTimezone && hasExplicitLocalCalendar) fail("executionWindow.timezone is required for local calendar scheduling");
+  const startMs = parseBoundary(value.startUtc ?? value.startUTC, startLocal, "executionWindow.startUtc");
+  const endMs = parseBoundary(value.endUtc ?? value.endUTC, endLocal, "executionWindow.endUtc");
+  if (!(endMs > startMs)) fail("executionWindow.endUtc must be after executionWindow.startUtc");
+  return Object.freeze({
+    startUtc: new Date(startMs).toISOString(),
+    endUtc: new Date(endMs).toISOString(),
+    timezone,
+  });
+}
+
+/**
+ * Normalize the precommitted signed relationship between the participant
+ * Return/Stop reference point and target T.  The persisted representation is
+ * always an integer number of milliseconds; zero is the explicit at-return
+ * case and negative/positive values are retained rather than coerced.
+ */
+export function normalizeTargetOffsetMs(value = 0, options = {}) {
+  if (value === null || value === undefined || value === "") {
+    if (options.allowNull === true) return null;
+    return 0;
+  }
+  let normalized;
+  try {
+    if (typeof value === "bigint") normalized = Number(value);
+    else if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) normalized = Number(BigInt(value.trim()));
+    else normalized = Number(value);
+  } catch {
+    fail("targetOffsetMs must be a signed safe integer number of milliseconds");
+  }
+  if (!Number.isSafeInteger(normalized)) fail("targetOffsetMs must be a signed safe integer number of milliseconds");
+  if (Math.abs(normalized) > MAX_TEMPORAL_WINDOW_MS) fail(`targetOffsetMs must be within ±${MAX_TEMPORAL_WINDOW_MS} ms`);
+  return normalized;
+}
+
+export function isParticipantStopAnchor(value) {
+  const anchor = String(value || "").toUpperCase();
+  return anchor === TARGET_ANCHORS.PARTICIPANT_STOP || anchor === TARGET_ANCHORS.PARTICIPANT_STOP_RETURN;
+}
 
 function fail(message) {
   throw new TypeError(message);
@@ -226,7 +332,14 @@ export function normalizeExperimentMode(value) {
 
 export function normalizeTargetDefinition(value = {}, options = {}) {
   const mode = normalizeExperimentMode(options.mode || value.mode || EXPERIMENT_MODES.INFLUENCE);
-  const requestedAnchor = value.anchor || (mode === EXPERIMENT_MODES.FUTURE_TARGET ? TARGET_ANCHORS.ABSOLUTE_UTC : TARGET_ANCHORS.PARTICIPANT_REQUEST);
+  const requestedAnchor = value.anchor || value.anchorReference || (mode === EXPERIMENT_MODES.FUTURE_TARGET ? TARGET_ANCHORS.ABSOLUTE_UTC : TARGET_ANCHORS.PARTICIPANT_REQUEST);
+  const normalizedAnchor = String(requestedAnchor).toUpperCase();
+  const participantStop = isParticipantStopAnchor(normalizedAnchor);
+  const targetOffsetMs = participantStop
+    ? normalizeTargetOffsetMs(value.targetOffsetMs ?? value.offsetMs ?? 0)
+    : value.targetOffsetMs === undefined && value.offsetMs === undefined
+      ? null
+      : normalizeTargetOffsetMs(value.targetOffsetMs ?? value.offsetMs, { allowNull: true });
   const target = {
     mode,
     assignmentDomain: value.assignmentDomain || "TARGET_ASSIGNMENT",
@@ -234,7 +347,8 @@ export function normalizeTargetDefinition(value = {}, options = {}) {
     // the caller explicitly selects another supported anchor.  Keeping this
     // default here (rather than only in the Electron handler) means every
     // integration and persistence path applies the same protocol semantics.
-    anchor: String(requestedAnchor).toUpperCase(),
+    anchor: normalizedAnchor,
+    ...(participantStop ? { anchorReference: TARGET_ANCHORS.PARTICIPANT_STOP_RETURN, targetOffsetMs } : targetOffsetMs !== null ? { targetOffsetMs } : {}),
     targetSequence: value.targetSequence === undefined || value.targetSequence === null ? null : integer(value.targetSequence, "targetSequence"),
     // Influence/control/sham definitions carry the committed target in the
     // immutable definition.  FUTURE_TARGET intentionally keeps this field
@@ -243,7 +357,9 @@ export function normalizeTargetDefinition(value = {}, options = {}) {
     prediction: value.prediction === undefined || value.prediction === null ? null : scalar(value.prediction, "prediction"),
     scheduledUtc: value.scheduledUtc || value.scheduledTargetUtc || null,
     scheduledMonotonicNs: value.scheduledMonotonicNs === undefined || value.scheduledMonotonicNs === null ? null : String(value.scheduledMonotonicNs),
-    semantics: value.semantics || (mode === EXPERIMENT_MODES.FUTURE_TARGET ? "GENERATE_AT_ANCHOR" : "COMMITTED_BEFORE_PARTICIPATION"),
+    semantics: value.semantics || (participantStop
+      ? (normalizedAnchor === TARGET_ANCHORS.PARTICIPANT_STOP ? "PARTICIPANT_STOP_ANCHOR" : "PARTICIPANT_STOP_RELATIVE_TARGET")
+      : mode === EXPERIMENT_MODES.FUTURE_TARGET ? "GENERATE_AT_ANCHOR" : "COMMITTED_BEFORE_PARTICIPATION"),
   };
   if (!Object.values(TARGET_ANCHORS).includes(target.anchor)) fail(`Unsupported target anchor ${target.anchor}`);
   if (target.scheduledUtc !== null && !Number.isFinite(Date.parse(String(target.scheduledUtc))))
@@ -255,6 +371,8 @@ export function normalizeTargetDefinition(value = {}, options = {}) {
       fail("scheduledMonotonicNs must be a non-negative integer");
     }
   }
+  if (participantStop && (target.scheduledUtc !== null || target.scheduledMonotonicNs !== null))
+    fail("PARTICIPANT_STOP target definitions must not contain a predetermined scheduled timestamp");
   if (mode === EXPERIMENT_MODES.FUTURE_TARGET && value.target !== undefined)
     if (value.target !== null) fail("FUTURE_TARGET must not contain an actual target before its anchor");
   if (mode === EXPERIMENT_MODES.FUTURE_TARGET && target.target !== null)
@@ -427,6 +545,9 @@ export function resolveEffectiveConfiguration({ session = {}, profile = {}, app 
     primaryEndpoint: merged.primaryEndpoint,
     outputCadence: merged.outputCadence ?? merged.output?.cadence,
   }));
+  const executionWindow = merged.executionWindow === undefined || merged.executionWindow === null
+    ? null
+    : normalizeExecutionWindow(merged.executionWindow);
   const definition = {
     version: merged.definitionVersion || "research-definition-v1",
     mode,
@@ -439,6 +560,7 @@ export function resolveEffectiveConfiguration({ session = {}, profile = {}, app 
     outputCadence: merged.outputCadence || merged.output?.cadence || analysis.outputCadence,
     primaryEndpoint: analysis.primaryEndpoint,
     temporalAnalysis: analysis,
+    executionWindow,
     revealPolicy: merged.revealPolicy || REVEAL_POLICIES.AFTER_EVIDENCE_COMPLETE,
     profileId: merged.profileId || profile.id || null,
     profileVersion: merged.profileVersion || profile.version || null,
@@ -469,6 +591,10 @@ export function createCompatibilityFingerprint(definition = {}) {
     outputCadence: definition.outputCadence || definition.temporalAnalysis?.outputCadence || null,
     endpoint: definition.primaryEndpoint || definition.temporalAnalysis?.primaryEndpoint || null,
     windows: definition.temporalAnalysis?.windows || definition.windows || [],
+    ...(definition.executionWindow ? { executionWindow: definition.executionWindow } : {}),
+    ...(isParticipantStopAnchor(definition.targetDefinition?.anchor || definition.targetDefinition?.anchorReference)
+      ? { targetOffsetMs: normalizeTargetOffsetMs(definition.targetDefinition?.targetOffsetMs ?? definition.targetOffsetMs ?? 0) }
+      : {}),
     profileId: definition.profileId || null,
     profileVersion: definition.profileVersion || null,
     targetSemantics: definition.targetDefinition?.semantics || null,
@@ -498,6 +624,7 @@ export function precommitReview(definition) {
     outputCadence: config.outputCadence,
     primaryEndpoint: config.primaryEndpoint,
     windows: config.temporalAnalysis?.windows || [],
+    executionWindow: config.executionWindow || null,
     configHash: config.configHash || hashResearchDefinition(config),
     compatibilityFingerprint: config.compatibilityFingerprint || createCompatibilityFingerprint(config),
   });

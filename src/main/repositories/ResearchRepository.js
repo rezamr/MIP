@@ -5,11 +5,15 @@ import {
   containsOutcome,
   normalizeExperimentMode,
   normalizeTargetDefinition,
+  normalizeExecutionWindow,
+  normalizeTargetOffsetMs,
+  isParticipantStopAnchor,
   normalizeTemporalAnalysisPlan,
   normalizeCrossSessionAnalysis,
   evaluateRevealGate,
   createCompatibilityFingerprint,
   PRIMARY_ENDPOINTS,
+  TARGET_ANCHORS,
 } from "../../domain/research-model.js";
 import { json, now } from "../database/db.js";
 
@@ -66,6 +70,9 @@ export class ResearchRepository {
     const outcomeSpace = normalizeOutcomeSpace(input.outcomeSpace || { type: "BINARY" });
     const temporalAnalysis = normalizeTemporalAnalysisPlan(input.temporalAnalysis || input.analysisPlan || input.analysis || {}, { plannedBeforeCommit: true });
     const targetDefinition = normalizeTargetDefinition(input.targetDefinition || input.target || {}, { mode });
+    const executionWindow = input.executionWindow === undefined || input.executionWindow === null
+      ? null
+      : normalizeExecutionWindow(input.executionWindow);
     if (targetDefinition.prediction !== null && !containsOutcome(outcomeSpace, targetDefinition.prediction))
       throw new TypeError("target prediction must belong to the selected outcome space");
     if (targetDefinition.target !== null && targetDefinition.target !== undefined && !containsOutcome(outcomeSpace, targetDefinition.target))
@@ -86,6 +93,9 @@ export class ResearchRepository {
       profileId: input.profileId || null,
       profileVersion: input.profileVersion || null,
       targetSemantics: input.targetSemantics || targetDefinition.semantics,
+      timingMode: input.timingMode || input.timing?.mode || null,
+      timing: copy(input.timing || null),
+      executionWindow,
     };
     const canonicalDefinition = canonical(definition);
     const configHash = sha256(canonicalDefinition);
@@ -162,7 +172,121 @@ export class ResearchRepository {
   getPhases(sessionId) {
     const row = this.db.prepare("SELECT * FROM session_phase_projections WHERE session_id=?").get(sessionId);
     if (!row) return null;
-    return { sessionId, sessionLifecycle: row.session_lifecycle, participantPhaseStatus: row.participant_phase_status, evidencePhaseStatus: row.evidence_phase_status, reportStatus: row.report_status, revealStatus: row.reveal_status, integrityStatus: row.integrity_status, updatedUtc: row.updated_utc, projectionHash: row.projection_hash };
+    const anchor = this.getParticipantStopAnchor(sessionId);
+    return { sessionId, sessionLifecycle: row.session_lifecycle, participantPhaseStatus: row.participant_phase_status, evidencePhaseStatus: row.evidence_phase_status, reportStatus: row.report_status, revealStatus: row.reveal_status, integrityStatus: row.integrity_status, updatedUtc: row.updated_utc, projectionHash: row.projection_hash, participantStopAnchor: anchor };
+  }
+
+  /**
+   * Atomically commit the one authoritative participant Return/Stop anchor.
+   * Replays are idempotent only when every captured field is identical; a
+   * second/different anchor is rejected so the original evidence cannot be
+   * rewritten.
+   */
+  commitParticipantStopAnchor(sessionId, input = {}) {
+    const definitionRow = this._definitionRow(sessionId);
+    if (!definitionRow) throw new Error(`Research definition not found: ${sessionId}`);
+    if (!definitionRow.committed) throw new Error("Participant stop anchor requires a committed research definition.");
+    const definition = json(definitionRow.definition_json, {}) || {};
+    const anchor = String(definition.targetDefinition?.anchor || "").toUpperCase();
+    const timingMode = String(definition.timing?.mode || definition.timingMode || input.timingMode || "").toUpperCase();
+    if (!isParticipantStopAnchor(anchor) && timingMode !== "PARTICIPANT_STOP_ANCHORED")
+      throw new Error("Participant stop anchor is only valid for PARTICIPANT_STOP_ANCHORED sessions.");
+    const utc = safeUtc(input.utc || input.actualUtc, "participant stop utc");
+    const monotonicNs = safeMonotonic(input.monotonicNs ?? input.actualMonotonicNs, "participant stop monotonicNs");
+    if (!utc || !monotonicNs) throw new TypeError("Participant stop anchor requires authoritative UTC and monotonic timestamps.");
+    const temporal = normalizeTemporalAnalysisPlan(definition.temporalAnalysis || {});
+    const primaryWindow = temporal.windows.find((window) => window.id === temporal.primaryWindowId) || temporal.windows[0] || {};
+    const preTargetMs = Number(input.preTargetMs ?? primaryWindow.preMs ?? 0);
+    const postTargetMs = Number(input.postTargetMs ?? primaryWindow.postMs ?? 0);
+    if (!Number.isFinite(preTargetMs) || preTargetMs < 0 || !Number.isFinite(postTargetMs) || postTargetMs < 0)
+      throw new TypeError("Participant stop pre/post windows must be non-negative finite numbers.");
+    const executionWindow = definition.executionWindow || null;
+    const committedOffset = normalizeTargetOffsetMs(
+      definition.targetDefinition?.targetOffsetMs ?? definition.timing?.targetOffsetMs ?? 0,
+    );
+    if (input.targetOffsetMs !== undefined && normalizeTargetOffsetMs(input.targetOffsetMs) !== committedOffset)
+      throw new Error("Participant stop target offset does not match the precommitted research definition.");
+    const anchorReference = definition.targetDefinition?.anchorReference || definition.timing?.anchorReference || TARGET_ANCHORS.PARTICIPANT_STOP_RETURN;
+    if (!isParticipantStopAnchor(anchorReference)) throw new Error("Participant stop anchor reference is invalid.");
+    const stopUtcMs = Date.parse(utc);
+    const targetUtc = new Date(stopUtcMs + committedOffset).toISOString();
+    const targetMonotonicNs = (BigInt(monotonicNs) + BigInt(committedOffset) * 1_000_000n).toString();
+    let derivedInsufficient = input.insufficientPreTargetEvidence === true;
+    const startRow = this.db.prepare("SELECT actual_start_monotonic_ns FROM session_details WHERE session_id=?").get(sessionId);
+    if (startRow?.actual_start_monotonic_ns !== null && startRow?.actual_start_monotonic_ns !== undefined && startRow.actual_start_monotonic_ns !== "") {
+      try {
+        const requiredPreStartNs = BigInt(targetMonotonicNs) - BigInt(Math.round(preTargetMs * 1e6));
+        derivedInsufficient = derivedInsufficient || BigInt(startRow.actual_start_monotonic_ns) > requiredPreStartNs;
+      } catch { /* the authoritative scheduler flag remains the fallback */ }
+    }
+    const payload = {
+      sessionId,
+      trialId: input.trialId || null,
+      // Keep the table-level discriminator compatible with the original
+      // v1.2 schema (whose CHECK constraint allowed only PARTICIPANT_STOP);
+      // the canonical semantic reference is carried separately below.
+      anchor: TARGET_ANCHORS.PARTICIPANT_STOP,
+      anchorReference,
+      utc,
+      monotonicNs,
+      stopUtc: utc,
+      stopMonotonicNs: monotonicNs,
+      targetOffsetMs: committedOffset,
+      targetUtc,
+      targetMonotonicNs,
+      preTargetMs,
+      postTargetMs,
+      executionWindowStartUtc: input.executionWindowStartUtc || executionWindow?.startUtc || null,
+      executionWindowEndUtc: input.executionWindowEndUtc || executionWindow?.endUtc || null,
+      timezone: input.timezone || executionWindow?.timezone || "UTC",
+      insufficientPreTargetEvidence: derivedInsufficient,
+    };
+    const hash = sha256(canonical(payload));
+    const existing = this.db.prepare("SELECT * FROM participant_stop_anchors WHERE session_id=?").get(sessionId);
+    if (existing) {
+      if (existing.anchor_hash !== hash) throw new Error(`Participant stop anchor is already recorded for ${sessionId}; replay is rejected.`);
+      return this.getParticipantStopAnchor(sessionId);
+    }
+    const createdUtc = now();
+    this._atomic(() => {
+      this.db.prepare(`INSERT INTO participant_stop_anchors(session_id,trial_id,anchor,anchor_reference,utc,monotonic_ns,target_offset_ms,target_utc,target_monotonic_ns,pre_target_ms,post_target_ms,execution_window_start_utc,execution_window_end_utc,timezone,insufficient_pre_target_evidence,anchor_hash,created_utc)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        sessionId, payload.trialId, payload.anchor, payload.anchorReference, payload.utc, payload.monotonicNs, payload.targetOffsetMs, payload.targetUtc, payload.targetMonotonicNs, payload.preTargetMs, payload.postTargetMs,
+        payload.executionWindowStartUtc, payload.executionWindowEndUtc, payload.timezone, payload.insufficientPreTargetEvidence ? 1 : 0, hash, createdUtc,
+      );
+      this.owner.evidence?.appendEvent(sessionId, payload.trialId, "PARTICIPANT_STOP_ANCHOR_COMMITTED", payload);
+      this.updatePhases(sessionId, {
+        evidencePhaseStatus: "POST_TARGET_MONITORING",
+        revealStatus: "BLOCKED",
+      });
+    });
+    return this.getParticipantStopAnchor(sessionId);
+  }
+
+  getParticipantStopAnchor(sessionId) {
+    const row = this.db.prepare("SELECT * FROM participant_stop_anchors WHERE session_id=?").get(sessionId);
+    if (!row) return null;
+    return {
+      sessionId: row.session_id,
+      trialId: row.trial_id,
+      anchor: row.anchor,
+      anchorReference: row.anchor_reference || row.anchor || "PARTICIPANT_STOP_RETURN",
+      utc: row.utc,
+      monotonicNs: row.monotonic_ns,
+      stopUtc: row.utc,
+      stopMonotonicNs: row.monotonic_ns,
+      targetOffsetMs: Number(row.target_offset_ms ?? 0),
+      targetUtc: row.target_utc || new Date(Date.parse(row.utc) + Number(row.target_offset_ms ?? 0)).toISOString(),
+      targetMonotonicNs: row.target_monotonic_ns || (BigInt(row.monotonic_ns) + BigInt(Number(row.target_offset_ms ?? 0)) * 1_000_000n).toString(),
+      preTargetMs: row.pre_target_ms,
+      postTargetMs: row.post_target_ms,
+      executionWindow: row.execution_window_start_utc || row.execution_window_end_utc || row.timezone
+        ? { startUtc: row.execution_window_start_utc, endUtc: row.execution_window_end_utc, timezone: row.timezone || "UTC" }
+        : null,
+      insufficientPreTargetEvidence: Boolean(row.insufficient_pre_target_evidence),
+      anchorHash: row.anchor_hash,
+      createdUtc: row.created_utc,
+    };
   }
 
   getDefinition(sessionId, options = {}) {
@@ -170,7 +294,8 @@ export class ResearchRepository {
     if (!row) return null;
     const revealed = options.full === true || options.revealed === true;
     const definition = json(row.definition_json, {});
-    const result = { sessionId, mode: row.mode, cardinality: row.cardinality, outcomeSpace: json(row.outcome_space_json, null), targetAnchor: json(row.target_definition_json, {})?.anchor || null, outputCadence: row.output_cadence, primaryEndpoint: row.primary_endpoint, compatibilityFingerprint: row.compatibility_fingerprint, committed: Boolean(row.committed), committedUtc: row.committed_utc, configHash: row.config_hash };
+    const targetDefinition = json(row.target_definition_json, {}) || {};
+    const result = { sessionId, mode: row.mode, cardinality: row.cardinality, outcomeSpace: json(row.outcome_space_json, null), targetAnchor: targetDefinition.anchor || null, anchorReference: targetDefinition.anchorReference || null, targetOffsetMs: targetDefinition.targetOffsetMs ?? null, outputCadence: row.output_cadence, primaryEndpoint: row.primary_endpoint, compatibilityFingerprint: row.compatibility_fingerprint, committed: Boolean(row.committed), committedUtc: row.committed_utc, configHash: row.config_hash, executionWindow: definition.executionWindow || null, timingMode: definition.timingMode || definition.timing?.mode || null };
     if (revealed) { result.definition = definition; result.targetDefinition = json(row.target_definition_json, null); result.temporalAnalysis = json(row.temporal_analysis_json, null); result.revealPolicy = row.reveal_policy; }
     return result;
   }
@@ -325,6 +450,8 @@ export class ResearchRepository {
     const future = this.getTargetGeneration(sessionId, { full: true });
     const definitionValue = json(definition?.definition_json, {});
     const targetSequence = definitionValue?.targetDefinition?.targetSequence;
+    const participantStopAnchor = this.getParticipantStopAnchor(sessionId);
+    const participantStop = isParticipantStopAnchor(definitionValue?.targetDefinition?.anchor || definitionValue?.targetDefinition?.anchorReference || definition?.target_definition_json && json(definition.target_definition_json, {})?.anchor);
     const endpoint = definition?.primary_endpoint || definitionValue?.primaryEndpoint;
     const committedPrediction = future?.prediction !== undefined && future?.prediction !== null
       ? future.prediction
@@ -335,7 +462,7 @@ export class ResearchRepository {
         const normalizedEndpoint = String(endpoint || PRIMARY_ENDPOINTS.EXACT_SLOT).toUpperCase();
         const rows = this.db.prepare("SELECT output_seq,scheduled_utc,timing_status FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(sessionId);
         if (normalizedEndpoint === PRIMARY_ENDPOINTS.EXACT_SLOT) {
-          const scheduledTargetUtc = definitionValue?.targetDefinition?.scheduledUtc;
+          const scheduledTargetUtc = participantStopAnchor?.targetUtc || participantStopAnchor?.utc || definitionValue?.targetDefinition?.scheduledUtc;
           const scheduledTargetMs = scheduledTargetUtc ? Date.parse(String(scheduledTargetUtc)) : NaN;
           const row = targetSequence === null || targetSequence === undefined
             ? (Number.isFinite(scheduledTargetMs)
@@ -348,7 +475,7 @@ export class ResearchRepository {
         const window = temporal.windows.find((candidate) => candidate.id === temporal.primaryWindowId) || temporal.windows[0];
         const targetUtcMs = definitionValue?.targetDefinition?.scheduledUtc
           ? Date.parse(definitionValue.targetDefinition.scheduledUtc)
-          : null;
+          : participantStopAnchor?.targetUtc ? Date.parse(participantStopAnchor.targetUtc) : participantStopAnchor?.utc ? Date.parse(participantStopAnchor.utc) : null;
         const targetIndex = targetSequence === null || targetSequence === undefined ? null : Number(targetSequence);
         const selected = rows.filter((row) => {
           if (normalizedEndpoint === PRIMARY_ENDPOINTS.FIXED_SEQUENCE_WINDOW) {
@@ -381,6 +508,9 @@ export class ResearchRepository {
         });
         return selected.length > 0 && selected.every((row) => !unavailableStatus(row.timing_status));
       })();
+    const stopAnchorReady = !participantStop || Boolean(participantStopAnchor);
+    const stopPreEvidenceReady = !participantStop || participantStopAnchor?.insufficientPreTargetEvidence !== true;
+    const effectivePrimaryResolved = stopAnchorReady && stopPreEvidenceReady && primaryResolved;
     const integrityAcceptable = extra.integrityAcceptable !== undefined
       ? extra.integrityAcceptable
       : (this.owner.integrity?.verifySession ? this.owner.integrity.verifySession(sessionId, { persist: false }).valid : true);
@@ -388,7 +518,7 @@ export class ResearchRepository {
       mode: definition?.mode,
       rawReportLocked: Boolean(this.db.prepare("SELECT 1 FROM raw_reports_locked WHERE session_id=?").get(sessionId)),
       evidenceComplete: phases.evidencePhaseStatus === "COMPLETE",
-      primaryResolved,
+      primaryResolved: effectivePrimaryResolved,
       postTargetComplete: extra.postTargetComplete ?? phases.evidencePhaseStatus === "COMPLETE",
       integrityAcceptable,
       futureTargetGenerated: definition?.mode === "FUTURE_TARGET" ? ["GENERATED", "ON_TIME", "LATE"].includes(future?.status) : true,

@@ -25,6 +25,14 @@ any statistical or audio result.
   recipe or changes provenance.
 - A visible Stop control is a convenience.  Safe termination is always opening
   the eyes, removing headphones, and reorienting.
+- In a participant-paced temporal profile, `PARTICIPANT_STOP_RETURN` is an
+  authoritative reference point, not an instruction to force `T = STOP`.
+  Before `START`, commit one signed integer `targetOffsetMs` and derive
+  `T = participant STOP/RETURN + targetOffsetMs` only after the main process
+  captures the stop clocks.  Negative, zero, and positive offsets are valid;
+  `targetUtc` is unknown during readiness and becomes immutable only after
+  return.  `preTargetMs` and `postTargetMs` are independent windows centered
+  on that derived `T`.
 
 ## Page Guide
 
@@ -45,29 +53,37 @@ target assignment from participant representation, and prepares the shared
 AudioWorklet recipe.  The renderer is not the authoritative timer.
 
 **Workflow.** Select a profile; review experiment mode, outcome space, RNG,
-cadence, target anchor, participant/evidence windows, endpoint, reveal policy,
-and recipe version.  Enter participant/pre-session fields, baseline,
+cadence, target anchor, signed target offset (when participant-paced),
+independent participant/evidence windows, endpoint, reveal policy, and recipe
+version.  Enter participant/pre-session fields, baseline,
 environment, and safety confirmation.  In Target & Memory review the encoded
 participant instruction without asking for hidden objective data.  Confirm
 memory/readiness, then commit.  Wait for `PROCESSOR_READY`; only then start the
 participant phase.  The main process records participant and evidence phases,
 scheduled/actual times, power state, and timing deviations.
 
-After the participant returns, use **Return / End participant phase**.  A
-participant return is not evidence completion: continued pre/primary/post or
-target-relative monitoring may still run.  Record the raw report as a mutable
+After the participant returns, use **Return / End participant phase**.  The
+main process records `stopUtc` and `stopMonotonicNs` once, then derives and
+persists `targetUtc` and `targetMonotonicNs` from the precommitted signed
+offset.  A participant return is not evidence completion: continued
+pre/primary/post or target-relative monitoring may still run (especially for a
+positive offset).  A negative offset never backfills missing evidence; if
+`T - preTargetMs` predates genuine collection, the affected endpoint is
+marked `INSUFFICIENT_PRE_TARGET_EVIDENCE`.  Record the raw report as a mutable
 draft, then press **LOCK RAW REPORT**.  Locking creates an immutable hash; later
 recollections are append-only late annotations.  Reveal is a separate owner
 authorization and is disabled until the declared evidence phase, endpoint,
 integrity, and recovery gates are complete.  The UI never describes a report as
 “reveal gate satisfied” while evidence monitoring is active.
 
-**Do not change casually.** Profile version, target definition, RNG provider,
-cadence, windows, endpoint, recipe version, and reveal policy are evidence
+**Do not change casually.** Profile version, target definition (including the
+signed `targetOffsetMs`), RNG provider, cadence, independent windows, endpoint,
+recipe version, and reveal policy are evidence
 bearing.  Do not edit a committed session.
 
 **Acceptance test.** Use a dry run: verify the profile and recipe fingerprint,
-observe `PROCESSOR_READY`, start and stop, return, save/lock a report, confirm
+observe `PROCESSOR_READY`, start and stop, return, verify the captured stop
+clock and derived T/offset, save/lock a report, confirm
 reveal remains gated if evidence is active, verify integrity, then export.
 
 **Failure/recovery.** If AudioWorklet readiness or finalization fails, the main
@@ -263,9 +279,12 @@ Experiment mode = influence, future-target, control, or sham semantics. Outcome
 space = binary, integer range, or enumerated values; cardinality is K and is
 symbolic for large ranges. RNG provider = authoritative source for target and
 machine assignment. Output cadence = committed interval between opportunities.
-Target anchor = named event used as T. Participant phase = owner-facing phase;
-evidence phase = continued machine monitoring. Pre/post monitoring = committed
-T-relative windows. Primary endpoint = declared scoring region. Profile/recipe
+Target anchor = named event or reference used to derive T. For a
+participant-paced profile, `T = participant STOP/RETURN + targetOffsetMs`, where
+the signed offset is committed before START and may be negative, zero, or
+positive; the target UTC is unknown until STOP/RETURN. Participant phase =
+owner-facing phase; evidence phase = continued machine monitoring. Pre/post
+monitoring = committed windows centered independently on T. Primary endpoint = declared scoring region. Profile/recipe
 version = immutable configuration identity. Provenance = source class for each
 material value. Sample rate, L/R frequency, and binaural difference describe the
 digital component. Component gain, noise gain, effect mix, envelope, headroom,
@@ -286,8 +305,10 @@ Restore, and Export are data-integrity operations.
    layers and run engineering references.
 5. Run Audio Health 60 s; run 10 m only when authorized; reserve 60 m for an
    explicitly authorized owner soak.
-6. Review the active profile, outcome space, cadence, target anchor, windows,
-   endpoint, reveal policy, and recipe version.
+6. Review the active profile, outcome space, cadence, target anchor/reference,
+   signed stop-relative offset (if participant-paced), independent windows,
+   endpoint, reveal policy, and recipe version.  Confirm readiness shows target
+   UTC as unknown until STOP/RETURN.
 7. Execute a dry-run session and confirm AudioWorklet readiness.
 8. Save/lock the raw report; observe that return does not imply evidence
    completion and that reveal stays gated when monitoring remains active.

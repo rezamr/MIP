@@ -57,6 +57,7 @@ export class SessionRepository {
                 rd.primary_endpoint AS research_primary_endpoint,
                 rd.compatibility_fingerprint AS research_compatibility_fingerprint,
                 rd.committed AS research_committed,
+                rd.definition_json AS research_definition_json,
                 sp.session_lifecycle,sp.participant_phase_status,sp.evidence_phase_status,
                 sp.report_status,sp.reveal_status,sp.integrity_status,
                 CASE WHEN r.session_id IS NULL THEN 0 ELSE 1 END AS raw_report_locked
@@ -78,6 +79,7 @@ export class SessionRepository {
     const revealEligible = row.status === "REVEAL_ELIGIBLE";
     const snapshot = json(row.manifest_json, null);
     const timing = json(row.timing_json, null);
+    const researchDefinition = json(row.research_definition_json, null) || {};
     // Pre-reveal DTOs are an explicit allowlist.  Do not add a field here
     // merely because it is convenient for a report; hidden-derived hashes,
     // timing anchors, participant labels and projection snapshots stay out of
@@ -103,6 +105,11 @@ export class SessionRepository {
         outcomeSpace: json(row.research_outcome_space_json, null),
         outputCadence: row.research_output_cadence,
         primaryEndpoint: row.research_primary_endpoint,
+        timingMode: researchDefinition.timingMode || researchDefinition.timing?.mode || null,
+        executionWindow: researchDefinition.executionWindow || null,
+        targetAnchor: researchDefinition.targetDefinition?.anchor || null,
+        anchorReference: researchDefinition.targetDefinition?.anchorReference || null,
+        targetOffsetMs: researchDefinition.targetDefinition?.targetOffsetMs ?? null,
         compatibilityFingerprint: row.research_compatibility_fingerprint,
         committed: Boolean(row.research_committed),
         phases: {

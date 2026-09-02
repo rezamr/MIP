@@ -15,6 +15,7 @@ const SAFE_PRE_REVEAL_PAYLOAD_KEYS = new Set([
   "gate", "ownerAuthorizedReveal", "ownerConfirmedMemory", "timingDeviation",
   "audioFailed", "interrupted", "aborted", "reportDraft", "rawReportLocked",
   "scheduledUtc", "actualUtc", "latenessMs", "toleranceMs", "noBackfill",
+  "anchor", "anchorReference", "stopUtc", "stopMonotonicNs", "targetOffsetMs", "targetUtc", "targetMonotonicNs", "preTargetMs", "postTargetMs", "insufficientPreTargetEvidence",
 ]);
 
 const PRE_REVEAL_TIMING_SENSITIVE_EVENTS = new Set([

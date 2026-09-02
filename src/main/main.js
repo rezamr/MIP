@@ -24,6 +24,9 @@ import {
   outcomeSpaceSize,
   containsOutcome,
   resolveEffectiveConfiguration,
+  normalizeExecutionWindow,
+  normalizeTargetOffsetMs,
+  isParticipantStopAnchor,
   createCompatibilityFingerprint,
   EXPERIMENT_MODES,
   sha256,
@@ -363,7 +366,7 @@ function activeFormalSession() {
       LEFT JOIN session_phase_projections sp ON sp.session_id=s.session_id
       WHERE s.status IN (${placeholders})
        OR (s.status IN ('RETURNED','RAW_REPORT_DRAFT','RAW_REPORT_LOCKED') AND (
-            sp.evidence_phase_status IN ('RUNNING','TARGET_PENDING','TARGET_GENERATED','TARGET_OBSERVED','POST_TARGET_MONITORING')
+            sp.evidence_phase_status IN ('RUNNING','RUNNING_UNANCHORED','STOP_ANCHOR_COMMITTED','TARGET_PENDING','TARGET_GENERATED','TARGET_OBSERVED','POST_TARGET_MONITORING')
             OR sp.session_lifecycle='RECOVERY_REQUIRED'
           ))
       ORDER BY s.created_utc DESC LIMIT 1
@@ -376,6 +379,66 @@ function appendPowerEvidence(event) {
     if (!["RUNNING", "TIMING_DEVIATION", "INTERRUPTED"].includes(runtime.controller.state)) continue;
     db.evidence.appendEvent(runtime.id, runtime.trialId, event.type, jsonSafe(event));
   }
+}
+
+function isParticipantStopAnchored(runtimeOrDefinition) {
+  const definition = runtimeOrDefinition?.researchDefinition || runtimeOrDefinition || {};
+  const timingMode = runtimeOrDefinition?.profile?.timing?.mode || definition.timing?.mode || definition.timingMode;
+  return String(timingMode || "").toUpperCase() === "PARTICIPANT_STOP_ANCHORED" ||
+    isParticipantStopAnchor(definition.targetDefinition?.anchor || definition.targetDefinition?.anchorReference);
+}
+
+function schedulerIsActive(scheduler) {
+  return Boolean(scheduler && ["RUNNING", "RUNNING_UNANCHORED", "POST_TARGET_MONITORING", "COMMITTED"].includes(scheduler.status));
+}
+
+/**
+ * Capture T at the main-process Return/Stop boundary.  The operation is
+ * idempotent so renderer retries, finalization callbacks, and explicit return
+ * calls cannot create competing anchors.
+ */
+function ensureParticipantStopAnchor(runtime, reason = "participant_return") {
+  if (!isParticipantStopAnchored(runtime)) return null;
+  const existing = runtime.stopAnchor || db.research?.getParticipantStopAnchor(runtime.id);
+  if (existing) {
+    runtime.stopAnchor = existing;
+    return existing;
+  }
+  const utcMs = Date.now();
+  const monotonicNs = process.hrtime.bigint();
+  if (runtime.scheduler?.commitStopAnchor) {
+    const anchor = runtime.scheduler.commitStopAnchor({ utcMs, monotonicNs, reason });
+    runtime.stopAnchor = db.research?.getParticipantStopAnchor(runtime.id) || anchor;
+    return runtime.stopAnchor;
+  }
+  const research = runtime.researchDefinition || {};
+  const temporal = research.temporalAnalysis?.windows || [];
+  const primary = temporal.find((window) => window.id === (research.temporalAnalysis?.primaryWindowId || "primary")) || temporal[0] || {};
+  runtime.stopAnchor = db.research.commitParticipantStopAnchor(runtime.id, {
+    trialId: runtime.trialId,
+    utc: new Date(utcMs).toISOString(),
+    monotonicNs: monotonicNs.toString(),
+    preTargetMs: primary.preMs || 0,
+    postTargetMs: primary.postMs || 0,
+    reason,
+  });
+  return runtime.stopAnchor;
+}
+
+function assertParticipantStopExecutionWindow(runtime) {
+  if (!isParticipantStopAnchored(runtime)) return;
+  const window = runtime.executionWindow || runtime.researchDefinition?.executionWindow;
+  // An execution window is administrative metadata, not the target anchor.
+  // It is optional; when supplied, START must remain inside its committed UTC
+  // bounds.  With no window the owner may start whenever appropriate.
+  if (!window) return;
+  const nowMs = Date.now();
+  const startMs = Date.parse(window.startUtc);
+  const endMs = Date.parse(window.endUtc);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
+    throw new Error("The committed participant-stop execution window is invalid.");
+  if (nowMs < startMs || nowMs > endMs)
+    throw new Error(`START is outside the committed execution window (${window.startUtc} to ${window.endUtc} ${window.timezone || "UTC"}).`);
 }
 
 function requestAudioStop(runtime, reason = "owner_returned") {
@@ -410,7 +473,7 @@ async function failRuntimeClosed(runtime, reason, payload = {}) {
     runtime.failure = { ...runtime.failure, protocolStopError: error.message };
   }
   try {
-    if (runtime.scheduler && ["RUNNING", "COMMITTED"].includes(runtime.scheduler.status))
+    if (schedulerIsActive(runtime.scheduler))
       runtime.scheduler.interrupt(reason);
   } catch (error) {
     runtime.failure = { ...runtime.failure, schedulerStopError: error.message };
@@ -692,6 +755,7 @@ function createScheduler(runtime) {
     mode: timing.mode,
     timing,
     output: { ...profile.output },
+    executionWindow: research.executionWindow || null,
   };
   if (timing.targetUtc) config.absoluteUtc = timing.targetUtc;
   if ([SCHEDULER_MODES.IMMEDIATE_REQUEST, SCHEDULER_MODES.CONTINUOUS_AROUND_REQUEST].includes(timing.mode)) {
@@ -733,6 +797,8 @@ function createScheduler(runtime) {
       temporalAnalysis: research.temporalAnalysis || profile.analysis,
       analysis: research.temporalAnalysis || profile.analysis,
       output: temporalOutput,
+      executionWindow: research.executionWindow || null,
+      targetOffsetMs: research.targetDefinition?.targetOffsetMs ?? research.timing?.targetOffsetMs ?? 0,
     }, {
       sessionId: runtime.id,
       trialId: runtime.trialId,
@@ -757,8 +823,14 @@ function createScheduler(runtime) {
         });
         if (research.mode === EXPERIMENT_MODES.FUTURE_TARGET && record.targetSlot)
           db.research.updatePhases(runtime.id, { evidencePhaseStatus: runtime.scheduler?.targetMissed ? "MISSED" : record.status === "MISSED" ? "POST_TARGET_MONITORING" : "TARGET_OBSERVED" });
-        if (runtime.objective !== null && runtime.objective !== undefined) {
-          for (const occurrence of findTargetOccurrences({ outputs: [record], target: runtime.objective, outcomeSpace: research.outcomeSpace || profile.outcomeSpace, window: research.temporalAnalysis?.windows?.[0] || {}, targetScheduledUtc: runtime.scheduler?.plan?.targetUtc, targetScheduledMonotonicNs: runtime.scheduler?.plan?.targetMonotonicNs })) {
+        // A participant-stop target has no authoritative T until the main
+        // process commits the Return/Stop anchor.  Do not materialize an
+        // occurrence with null/SCHEDULED_ONLY timing before that point: the
+        // occurrence ledger is immutable, and the anchor callback performs
+        // the one authoritative classification pass for all prior outputs.
+        const targetIsAvailable = !isParticipantStopAnchored(runtime) || Boolean(runtime.scheduler?.stopAnchor);
+        if (targetIsAvailable && runtime.objective !== null && runtime.objective !== undefined) {
+          for (const occurrence of findTargetOccurrences({ outputs: [record], target: runtime.objective, outcomeSpace: research.outcomeSpace || profile.outcomeSpace, window: research.temporalAnalysis?.windows?.[0] || {}, targetScheduledUtc: runtime.scheduler?.stopAnchor?.targetUtc || runtime.scheduler?.plan?.targetUtc, targetScheduledMonotonicNs: runtime.scheduler?.stopAnchor?.targetMonotonicNs || runtime.scheduler?.plan?.targetMonotonicNs })) {
             db.research.recordOccurrence(runtime.id, occurrence);
           }
         }
@@ -787,10 +859,35 @@ function createScheduler(runtime) {
         }
       },
       onParticipantPhase: (phase) => db.research.updatePhases(runtime.id, { participantPhaseStatus: phase.participantPhase }),
-      onEvidence: (event) => db.evidence.appendEvent(runtime.id, runtime.trialId, event.type, jsonSafe(event.payload)),
+      onParticipantStopAnchor: (anchor) => {
+        const persisted = db.research.commitParticipantStopAnchor(runtime.id, {
+          ...anchor,
+          trialId: runtime.trialId,
+          targetOffsetMs: anchor.targetOffsetMs,
+          executionWindowStartUtc: runtime.researchDefinition?.executionWindow?.startUtc,
+          executionWindowEndUtc: runtime.researchDefinition?.executionWindow?.endUtc,
+          timezone: runtime.researchDefinition?.executionWindow?.timezone,
+        });
+        runtime.stopAnchor = persisted;
+        // Outputs generated before T were intentionally stored as ordinary
+        // pre-target stream rows.  Recompute target-relative occurrences now
+        // that the authoritative anchor exists; this is analysis metadata,
+        // not a rewrite of immutable machine-output evidence.
+        const priorOutputs = db.db.prepare("SELECT session_id,trial_id,output_seq,value_json,region,scheduled_utc,scheduled_monotonic_ns,actual_utc,actual_monotonic_ns,timing_status FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(runtime.id).map((row) => ({ sessionId: row.session_id, trialId: row.trial_id, sequence: row.output_seq, outputSeq: row.output_seq, value: parseStoredJson(row.value_json), region: row.region, scheduledUtc: row.scheduled_utc, scheduledMonotonicNs: row.scheduled_monotonic_ns, actualUtc: row.actual_utc, actualMonotonicNs: row.actual_monotonic_ns, status: row.timing_status }));
+        const targetWindow = runtime.researchDefinition?.temporalAnalysis?.windows?.find?.((window) => window.id === (runtime.researchDefinition?.temporalAnalysis?.primaryWindowId || "primary")) || runtime.researchDefinition?.temporalAnalysis?.windows?.[0] || {};
+        for (const occurrence of findTargetOccurrences({ outputs: priorOutputs, target: runtime.objective, outcomeSpace: runtime.researchDefinition?.outcomeSpace || runtime.profile.outcomeSpace, window: targetWindow, targetScheduledUtc: persisted.targetUtc || persisted.utc, targetScheduledMonotonicNs: persisted.targetMonotonicNs || persisted.monotonicNs })) db.research.recordOccurrence(runtime.id, occurrence);
+        return persisted;
+      },
+      onEvidence: (event) => {
+        // The stop anchor and its evidence event are inserted together by the
+        // repository callback above.  Avoid appending a second chain event;
+        // all other scheduler evidence retains the normal append path.
+        if (event.type === "PARTICIPANT_STOP_ANCHOR_COMMITTED") return;
+        db.evidence.appendEvent(runtime.id, runtime.trialId, event.type, jsonSafe(event.payload));
+      },
       onComplete: (result) => {
         runtime.schedulerResult = clone(result);
-        db.research.updatePhases(runtime.id, { evidencePhaseStatus: result.targetMissed ? "MISSED" : "COMPLETE", revealStatus: result.targetMissed ? "BLOCKED" : undefined });
+        db.research.updatePhases(runtime.id, { evidencePhaseStatus: result.targetMissed ? "MISSED" : "COMPLETE", revealStatus: result.targetMissed || result.insufficientPreTargetEvidence ? "BLOCKED" : undefined });
         db.evidence.appendEvent(runtime.id, runtime.trialId, "SCHEDULER_COMPLETE", jsonSafe(result));
         // The power-save blocker belongs to the evidence lifecycle, not the
         // participant/audio lifecycle.  Keep it active after participant
@@ -873,6 +970,8 @@ function isTemporalResearchDefinition(definition = {}) {
   const spaceType = String(definition.outcomeSpace?.type || "BINARY").toUpperCase();
   const windows = Array.isArray(definition.temporalAnalysis?.windows) ? definition.temporalAnalysis.windows : [];
   return definition.mode === EXPERIMENT_MODES.FUTURE_TARGET ||
+    String(definition.timing?.mode || definition.timingMode || "").toUpperCase() === "PARTICIPANT_STOP_ANCHORED" ||
+    isParticipantStopAnchor(definition.targetDefinition?.anchor || definition.targetDefinition?.anchorReference) ||
     String(definition.mode || "INFLUENCE").toUpperCase() !== EXPERIMENT_MODES.INFLUENCE ||
     spaceType !== "BINARY" ||
     (definition.primaryEndpoint && definition.primaryEndpoint !== "EXACT_SLOT") ||
@@ -904,6 +1003,7 @@ function persistedAnalysis(runtime) {
   const genericSpace = researchDefinition?.outcomeSpace || profile?.outcomeSpace || { type: "BINARY" };
   const genericMode = researchDefinition?.mode || profile?.mode || EXPERIMENT_MODES.INFLUENCE;
   const genericEndpoint = researchDefinition?.primaryEndpoint || profile?.analysis?.primaryEndpoint || "EXACT_SLOT";
+  const participantStopAnchor = db.db.prepare("SELECT anchor,anchor_reference,utc,monotonic_ns,target_offset_ms,target_utc,target_monotonic_ns,insufficient_pre_target_evidence FROM participant_stop_anchors WHERE session_id=?").get(sessionIdValue) || null;
   const hasTemporalWindows = Boolean(researchDefinition?.temporalAnalysis?.windows?.some?.((window) =>
     window?.enabled !== false && (
       Number(window?.preMs || 0) > 0 ||
@@ -935,8 +1035,8 @@ function persistedAnalysis(runtime) {
       outcomeSpace: genericSpace,
       primaryEndpoint: genericEndpoint,
       targetSequence: researchDefinition?.targetDefinition?.targetSequence ?? null,
-      targetScheduledUtc: researchDefinition?.targetDefinition?.scheduledUtc || null,
-      targetScheduledMonotonicNs: researchDefinition?.targetDefinition?.scheduledMonotonicNs || null,
+      targetScheduledUtc: participantStopAnchor?.target_utc || participantStopAnchor?.utc || researchDefinition?.targetDefinition?.scheduledUtc || null,
+      targetScheduledMonotonicNs: participantStopAnchor?.target_monotonic_ns || participantStopAnchor?.monotonic_ns || researchDefinition?.targetDefinition?.scheduledMonotonicNs || null,
       primaryWindow: researchDefinition?.temporalAnalysis?.windows?.find?.((window) => window.id === (researchDefinition?.temporalAnalysis?.primaryWindowId || "primary")) || researchDefinition?.temporalAnalysis?.windows?.[0] || {},
       analysisWindows: researchDefinition?.temporalAnalysis?.windows || null,
       plannedCount: Number(runtime?.scheduler?.plan?.totalCount || rows.length),
@@ -944,8 +1044,25 @@ function persistedAnalysis(runtime) {
       missedCount: rows.filter((row) => row.timing_status === "MISSED").length,
       analysisVersion: researchDefinition?.temporalAnalysis?.version || "temporal-analysis-v1",
     });
+    const stopIncomplete = Boolean(participantStopAnchor?.insufficient_pre_target_evidence);
+    const enrichedTemporal = participantStopAnchor
+      ? {
+        ...temporal,
+        stopAnchor: {
+          anchor: participantStopAnchor.anchor || "PARTICIPANT_STOP_RETURN",
+          anchorReference: participantStopAnchor.anchor_reference || "PARTICIPANT_STOP_RETURN",
+          stopUtc: participantStopAnchor.utc,
+          stopMonotonicNs: participantStopAnchor.monotonic_ns,
+          targetOffsetMs: Number(participantStopAnchor.target_offset_ms ?? 0),
+          targetUtc: participantStopAnchor.target_utc || participantStopAnchor.utc,
+          targetMonotonicNs: participantStopAnchor.target_monotonic_ns || participantStopAnchor.monotonic_ns,
+        },
+        insufficientPreTargetEvidence: stopIncomplete,
+        ...(stopIncomplete ? { primary: { ...temporal.primary, resolved: false, status: "INCOMPLETE_PRE_WINDOW", classification: "INSUFFICIENT_PRE_TARGET_EVIDENCE" } } : {}),
+      }
+      : temporal;
     return {
-      analysis: temporal,
+      analysis: enrichedTemporal,
       input: { requested: objective, outcomeSpace: genericSpace, endpoint: genericEndpoint, outputs },
     };
   }
@@ -1057,6 +1174,8 @@ async function formalReturn(runtime) {
       throw new Error("Formal return requires a running session.");
     if (!runtime.audioFinalization)
       throw new Error("Formal return requires AUDIO_FINALIZED telemetry from the AudioWorklet.");
+    if (isParticipantStopAnchored(runtime) && !runtime.stopAnchor)
+      ensureParticipantStopAnchor(runtime, "formal_return");
     if (runtime.protocolStageController && !runtime.protocolStageController.returnCueObserved) {
       db.evidence.appendEvent(runtime.id, runtime.trialId, "EARLY_RETURN_DEVIATION", {
         classification: "EARLY_RETURN_BEFORE_RETURN_CUE",
@@ -1072,7 +1191,7 @@ async function formalReturn(runtime) {
       runtime.scheduler instanceof TemporalEvidenceScheduler;
     requestAudioStop(runtime, "formal_return");
     if (evidenceContinuesAfterReturn) runtime.scheduler?.endParticipantPhase?.("formal_return");
-    else if (["RUNNING", "COMMITTED"].includes(runtime.scheduler?.status))
+    else if (schedulerIsActive(runtime.scheduler))
       runtime.scheduler.interrupt("formal return requested");
     const schedulerResult = runtime.scheduler?.getResult?.() || null;
     const schedulerExpected = Number(runtime.scheduler?.plan?.totalCount || 0);
@@ -1186,7 +1305,7 @@ async function formalReturn(runtime) {
       db.research.updatePhases(runtime.id, { participantPhaseStatus: "ENDED", sessionLifecycle: "RETURNED", evidencePhaseStatus: runtime.scheduler?.evidencePhase || "RUNNING" });
       runtime.participantPhase = "ENDED";
     }
-    if (!evidenceContinuesAfterReturn || runtime.scheduler?.status !== "RUNNING")
+    if (!evidenceContinuesAfterReturn || !schedulerIsActive(runtime.scheduler))
       powerManager.stop();
     runtime.protocolStageController?.stop("formal_return");
     runtime.returned = true;
@@ -1415,6 +1534,28 @@ function registerSessionHandlers() {
     if (!profile) throw new Error(`Profile version is not available in SQLite: ${profileId} v${requestedProfileVersion ?? "active"}.`);
     const requestedMode = String(value.mode || value.experimentMode || profile.mode || EXPERIMENT_MODES.INFLUENCE).toUpperCase();
     if (!Object.values(EXPERIMENT_MODES).includes(requestedMode)) throw new Error(`Unsupported experiment mode: ${requestedMode}.`);
+    const timingMode = String(value.timing?.mode || profile.timing?.mode || "IMMEDIATE_REQUEST").toUpperCase();
+    const stopAnchored = timingMode === "PARTICIPANT_STOP_ANCHORED";
+    let targetOffsetMs = 0;
+    if (stopAnchored) {
+      try {
+        targetOffsetMs = normalizeTargetOffsetMs(
+          value.targetOffsetMs ?? value.targetDefinition?.targetOffsetMs ?? value.timing?.targetOffsetMs ?? profile.timing?.targetOffsetMs ?? 0,
+        );
+      } catch (error) {
+        throw new Error(`Participant-stop target offset is invalid: ${error.message}`);
+      }
+    }
+    let executionWindow = null;
+    if (stopAnchored) {
+      try {
+        executionWindow = normalizeExecutionWindow(value.executionWindow || profile.timing?.executionWindow);
+      } catch (error) {
+        throw new Error(`Participant-stop execution window is invalid: ${error.message}`);
+      }
+    } else if (value.executionWindow !== undefined && value.executionWindow !== null) {
+      executionWindow = normalizeExecutionWindow(value.executionWindow);
+    }
     const requestedPrediction = value.prediction ?? value.targetDefinition?.prediction ?? null;
     if (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET && (requestedPrediction === null || requestedPrediction === undefined || String(requestedPrediction).trim() === ""))
       throw new Error("FUTURE_TARGET requires a participant prediction committed before START.");
@@ -1430,14 +1571,16 @@ function registerSessionHandlers() {
           mode: requestedMode,
           outcomeSpace: value.outcomeSpace,
           temporalAnalysis: value.temporalAnalysis,
-          targetDefinition: {
+        targetDefinition: {
             ...(value.targetDefinition && typeof value.targetDefinition === "object" ? value.targetDefinition : {}),
             ...(value.target !== undefined ? { target: value.target } : {}),
+            ...(stopAnchored ? { anchor: "PARTICIPANT_STOP_RETURN", anchorReference: "PARTICIPANT_STOP_RETURN", targetOffsetMs } : {}),
             prediction: requestedPrediction,
           },
           rng: value.rng,
           primaryEndpoint: value.primaryEndpoint,
           outputCadence: value.outputCadence,
+          executionWindow,
         },
       });
     } catch (error) {
@@ -1484,7 +1627,7 @@ function registerSessionHandlers() {
           ? (profile.timing?.shamWording || "Sham condition: observe the scheduled protocol neutrally.")
           : requestInstruction({ ...profile, outcomeSpace: effective.outcomeSpace }, objective);
     const audio = completeAudioRecipe(recipe, randomSources[RANDOM_SOURCES.AUDIO_NOISE], value.sampleRate, profile.protocol);
-    const timing = timingPlan({ ...profile, timing: value.timing || profile.timing });
+    const timing = timingPlan({ ...profile, timing: { ...profile.timing, ...(value.timing || {}), mode: timingMode, ...(stopAnchored ? { targetOffsetMs } : {}) } });
     const futureTargetUtc = requestedMode === EXPERIMENT_MODES.FUTURE_TARGET
       ? (value.futureTargetUtc || value.targetDefinition?.scheduledUtc || new Date(Date.now() + finiteNumber(value.targetDelayMs === undefined ? 24 * 60 * 60 * 1000 : value.targetDelayMs, "targetDelayMs", { min: 1, max: 365 * 24 * 60 * 60 * 1000 })).toISOString())
       : timing.scheduledUtc;
@@ -1528,16 +1671,22 @@ function registerSessionHandlers() {
       mode: requestedMode,
       outcomeSpace: effective.outcomeSpace,
       cardinality: outcomeSpaceSize(effective.outcomeSpace),
+      timing: { ...timing, mode: timingMode },
+      timingMode,
+      executionWindow,
       targetDefinition: {
         ...effective.targetDefinition,
         target: requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? null : objective,
         mode: requestedMode,
-        anchor: value.targetDefinition?.anchor || effective.targetDefinition.anchor || (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? "ABSOLUTE_UTC" : "PARTICIPANT_REQUEST"),
-        scheduledUtc: futureTargetUtc,
-        scheduledMonotonicNs: value.targetDefinition?.scheduledMonotonicNs ?? null,
-        targetSequence: configuredTargetSequence ?? defaultExactTargetSequence ?? defaultTemporalTargetSequence,
+        anchor: stopAnchored
+          ? "PARTICIPANT_STOP_RETURN"
+          : value.targetDefinition?.anchor || effective.targetDefinition.anchor || (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? "ABSOLUTE_UTC" : "PARTICIPANT_REQUEST"),
+        ...(stopAnchored ? { anchorReference: "PARTICIPANT_STOP_RETURN", targetOffsetMs } : {}),
+        scheduledUtc: stopAnchored ? null : futureTargetUtc,
+        scheduledMonotonicNs: stopAnchored ? null : value.targetDefinition?.scheduledMonotonicNs ?? null,
+        targetSequence: stopAnchored ? null : configuredTargetSequence ?? defaultExactTargetSequence ?? defaultTemporalTargetSequence,
         prediction: requestedPrediction ?? effective.targetDefinition.prediction ?? null,
-        semantics: requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? "GENERATE_AT_ANCHOR" : "COMMITTED_BEFORE_PARTICIPATION",
+        semantics: stopAnchored ? "PARTICIPANT_STOP_RELATIVE_TARGET" : requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? "GENERATE_AT_ANCHOR" : "COMMITTED_BEFORE_PARTICIPATION",
       },
       temporalAnalysis: effective.temporalAnalysis,
       revealPolicy: effective.revealPolicy || profile.reveal?.policy || "AFTER_EVIDENCE_COMPLETE",
@@ -1561,6 +1710,7 @@ function registerSessionHandlers() {
         rng: { sources: randomSourcesMetadata(randomSources) },
         audio,
         timing,
+        executionWindow,
         appVersion: APP_VERSION,
         engineVersion: ENGINE_VERSION,
         audioNonce,
@@ -1593,6 +1743,8 @@ function registerSessionHandlers() {
       scheduler: null,
       schedulerResult: null,
       startedUtc: null,
+      stopAnchor: null,
+      executionWindow,
       participantPhase: "READY",
       evidencePhase: "NOT_STARTED",
       prediction: requestedPrediction,
@@ -1614,11 +1766,14 @@ function registerSessionHandlers() {
         targetAnchor: researchDefinition.targetDefinition.anchor,
         targetDefinition: {
           anchor: researchDefinition.targetDefinition.anchor,
-          target: researchDefinition.targetDefinition.target,
+          anchorReference: researchDefinition.targetDefinition.anchorReference || null,
+          targetOffsetMs: researchDefinition.targetDefinition.targetOffsetMs ?? null,
           scheduledUtc: researchDefinition.targetDefinition.scheduledUtc,
           targetSequence: researchDefinition.targetDefinition.targetSequence,
           semantics: researchDefinition.targetDefinition.semantics,
         },
+        timingMode: researchDefinition.timingMode,
+        executionWindow: researchDefinition.executionWindow,
         outputCadence: effective.outputCadence,
         primaryEndpoint: effective.primaryEndpoint,
         temporalAnalysis: effective.temporalAnalysis,
@@ -1764,6 +1919,7 @@ function registerSessionHandlers() {
     if (!runtime) throw new Error("Session runtime is unavailable.");
     if (!runtime.audioReady || runtime.controller.state !== "AUDIO_READY")
       throw new Error("A validated PROCESSOR_READY acknowledgement is required before START.");
+    assertParticipantStopExecutionWindow(runtime);
     const other = [...runtimes.values()].find((candidate) => candidate.id !== id && candidate.controller.state === "RUNNING");
     if (other) throw new Error(`Another formal session is already running: ${other.id}.`);
     try {
@@ -1912,6 +2068,8 @@ function registerSessionHandlers() {
       throw new Error("AUDIO_STOP_REQUESTED requires a running formal session.");
     const reason = stringValue(value.reason || "owner_returned", "audio stop reason", { max: 256 });
     try {
+      if (isParticipantStopAnchored(runtime) && ["owner_returned", "participant_return", "participant_stop", "return"].includes(reason.toLowerCase()))
+        ensureParticipantStopAnchor(runtime, reason);
       requestAudioStop(runtime, reason);
     } catch (error) {
       await failRuntimeClosed(runtime, "AUDIO_STOP_REQUEST_PERSISTENCE_FAILURE", { error: error.message, classification: "LOGGING_FAILURE" });
@@ -1929,7 +2087,7 @@ function registerSessionHandlers() {
       throw new Error(`Audio failure is not accepted in session state ${state}.`);
     const reason = stringValue(value.error || value.reason || "AudioWorklet failure", "audio failure", { max: 1_000 });
     try {
-      if (runtime.scheduler && ["RUNNING", "COMMITTED"].includes(runtime.scheduler.status))
+      if (schedulerIsActive(runtime.scheduler))
         runtime.scheduler.interrupt(reason);
       powerManager.stop();
       await transitionSession(id, "AUDIO_FAILED", {
@@ -2023,6 +2181,7 @@ function registerSessionHandlers() {
     if (!runtime) throw new Error("Session runtime is unavailable.");
     if (Object.prototype.hasOwnProperty.call(value, "finalization"))
       return rejectAudioFinalization(runtime, "Submit the AudioWorklet finalization through audioFinalized before requesting return.", { route: "sessions:return" });
+    ensureParticipantStopAnchor(runtime, "participant_return");
     return formalReturn(runtime);
   });
   handle("audio:finalize", async (payload) => {
@@ -2041,7 +2200,7 @@ function registerSessionHandlers() {
     if (!runtime || !(runtime.scheduler instanceof TemporalEvidenceScheduler)) throw new Error("Participant phase separation is available only for temporal evidence sessions.");
     const phase = runtime.scheduler.endParticipantPhase(stringValue(value.reason || "participant_return", "phase end reason", { max: 256 }));
     db.research.updatePhases(id, { participantPhaseStatus: phase });
-    return { sessionId: id, participantPhase: phase, evidencePhase: runtime.scheduler.evidencePhase, evidenceContinues: runtime.scheduler.status === "RUNNING" };
+    return { sessionId: id, participantPhase: phase, evidencePhase: runtime.scheduler.evidencePhase, evidenceContinues: schedulerIsActive(runtime.scheduler) && runtime.scheduler.status !== "COMMITTED" };
   });
   handle("sessions:abort-evidence", async (payload) => {
     const value = objectPayload(payload, "evidence abort request", { maxBytes: 64_000 });
@@ -2082,7 +2241,29 @@ function registerSessionHandlers() {
     const id = sessionId(payload);
     return db.research.getDefinition(id, { full: isRevealed(id), revealed: isRevealed(id) });
   });
-  handle("research:phases", (payload) => db.research.getPhases(sessionId(payload)));
+  handle("research:phases", (payload) => {
+    const id = sessionId(payload);
+    const persisted = db.research.getPhases(id) || {};
+    const runtime = runtimes.get(id);
+    const live = runtime?.scheduler?.toRendererDTO?.() || null;
+    return {
+      ...persisted,
+      ...(live ? {
+        participantPhaseStatus: live.participantPhase,
+        evidencePhaseStatus: live.evidencePhase,
+         targetAnchor: live.targetAnchor,
+         anchorReference: live.anchorReference || null,
+         targetOffsetMs: live.targetOffsetMs ?? null,
+         targetScheduledUtc: live.targetScheduledUtc || null,
+         targetCapturedUtc: live.targetCapturedUtc || null,
+         stopUtc: live.stopUtc || null,
+         targetScheduledMonotonicNs: live.targetScheduledMonotonicNs || null,
+        remainingPostMs: live.remainingPostMs,
+        preEvidenceElapsedMs: live.preEvidenceElapsedMs,
+        insufficientPreTargetEvidence: live.insufficientPreTargetEvidence === true,
+      } : {}),
+    };
+  });
   handle("future-target:get", (payload) => {
     const id = sessionId(payload);
     return db.research.getTargetGeneration(id, { full: isRevealed(id), revealed: isRevealed(id) });
@@ -2621,6 +2802,8 @@ async function recoverIncompleteSessions(reason = "application startup") {
       const researchTarget = researchDefinition?.targetDefinition || {};
       const futureTarget = db.research?.getTargetGeneration(id, { full: true }) || null;
       const temporal = Boolean(researchDefinition && isTemporalResearchDefinition(researchDefinition));
+      const participantStop = Boolean(researchDefinition && isParticipantStopAnchored(researchDefinition));
+      const persistedStopAnchor = participantStop ? db.research?.getParticipantStopAnchor(id) : null;
       const phaseProjection = db.research?.getPhases(id) || {};
       if (["RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED"].includes(row.status) && !temporal)
         continue;
@@ -2672,6 +2855,37 @@ async function recoverIncompleteSessions(reason = "application startup") {
           integrityError: integrity.errors.join("; "),
           payload: { classification: "PERSISTED_EVIDENCE_REQUIRES_REVIEW", errorCount: integrity.errors.length },
         }, { recoveryState: "INTEGRITY_FAILED", evidence: { classification: "PERSISTED_EVIDENCE_REQUIRES_REVIEW" } });
+        continue;
+      }
+      if (participantStop && ["RUNNING", "TIMING_DEVIATION", "INTERRUPTED", "COMMITTED", "AUDIO_READY", "RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED"].includes(row.status)) {
+        // A participant-stop stream cannot be resumed after a process loss:
+        // before T there is no anchor to invent, and after T the persisted
+        // anchor remains evidence while the post-window is marked incomplete.
+        // No timer is recreated and no missed pre-window output is backfilled.
+        if (row.status === "RUNNING") {
+          await transitionSession(id, "INTERRUPTED", {
+            eventType: "RUNTIME_INTERRUPTED",
+            interrupted: true,
+            interruption: reason,
+            payload: { reason, participantStopAnchor: persistedStopAnchor?.utc || null, targetUtc: persistedStopAnchor?.targetUtc || null, noBackfill: true },
+          }, { recoveryState: "PROCESS_INTERRUPTED", evidence: { reason, noBackfill: true } });
+        }
+        const currentAfterInterrupt = db.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(id)?.status;
+        if (["INTERRUPTED", "TIMING_DEVIATION", "COMMITTED", "AUDIO_READY", "RETURNED", "RAW_REPORT_DRAFT", "RAW_REPORT_LOCKED"].includes(currentAfterInterrupt))
+          db.sessions.setStatus(id, "RECOVERY_REQUIRED", "PARTICIPANT_STOP_RUNTIME_NOT_RESUMED");
+        db.research.updatePhases(id, {
+          sessionLifecycle: "RECOVERY_REQUIRED",
+          evidencePhaseStatus: "INCOMPLETE",
+          revealStatus: "BLOCKED",
+          integrityStatus: integrity.valid ? "VERIFIED" : "FAILED",
+        });
+        db.evidence.appendEvent(id, trialIdFor(id), "PARTICIPANT_STOP_RECOVERY_REQUIRED", {
+          classification: persistedStopAnchor ? "STOP_ANCHOR_PRESERVED_POST_WINDOW_INCOMPLETE" : "STOP_ANCHOR_NOT_COMMITTED_BEFORE_RUNTIME_LOSS",
+          stopAnchor: persistedStopAnchor ? { anchorReference: persistedStopAnchor.anchorReference, stopUtc: persistedStopAnchor.utc, stopMonotonicNs: persistedStopAnchor.monotonicNs, targetOffsetMs: persistedStopAnchor.targetOffsetMs, targetUtc: persistedStopAnchor.targetUtc, targetMonotonicNs: persistedStopAnchor.targetMonotonicNs } : null,
+          reason,
+          resumed: false,
+          noBackfill: true,
+        });
         continue;
       }
       // A process restart is an evidence interruption boundary.  Startup
@@ -2825,7 +3039,7 @@ async function recoverIncompleteSessions(reason = "application startup") {
 
 async function stopForShutdown() {
   for (const runtime of runtimes.values()) {
-    if (runtime.scheduler instanceof TemporalEvidenceScheduler && runtime.scheduler.status === "RUNNING") {
+    if (runtime.scheduler instanceof TemporalEvidenceScheduler && ["RUNNING", "RUNNING_UNANCHORED", "POST_TARGET_MONITORING"].includes(runtime.scheduler.status)) {
       // Shutdown is an authority boundary for every temporal scheduler. Pause
       // the timer and persist the fact that the evidence clock stopped; the
       // next process must classify the persisted session for explicit owner
@@ -2840,7 +3054,7 @@ async function stopForShutdown() {
       });
       continue;
     }
-    if (["RUNNING", "COMMITTED"].includes(runtime.scheduler?.status)) runtime.scheduler.interrupt("application shutdown");
+    if (schedulerIsActive(runtime.scheduler)) runtime.scheduler.interrupt("application shutdown");
   }
   powerManager?.stop();
   powerManager?.detach();

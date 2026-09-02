@@ -21,6 +21,7 @@ let audioGeneration = 0;
 let stopInFlight = null;
 let prepareInFlight = null;
 const pendingPreparations = new Set();
+let stopEvidencePollTimer = null;
 let player = {
   ctx: null,
   node: null,
@@ -293,7 +294,31 @@ async function renderPre() {
   const profileWindow = inheritedWindows[0] || (profileAnalysis.primaryWindow && typeof profileAnalysis.primaryWindow === "object" ? profileAnalysis.primaryWindow : {});
   const endpointDefault = String(profileAnalysis.primaryEndpoint || appAnalysis.primaryEndpoint || "EXACT_SLOT").toUpperCase();
   const intervalDefault = selectedProfile?.output?.intervalMs ?? profileAnalysis.intervalMs ?? appAnalysis.intervalMs ?? "";
-  app.innerHTML = `<div class="section-intro"><div><h2>Pre-session state</h2><p>Capture baseline context and the protocol overrides that will be committed for this session.</p></div></div>${steps(2)}<div class="card"><div class="form-grid"><div class="field"><label for="participant">Participant label</label><input id="participant" value="Local participant"></div><div class="field"><label for="record">Record type</label><select id="record"><option value="dry">Dry run / validation</option><option value="contemporaneous">Contemporaneous research record</option></select></div><div class="field"><label for="experimentMode">Experiment mode</label><select id="experimentMode"><option value="INFLUENCE">Influence</option><option value="FUTURE_TARGET">Future target / recognition</option><option value="CONTROL">Control</option><option value="SHAM">Sham</option></select><small>The mode is committed before START; future targets are generated only at their anchor.</small></div><div class="field"><label for="prediction">Future-target prediction <span id="predictionRequired">(required for FUTURE_TARGET)</span></label><input id="prediction" placeholder="Only used in FUTURE_TARGET mode"><small>This prediction is committed before START and is not the actual future target.</small></div><div class="field" id="futureDelayField" style="display:none"><label for="futureDelayMinutes">Future target delay (minutes)</label><input id="futureDelayMinutes" type="number" min="1" max="525600" value="1440"><small>The target is generated only at this committed future anchor; it is not generated early and hidden.</small></div><div class="field" id="outcomeRangeFields" style="display:${integerSpace ? "block" : "none"}"><label>Integer outcome-space override</label><div class="form-grid"><input id="outcomeMin" type="number" step="1" value="${esc(minDefault)}" aria-label="Outcome range minimum"><input id="outcomeMax" type="number" step="1" value="${esc(maxDefault)}" aria-label="Outcome range maximum"></div><small>Symbolic range; no values are enumerated. Edit before commitment.</small><div id="outcomeCardinality" class="review-row"><span>Calculated cardinality</span><strong>${integerSpace ? esc(Number(maxDefault) - Number(minDefault) + 1) : "2"}</strong></div></div><div class="field"><label for="primaryEndpoint">Primary endpoint</label><select id="primaryEndpoint"><option value="EXACT_SLOT">Exact scheduled target slot</option><option value="FIXED_TIME_WINDOW">Fixed committed time window</option><option value="FIXED_SEQUENCE_WINDOW">Fixed committed sequence window</option><option value="TARGET_FREQUENCY">Target frequency</option></select><small>Late or early matches remain exploratory unless this endpoint explicitly includes them.</small></div><div class="field"><label for="outputIntervalMs">Output cadence (milliseconds)</label><input id="outputIntervalMs" type="number" min="0.001" max="31536000000" step="any" value="${esc(intervalDefault)}"><small>Cadence is part of the immutable evidence definition.</small></div><div class="field"><label for="preTargetSeconds">Pre-target monitoring (seconds)</label><input id="preTargetSeconds" type="number" min="0" max="31536000" step="any" value="${esc(Number(profileWindow.preMs || 0) / 1000)}"></div><div class="field"><label for="postTargetSeconds">Post-target monitoring (seconds)</label><input id="postTargetSeconds" type="number" min="0" max="31536000" step="any" value="${esc(Number(profileWindow.postMs || 0) / 1000)}"></div><div class="field"><label for="baseline">Baseline state</label><select id="baseline"><option>Ordinary alertness</option><option>Relaxed</option><option>Fatigued</option></select></div><div class="field"><label for="environment">Environment note</label><input id="environment" placeholder="Optional note"></div><div class="field full"><label><input id="safety" type="checkbox"> I can safely stop by opening my eyes, removing headphones, and reorienting.</label></div></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next">Continue to target assignment →</button></div>`;
+  const stopAnchoredProfile = String(selectedProfile?.timing?.mode || "").toUpperCase() === "PARTICIPANT_STOP_ANCHORED";
+  const stopOffsetDefault = Number(selectedProfile?.timing?.targetOffsetMs ?? 0);
+  const stopOffsetRelationship = stopOffsetDefault < 0 ? "before" : stopOffsetDefault > 0 ? "after" : "at";
+  const stopOffsetMagnitude = Math.abs(stopOffsetDefault) / (Math.abs(stopOffsetDefault) >= 3_600_000 && Math.abs(stopOffsetDefault) % 3_600_000 === 0 ? 3_600_000 : Math.abs(stopOffsetDefault) >= 60_000 && Math.abs(stopOffsetDefault) % 60_000 === 0 ? 60_000 : 1_000);
+  const stopOffsetUnit = Math.abs(stopOffsetDefault) >= 3_600_000 && Math.abs(stopOffsetDefault) % 3_600_000 === 0 ? "hours" : Math.abs(stopOffsetDefault) >= 60_000 && Math.abs(stopOffsetDefault) % 60_000 === 0 ? "minutes" : "seconds";
+  const localDateTime = (offsetMs) => {
+    const value = new Date(Date.now() + offsetMs);
+    const pad = (item) => String(item).padStart(2, "0");
+    return { date: `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`, time: `${pad(value.getHours())}:${pad(value.getMinutes())}` };
+  };
+  const defaultWindowDate = localDateTime(0).date;
+  const defaultWindowStart = { date: defaultWindowDate, time: "00:00" };
+  const defaultWindowEnd = { date: defaultWindowDate, time: "23:59" };
+  const defaultTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  app.innerHTML = `<div class="section-intro"><div><h2>Pre-session state</h2><p>Capture baseline context and the protocol overrides that will be committed for this session.</p></div></div>${steps(2)}<div class="card"><div class="form-grid"><div class="field"><label for="participant">Participant label</label><input id="participant" value="Local participant"></div><div class="field"><label for="record">Record type</label><select id="record"><option value="dry">Dry run / validation</option><option value="contemporaneous">Contemporaneous research record</option></select></div><div class="field"><label for="experimentMode">Experiment mode</label><select id="experimentMode"><option value="INFLUENCE">Influence</option><option value="FUTURE_TARGET">Future target / recognition</option><option value="CONTROL">Control</option><option value="SHAM">Sham</option></select><small>The mode is committed before START; future targets are generated only at their anchor.</small></div><div class="field"><label for="prediction">Future-target prediction <span id="predictionRequired">(required for FUTURE_TARGET)</span></label><input id="prediction" placeholder="Only used in FUTURE_TARGET mode"><small>This prediction is committed before START and is not the actual future target.</small></div><div class="field" id="futureDelayField" style="display:none"><label for="futureDelayMinutes">Future target delay (minutes)</label><input id="futureDelayMinutes" type="number" min="1" max="525600" value="1440"><small>The target is generated only at this committed future anchor; it is not generated early and hidden.</small></div><div class="field" id="outcomeRangeFields" style="display:${integerSpace ? "block" : "none"}"><label>Integer outcome-space override</label><div class="form-grid"><input id="outcomeMin" type="number" step="1" value="${esc(minDefault)}" aria-label="Outcome range minimum"><input id="outcomeMax" type="number" step="1" value="${esc(maxDefault)}" aria-label="Outcome range maximum"></div><small>Symbolic range; no values are enumerated. Edit before commitment.</small><div id="outcomeCardinality" class="review-row"><span>Calculated cardinality</span><strong>${integerSpace ? esc(Number(maxDefault) - Number(minDefault) + 1) : "2"}</strong></div></div><div class="field"><label for="primaryEndpoint">Primary endpoint</label><select id="primaryEndpoint"><option value="EXACT_SLOT">Exact scheduled target slot</option><option value="FIXED_TIME_WINDOW">Fixed committed time window</option><option value="FIXED_SEQUENCE_WINDOW">Fixed committed sequence window</option><option value="TARGET_FREQUENCY">Target frequency</option></select><small>Late or early matches remain exploratory unless this endpoint explicitly includes them.</small></div><div class="field"><label for="outputIntervalMs">Output cadence (milliseconds)</label><input id="outputIntervalMs" type="number" min="0.001" max="31536000000" step="any" value="${esc(intervalDefault)}"><small>Cadence is part of the immutable evidence definition.</small></div><div class="field"><label for="preTargetSeconds">Pre-target monitoring (seconds)</label><input id="preTargetSeconds" type="number" min="0" max="31536000" step="any" value="${esc(Number(profileWindow.preMs || 0) / 1000)}"></div><div class="field"><label for="postTargetSeconds">Post-target monitoring (seconds)</label><input id="postTargetSeconds" type="number" min="0" max="31536000" step="any" value="${esc(Number(profileWindow.postMs || 0) / 1000)}"></div><div id="stopExecutionWindow" class="field full" style="display:${stopAnchoredProfile ? "block" : "none"}"><label>Participant-stop execution window</label><div class="form-grid"><input id="executionDate" type="date" value="${defaultWindowStart.date}" aria-label="Execution date"><input id="executionStart" type="time" value="${defaultWindowStart.time}" aria-label="Window start"><input id="executionEnd" type="time" value="${defaultWindowEnd.time}" aria-label="Window end"><input id="executionTimezone" value="${esc(defaultTimezone)}" aria-label="Execution timezone"></div><small>Scheduling metadata only. It is normalized to UTC and never becomes target T.</small></div><div class="field"><label for="baseline">Baseline state</label><select id="baseline"><option>Ordinary alertness</option><option>Relaxed</option><option>Fatigued</option></select></div><div class="field"><label for="environment">Environment note</label><input id="environment" placeholder="Optional note"></div><div class="field full"><label><input id="safety" type="checkbox"> I can safely stop by opening my eyes, removing headphones, and reorienting.</label></div></div></div><div class="actions" style="margin-top:20px"><button class="button" id="back">← Back</button><button class="button primary" id="next">Continue to target assignment →</button></div>`;
+  if (stopAnchoredProfile) {
+    const endpointField = $("#primaryEndpoint")?.closest(".field");
+    endpointField?.insertAdjacentHTML("beforebegin", `<div id="stopTargetTimingFields" class="field full"><label>Target timing relative to participant return</label><div class="form-grid"><select id="stopTargetRelationship" aria-label="Target relationship"><option value="before" ${stopOffsetRelationship === "before" ? "selected" : ""}>Before return</option><option value="at" ${stopOffsetRelationship === "at" ? "selected" : ""}>At return</option><option value="after" ${stopOffsetRelationship === "after" ? "selected" : ""}>After return</option></select><input id="stopTargetOffset" type="number" min="0" max="31536000" step="any" value="${esc(stopOffsetMagnitude)}" aria-label="Target offset magnitude"><select id="stopTargetOffsetUnit" aria-label="Target offset unit"><option value="seconds" ${stopOffsetUnit === "seconds" ? "selected" : ""}>seconds</option><option value="minutes" ${stopOffsetUnit === "minutes" ? "selected" : ""}>minutes</option><option value="hours" ${stopOffsetUnit === "hours" ? "selected" : ""}>hours</option></select></div><small>Canonical signed targetOffsetMs is committed before START: T = participant STOP/RETURN + offset.</small></div>`);
+    const executionField = $("#stopExecutionWindow");
+    if (executionField) {
+      executionField.querySelector("label").innerHTML = `<input id="executionWindowEnabled" type="checkbox"> Use optional execution window`;
+      executionField.querySelectorAll("input:not(#executionWindowEnabled)").forEach((input) => { input.disabled = true; });
+      $("#executionWindowEnabled").onchange = (event) => executionField.querySelectorAll("input:not(#executionWindowEnabled)").forEach((input) => { input.disabled = !event.target.checked; });
+    }
+  }
   $("#experimentMode").value = selectedProfile?.mode || "INFLUENCE";
   $("#primaryEndpoint").value = ["EXACT_SLOT", "FIXED_TIME_WINDOW", "FIXED_SEQUENCE_WINDOW", "TARGET_FREQUENCY"].includes(endpointDefault) ? endpointDefault : "EXACT_SLOT";
   const updateCardinality = () => {
@@ -346,13 +371,33 @@ async function renderPre() {
         ],
       };
       if (Number.isFinite(intervalMs) && intervalMs > 0) temporalAnalysis.intervalMs = intervalMs;
+      const targetOffsetMs = stopAnchoredProfile
+        ? (() => {
+          const magnitude = Number($("#stopTargetOffset")?.value || 0);
+          const unit = ({ seconds: 1_000, minutes: 60_000, hours: 3_600_000 })[$("#stopTargetOffsetUnit")?.value] || 1_000;
+          if (!Number.isFinite(magnitude) || magnitude < 0) throw new Error("Target offset magnitude must be non-negative.");
+          const sign = $("#stopTargetRelationship")?.value === "before" ? -1 : $("#stopTargetRelationship")?.value === "after" ? 1 : 0;
+          const offset = sign * magnitude * unit;
+          if (!Number.isSafeInteger(offset)) throw new Error("Target offset must resolve to a safe integer number of milliseconds.");
+          return offset;
+        })()
+        : undefined;
+      const executionWindow = stopAnchoredProfile && $("#executionWindowEnabled")?.checked
+        ? {
+          startLocal: `${$("#executionDate").value}T${$("#executionStart").value}`,
+          endLocal: `${$("#executionDate").value}T${$("#executionEnd").value}`,
+          timezone: $("#executionTimezone").value.trim(),
+        }
+        : undefined;
       currentSession = await api("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
           profileId: selectedProfile.id,
           mode,
           ...(requestedSpace ? { outcomeSpace: requestedSpace } : {}),
+          ...(stopAnchoredProfile ? { targetOffsetMs } : {}),
           temporalAnalysis,
+          ...(executionWindow ? { executionWindow } : {}),
           prediction: $("#prediction").value.trim() || null,
           targetDelayMs: mode === "FUTURE_TARGET" ? Number($("#futureDelayMinutes").value || 1440) * 60_000 : undefined,
           participantLabel: $("#participant").value,
@@ -392,7 +437,13 @@ function renderReady() {
     ? Math.ceil(Number(primaryWindow.preMs || 0) / Number(intervalMs)) + 1 + Math.ceil(Number(primaryWindow.postMs || 0) / Number(intervalMs))
     : null;
   const plannedOpportunities = derivedTemporalOpportunities || configuredOpportunities || (output.type === "SINGLE_OUTCOME" ? 1 : "Not recorded");
-  const scheduledUtc = research.targetDefinition?.scheduledUtc || currentSession?.timing?.scheduledUtc || "Not recorded";
+  const stopAnchored = String(research.timingMode || currentSession?.timing?.mode || p.timing?.mode || "").toUpperCase() === "PARTICIPANT_STOP_ANCHORED" || ["PARTICIPANT_STOP", "PARTICIPANT_STOP_RETURN"].includes(String(research.targetAnchor || research.targetDefinition?.anchor || "").toUpperCase());
+  const targetOffsetMs = Number(research.targetOffsetMs ?? research.targetDefinition?.targetOffsetMs ?? currentSession?.timing?.targetOffsetMs ?? p.timing?.targetOffsetMs ?? 0);
+  const targetRelationship = targetOffsetMs < 0 ? `${Math.abs(targetOffsetMs) / 1000}s before participant return` : targetOffsetMs > 0 ? `${targetOffsetMs / 1000}s after participant return` : "At participant return";
+  const scheduledUtc = stopAnchored ? "Not known until participant STOP / RETURN" : (research.targetDefinition?.scheduledUtc || currentSession?.timing?.scheduledUtc || "Not recorded");
+  const executionWindowSummary = research.executionWindow
+    ? `${research.executionWindow.startUtc} → ${research.executionWindow.endUtc} ${research.executionWindow.timezone || "UTC"}`
+    : "Not recorded";
   const evidenceWindow = `${Number(primaryWindow.preMs || 0) / 1000}s before T → ${Number(primaryWindow.postMs || 0) / 1000}s after T`;
   const fineWindows = windows.slice(1).map((window) => {
     const pre = Number(window.preMs || 0) / 1000;
@@ -407,6 +458,7 @@ function renderReady() {
     ["Outcome space / K", `${spaceSummary || p.outcomeSpace?.type || "BINARY"} · ${currentSession?.cardinality || "2"}`],
     ["Target", targetSummary],
     ["Target anchor (T)", scheduledUtc],
+    ...(stopAnchored ? [["Anchor reference", "PARTICIPANT_STOP_RETURN"], ["Target relationship", targetRelationship], ["Execution window", executionWindowSummary]] : []),
     ["Evidence monitoring", evidenceWindow],
     ["Output cadence", `${intervalMs} ms per opportunity`],
     ["Planned opportunities", plannedOpportunities],
@@ -550,7 +602,24 @@ function updateFormalProgress() {
 async function renderRaw() {
   const id = currentSession?.sessionId;
   const draft = id && window.mip?.getDraft ? await window.mip.getDraft({ id }).catch(() => null) : null;
-  app.innerHTML = `<div class="section-intro"><div><h2>Raw report · before reveal</h2><p>Capture observation first. The generated result remains hidden.</p></div>${pill(draft ? "DRAFT — MUTABLE" : "Raw Report Pending")}</div><div class="callout warning">Record subjective time before actual duration is shown. Unknown / Not experienced are valid responses. A draft is mutable until the owner locks it.</div><div class="card" style="margin-top:18px"><div class="form-grid"><div class="field"><label for="subjectiveTime">Subjective total duration</label><input id="subjectiveTime" placeholder="e.g. 20 minutes"></div><div class="field"><label for="intensity">Overall state intensity (0–10)</label><input id="intensity" type="number" min="0" max="10"></div><div class="field"><label for="modality">Actual encoding modality</label><input id="modality" placeholder="semantic, visual, kinesthetic, combined"></div><div class="field"><label for="certainty">Pre-reveal belief (%)</label><input id="certainty" type="number" min="0" max="100"></div><div class="field full"><label for="timeline">Subjective timeline</label><textarea id="timeline" placeholder="Approximate sequence and moments"></textarea></div><div class="field full"><label for="notes">Free raw notes</label><textarea id="notes" placeholder="Observation only"></textarea></div></div><div id="reportValidation" class="callout" role="status" aria-live="polite" style="margin-top:12px"></div><div class="actions" style="margin-top:18px"><button class="button" id="save">Save draft</button><button class="button primary" id="lock">LOCK RAW REPORT</button></div></div>`;
+  clearInterval(stopEvidencePollTimer);
+  const stopAnchored = String(currentSession?.research?.timingMode || currentSession?.researchDefinition?.timingMode || currentSession?.timing?.mode || "").toUpperCase() === "PARTICIPANT_STOP_ANCHORED" || ["PARTICIPANT_STOP", "PARTICIPANT_STOP_RETURN"].includes(String(currentSession?.research?.targetAnchor || currentSession?.researchDefinition?.targetDefinition?.anchor || "").toUpperCase());
+  app.innerHTML = `<div class="section-intro"><div><h2>Raw report · before reveal</h2><p>Capture observation first. The generated result remains hidden.</p></div>${pill(draft ? "DRAFT — MUTABLE" : "Raw Report Pending")}</div>${stopAnchored ? '<div class="card" id="stopEvidenceStatus" style="margin-top:18px"><h3>Participant-stop evidence</h3><div class="callout">Loading authoritative stop anchor and post-target progress…</div></div>' : ""}<div class="callout warning">Record subjective time before actual duration is shown. Unknown / Not experienced are valid responses. A draft is mutable until the owner locks it.</div><div class="card" style="margin-top:18px"><div class="form-grid"><div class="field"><label for="subjectiveTime">Subjective total duration</label><input id="subjectiveTime" placeholder="e.g. 20 minutes"></div><div class="field"><label for="intensity">Overall state intensity (0–10)</label><input id="intensity" type="number" min="0" max="10"></div><div class="field"><label for="modality">Actual encoding modality</label><input id="modality" placeholder="semantic, visual, kinesthetic, combined"></div><div class="field"><label for="certainty">Pre-reveal belief (%)</label><input id="certainty" type="number" min="0" max="100"></div><div class="field full"><label for="timeline">Subjective timeline</label><textarea id="timeline" placeholder="Approximate sequence and moments"></textarea></div><div class="field full"><label for="notes">Free raw notes</label><textarea id="notes" placeholder="Observation only"></textarea></div></div><div id="reportValidation" class="callout" role="status" aria-live="polite" style="margin-top:12px"></div><div class="actions" style="margin-top:18px"><button class="button" id="save">Save draft</button><button class="button primary" id="lock">LOCK RAW REPORT</button></div></div>`;
+  if (stopAnchored) {
+    const refreshStopStatus = async () => {
+      try {
+        const phases = await window.mip?.getResearchPhases?.({ id });
+        const anchor = phases?.participantStopAnchor;
+        const status = $("#stopEvidenceStatus");
+        if (!status) return;
+        const remaining = Number.isFinite(Number(phases?.remainingPostMs)) ? `${Math.ceil(Number(phases.remainingPostMs))} ms` : anchor && phases?.evidencePhaseStatus !== "COMPLETE" ? `${anchor.postTargetMs} ms committed` : "Complete";
+        status.innerHTML = `<h3>Participant-stop evidence</h3><div class="review-row"><span>Participant phase</span><strong>${esc(phases?.participantPhaseStatus || "RETURNED")}</strong></div><div class="review-row"><span>Stop / Return clock</span><strong>${esc(anchor?.stopUtc || anchor?.utc || phases?.stopUtc || "Not captured")}</strong></div><div class="review-row"><span>Target T</span><strong>${esc(anchor?.targetUtc || phases?.targetScheduledUtc || "Not known until STOP / RETURN")}</strong></div><div class="review-row"><span>Signed offset</span><strong>${esc(anchor?.targetOffsetMs ?? phases?.targetOffsetMs ?? currentSession?.research?.targetOffsetMs ?? 0)} ms</strong></div><div class="review-row"><span>Evidence phase</span><strong>${esc(phases?.evidencePhaseStatus || "PENDING")}</strong></div><div class="review-row"><span>Remaining post evidence</span><strong>${esc(remaining)}</strong></div><div class="review-row"><span>Reveal</span><strong>${phases?.revealStatus === "ELIGIBLE" ? "ELIGIBLE" : "BLOCKED"}</strong></div>`;
+        if (phases?.evidencePhaseStatus === "COMPLETE") clearInterval(stopEvidencePollTimer);
+      } catch { /* status is advisory; the report gate remains authoritative */ }
+    };
+    await refreshStopStatus();
+    stopEvidencePollTimer = setInterval(refreshStopStatus, 500);
+  }
   const initial = draft?.report || {};
   for (const field of ["subjectiveTime", "intensity", "modality", "certainty", "timeline", "notes"]) if ($(`#${field}`)) $(`#${field}`).value = initial[field] ?? "";
   const collect = () => Object.fromEntries([...document.querySelectorAll("#subjectiveTime,#intensity,#modality,#certainty,#timeline,#notes")].map((x) => [x.id, x.value]));

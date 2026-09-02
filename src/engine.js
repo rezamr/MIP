@@ -23,6 +23,9 @@ import {
   formatOutcome,
   normalizeExperimentMode,
   normalizeTargetDefinition,
+  normalizeTargetOffsetMs,
+  isParticipantStopAnchor,
+  normalizeExecutionWindow,
   normalizeTemporalWindow,
   normalizeTemporalAnalysisPlan,
   normalizeCrossSessionAnalysis,
@@ -67,6 +70,9 @@ export {
   formatOutcome,
   normalizeExperimentMode,
   normalizeTargetDefinition,
+  normalizeTargetOffsetMs,
+  isParticipantStopAnchor,
+  normalizeExecutionWindow,
   normalizeTemporalWindow,
   normalizeTemporalAnalysisPlan,
   normalizeCrossSessionAnalysis,
@@ -444,6 +450,56 @@ export const profiles = {
     reveal: { policy: "AFTER_EVIDENCE_COMPLETE" },
     reporting: { version: "report-v1" },
   },
+  STOP_ANCHORED_INTEGER_RANGE_V1: {
+    id: "STOP_ANCHORED_INTEGER_RANGE_V1",
+    version: 1,
+    name: "Participant-Paced Stop-Anchored Integer Range",
+    purpose: "Participant-paced integer evidence stream anchored only when Return/Stop is activated.",
+    status: "Validated",
+    mode: EXPERIMENT_MODES.INFLUENCE,
+    timing: {
+      mode: "PARTICIPANT_STOP_ANCHORED",
+      anchorReference: "PARTICIPANT_STOP_RETURN",
+      targetOffsetMs: 0,
+      wording: "Make the system output/favor {target}; return when ready.",
+    },
+    outcomeSpace: {
+      type: "INTEGER_RANGE",
+      minInclusive: 0,
+      maxInclusive: 999_999_999,
+    },
+    mapping: {
+      id: "INTEGER_IDENTITY_V1",
+      version: 1,
+      labels: [],
+      entries: {},
+    },
+    output: {
+      type: "CONTINUOUS_STREAM",
+      blockSize: 1,
+      preBlocks: 0,
+      primaryBlocks: 1,
+      postBlocks: 0,
+      intervalMs: 100,
+      cadence: "FIXED_INTERVAL",
+    },
+    rng: { provider: "OS_CSPRNG" },
+    protocol: { ...baseProtocol, participantPaced: true, returnSeconds: 0 },
+    audio: { recipeId: "A-U396-4", version: 1 },
+    analysis: {
+      primaryEndpoint: "FIXED_TIME_WINDOW",
+      outputCadence: "FIXED_INTERVAL",
+      toleranceMs: 100,
+      // Owners may override these durations per session.  Keeping a small
+      // default makes the profile usable for validation while the execution
+      // window remains an explicit owner commitment.
+      primaryWindow: { id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 },
+      windows: [{ id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 }],
+      version: "temporal-analysis-v1",
+    },
+    reveal: { policy: "AFTER_EVIDENCE_COMPLETE" },
+    reporting: { version: "report-v1" },
+  },
 };
 
 export function clone(value) {
@@ -486,6 +542,7 @@ export function validateProfile(profile) {
       "RELATIVE_WINDOW",
       "CONTINUOUS_AROUND_REQUEST",
       "PREGENERATED_HIDDEN",
+      "PARTICIPANT_STOP_ANCHORED",
     ].includes(profile?.timing?.mode)
   )
     errors.push("timing.mode is unsupported or missing");
@@ -496,6 +553,14 @@ export function validateProfile(profile) {
     errors.push("timing.delaySeconds must be non-negative");
   if (profile?.timing?.mode === "ABSOLUTE_DATETIME" && !profile.timing.timezone)
     errors.push("timing.timezone is required for absolute timing");
+  if (profile?.timing?.mode === "PARTICIPANT_STOP_ANCHORED") {
+    try { normalizeTargetOffsetMs(profile.timing.targetOffsetMs ?? 0); }
+    catch (error) { errors.push(`timing.targetOffsetMs is invalid: ${error.message}`); }
+    if (profile.timing.executionWindow) {
+      try { normalizeExecutionWindow(profile.timing.executionWindow); }
+      catch (error) { errors.push(`timing.executionWindow is invalid: ${error.message}`); }
+    }
+  }
   if (profile?.reveal?.policy === "AFTER_RAW_REPORT_LOCK" && !profile.protocol)
     errors.push("protocol is required before raw-report reveal");
   if (profile?.analysis?.primaryEndpoint && !["EXACT_SLOT", "FIXED_TIME_WINDOW", "FIXED_SEQUENCE_WINDOW", "TARGET_FREQUENCY"].includes(String(profile.analysis.primaryEndpoint).toUpperCase()))
@@ -617,6 +682,20 @@ export function analyzeStream({
 
 export function timingPlan(profile, now = Date.now()) {
   const mode = profile.timing.mode;
+  if (mode === "PARTICIPANT_STOP_ANCHORED") {
+    const targetOffsetMs = normalizeTargetOffsetMs(profile.timing.targetOffsetMs ?? profile.timing.offsetMs ?? 0);
+    return {
+      mode,
+      scheduledUtc: null,
+      scheduledMonotonicNs: null,
+      anchor: "PARTICIPANT_STOP_RETURN",
+      anchorReference: "PARTICIPANT_STOP_RETURN",
+      targetOffsetMs,
+      requestedDelayMs: null,
+      actualUtc: null,
+      latenessMs: null,
+    };
+  }
   const start = now;
   let target = now;
   if (mode === "RELATIVE_DELAY")
