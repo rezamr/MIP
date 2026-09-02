@@ -50,11 +50,18 @@ export const EXPERIMENTAL_PRESETS = Object.freeze(Object.fromEntries(Object.entr
 
 export { canonical, phasedPinkSample, pcmDigest, sha256Hex, validateRecipeProvenance, activeLayers, summarizeProvenance, lfsrNextState, lfsrPeriod, LFSR_SEQUENCE_PERIOD, LFSR_UPDATE_SEMANTICS, AUDIO_CORE_VERSION, ENGINEERING_VERIFICATION_VERSION };
 
-export function quickRecipe(centerHz, beatHz = 4) {
+export function quickChannelFrequencies(centerHz, beatHz = 4) {
   const center = Number(centerHz);
   const beat = Number(beatHz);
-  if (!Number.isFinite(center) || !Number.isFinite(beat) || center <= 0 || beat < 0 || center - beat / 2 <= 0)
-    throw new Error("Center and beat must produce positive finite channel frequencies.");
+  const left = center - beat / 2;
+  const right = center + beat / 2;
+  if (!Number.isFinite(center) || !Number.isFinite(beat) || center <= 0 || beat < 0 || !Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0)
+    throw new Error("Center and beat must produce positive finite channel frequencies; centerHz must be greater than beatHz / 2.");
+  return Object.freeze({ center, beat, left, right });
+}
+
+export function quickRecipe(centerHz, beatHz = 4) {
+  const { center, beat, left, right } = quickChannelFrequencies(centerHz, beatHz);
   return {
     id: "QUICK_CUSTOM",
     recipeId: "QUICK_CUSTOM",
@@ -67,15 +74,15 @@ export function quickRecipe(centerHz, beatHz = 4) {
     channels: 2,
     centerHz: center,
     beatHz: beat,
-    leftHz: center - beat / 2,
-    rightHz: center + beat / 2,
+    leftHz: left,
+    rightHz: right,
     waveform: "sine",
     gain: 0.25,
     phase: { left: 0, right: 0 },
     carriers: [{
       id: "primary",
-      leftHz: center - beat / 2,
-      rightHz: center + beat / 2,
+      leftHz: left,
+      rightHz: right,
       gain: 0.25,
       phase: { left: 0, right: 0 },
       waveform: "sine",
@@ -86,8 +93,8 @@ export function quickRecipe(centerHz, beatHz = 4) {
     septon: [],
     binauralRelationships: [{
       type: "centered_pair",
-      leftHz: center - beat / 2,
-      rightHz: center + beat / 2,
+      leftHz: left,
+      rightHz: right,
       centerHz: center,
       beatHz: beat,
     }],

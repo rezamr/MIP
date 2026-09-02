@@ -863,15 +863,71 @@ function renderAudio() {
       });
   };
   $("#liveStop").onclick = () => stopPlayer().catch((error) => toast(error.message));
-  $("#center").oninput = () => {
-    const c = Number($("#center").value);
-    $("#derived").textContent = `${c - 2} / ${c + 2} Hz`;
+  const readQuickPair = (centerValue, beatValue = 4) => {
+    if (centerValue === undefined || centerValue === null || String(centerValue).trim() === "")
+      return { valid: false, message: "Enter a center frequency greater than 0 Hz." };
+    if (beatValue === undefined || beatValue === null || String(beatValue).trim() === "")
+      return { valid: false, message: "Enter a beat/difference frequency of 0 Hz or greater." };
+    const center = Number(centerValue);
+    const beat = Number(beatValue);
+    if (!Number.isFinite(center) || center <= 0)
+      return { valid: false, message: "Center frequency must be a finite number greater than 0 Hz." };
+    if (!Number.isFinite(beat) || beat < 0)
+      return { valid: false, message: "Beat/difference frequency must be a finite number of 0 Hz or greater." };
+    const left = center - beat / 2;
+    const right = center + beat / 2;
+    if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0)
+      return { valid: false, message: `Center must be greater than half the beat/difference (${(beat / 2).toLocaleString()} Hz) so both channels stay positive.` };
+    return { valid: true, center, beat, left, right };
   };
-  $("#quick").onclick = async () => {
+  const quickButton = $("#quick");
+  const customButton = $("#custom");
+  const quickValidation = document.createElement("p");
+  quickValidation.id = "quickValidation";
+  quickValidation.className = "subtle";
+  quickValidation.setAttribute("role", "status");
+  quickValidation.setAttribute("aria-live", "polite");
+  quickButton?.insertAdjacentElement("beforebegin", quickValidation);
+  const customValidation = document.createElement("p");
+  customValidation.id = "customValidation";
+  customValidation.className = "subtle";
+  customValidation.setAttribute("role", "status");
+  customValidation.setAttribute("aria-live", "polite");
+  customButton?.insertAdjacentElement("beforebegin", customValidation);
+  const updateQuickInputs = () => {
+    const pair = readQuickPair($("#center")?.value, 4);
+    $("#derived").textContent = pair.valid ? `${pair.left} / ${pair.right} Hz` : "—";
+    quickValidation.textContent = pair.valid ? "" : pair.message;
+    quickValidation.className = pair.valid ? "subtle" : "callout warning";
+    $("#center")?.toggleAttribute("aria-invalid", !pair.valid);
+    if (quickButton) quickButton.disabled = !pair.valid;
+  };
+  const updateCustomInputs = () => {
+    const pair = readQuickPair($("#customCenter")?.value, $("#customBeat")?.value);
+    const gainRaw = $("#customGain")?.value;
+    const gainValue = Number(gainRaw);
+    const gainValid = gainRaw !== undefined && gainRaw !== null && String(gainRaw).trim() !== "" && Number.isFinite(gainValue) && gainValue >= 0 && gainValue <= 1;
+    const valid = pair.valid && gainValid;
+    customValidation.textContent = !pair.valid ? pair.message : !gainValid ? "Master gain must be a finite number from 0 to 1." : "";
+    customValidation.className = valid ? "subtle" : "callout warning";
+    $("#customCenter")?.toggleAttribute("aria-invalid", !pair.valid);
+    $("#customBeat")?.toggleAttribute("aria-invalid", !pair.valid);
+    $("#customGain")?.toggleAttribute("aria-invalid", !gainValid);
+    if (customButton) customButton.disabled = !valid;
+  };
+  $("#center").oninput = updateQuickInputs;
+  $("#customCenter").oninput = updateCustomInputs;
+  $("#customBeat").oninput = updateCustomInputs;
+  $("#customGain").oninput = updateCustomInputs;
+  updateQuickInputs();
+  updateCustomInputs();
+  quickButton.onclick = async () => {
     try {
+      const pair = readQuickPair($("#center").value, 4);
+      if (!pair.valid) throw new Error(pair.message);
       const r = await api("/api/audio/quick", {
         method: "POST",
-        body: JSON.stringify({ centerHz: $("#center").value }),
+        body: JSON.stringify({ centerHz: pair.center, beatHz: pair.beat }),
       });
       await playRecipe(r.recipe);
       toast("Quick recipe is playing through the OS audio output.");
@@ -879,22 +935,27 @@ function renderAudio() {
       toast(e.message);
     }
   };
-  $("#custom").onclick = async () => {
+  customButton.onclick = async () => {
     try {
+      const pair = readQuickPair($("#customCenter").value, $("#customBeat").value);
+      const gainRaw = $("#customGain").value;
+      const gainValue = Number(gainRaw);
+      if (!pair.valid) throw new Error(pair.message);
+      if (gainRaw.trim() === "" || !Number.isFinite(gainValue) || gainValue < 0 || gainValue > 1) throw new Error("Master gain must be a finite number from 0 to 1.");
       const r = await api("/api/audio/quick", {
         method: "POST",
         body: JSON.stringify({
-          centerHz: $("#customCenter").value,
-          beatHz: $("#customBeat").value,
+          centerHz: pair.center,
+          beatHz: pair.beat,
         }),
       });
       // The normalized carrier gain is intentionally independent from the
       // preview master stage.  Route this control through masterGain so the
       // resulting PCM changes measurably and the UI does not suggest that an
       // ignored top-level `gain` field controls output volume.
-      r.recipe.masterGain = Number($("#customGain").value);
+      r.recipe.masterGain = gainValue;
       await playRecipe(r.recipe);
-      toast(`Playing ${r.recipe.leftHz}/${r.recipe.rightHz} Hz at master gain ${Number(r.recipe.masterGain).toFixed(2)}`);
+      toast(`Playing ${r.recipe.leftHz}/${r.recipe.rightHz} Hz at master gain ${r.recipe.masterGain.toFixed(2)}`);
     } catch (e) {
       toast(e.message);
     }
@@ -1313,7 +1374,7 @@ async function renderCalibration() {
   const drawHistory = (query = "") => {
     const term = query.trim().toLowerCase();
     const rows = (history || []).filter((row) => !term || JSON.stringify(row).toLowerCase().includes(term));
-    historyContainer.innerHTML = rows.length ? rows.map((row) => `<article class="review-row"><span>${esc(row.createdUtc)} · ${esc(row.provider || "UNKNOWN")} · ${esc(row.sampleCount)}</span><div>${renderDistribution(row.counts, { statistics: row.statistics })}<button class="button" data-cal-detail="${esc(row.calibrationId)}">Detail</button> ${pill(row.integrityStatus || "UNVERIFIED")}</div></article>`).join("") : '<div class="empty">No calibration records match the filter.</div>';
+    historyContainer.innerHTML = rows.length ? rows.map((row) => `<article class="review-row"><span>${esc(row.createdUtc)} · ${esc(row.provider || "UNKNOWN")} · ${esc(row.sampleCount)} observations · ${esc(formatSpace(row.statistics?.outcomeSpace))} · K=${esc(formatCount(row.statistics?.cardinality))}</span><div>${renderDistribution(row.counts, { statistics: row.statistics })}<button class="button" data-cal-detail="${esc(row.calibrationId)}">Detail</button> ${pill(row.integrityStatus || "UNVERIFIED")}</div></article>`).join("") : '<div class="empty">No calibration records match the filter.</div>';
     historyContainer.querySelectorAll("[data-cal-detail]").forEach((button) => button.onclick = async () => {
       try {
         const row = await window.mip?.calibrationDetail({ id: button.dataset.calDetail });
