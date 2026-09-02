@@ -84,7 +84,45 @@ export class EvidenceRepository {
     });
   }
 
-  list(sessionId, options = {}) { return options.full ? this.listFull(sessionId) : this.listRedacted(sessionId); }
+  list(sessionId, options = {}) {
+    if (options.paginated !== true) return options.full ? this.listFull(sessionId) : this.listRedacted(sessionId);
+    const requestedLimit = options.limit === undefined ? 100 : Number(options.limit);
+    const requestedOffset = options.offset === undefined ? 0 : Number(options.offset);
+    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) throw new TypeError("event limit must be a positive safe integer");
+    if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0) throw new TypeError("event offset must be a non-negative safe integer");
+    const limit = Math.min(500, requestedLimit);
+    const clauses = ["session_id=?"];
+    const params = [sessionId];
+    if (options.type) { clauses.push("event_type=?"); params.push(String(options.type)); }
+    if (Array.isArray(options.types) && options.types.length) {
+      const types = options.types.map((type) => String(type)).filter(Boolean).slice(0, 64);
+      if (types.length) {
+        clauses.push(`event_type IN (${types.map(() => "?").join(",")})`);
+        params.push(...types);
+      }
+    }
+    if (options.search) {
+      const term = `%${String(options.search)}%`;
+      clauses.push("(event_type LIKE ? OR payload_json LIKE ? OR event_id LIKE ?)");
+      params.push(term, term, term);
+    }
+    const where = clauses.join(" AND ");
+    const rows = this.db.prepare(`SELECT session_id AS sessionId,seq,event_id AS eventId,event_type AS type,occurred_utc AS occurredUtc,monotonic_ns AS monotonicNs,payload_json AS payload,previous_hash AS previousHash,event_hash AS hash,trial_id AS trialId FROM evidence_events WHERE ${where} ORDER BY seq LIMIT ? OFFSET ?`).all(...params, limit, requestedOffset);
+    const revealed = ["REVEALED", "COMPLETE"].includes(this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status);
+    const events = rows.map((row) => {
+      const event = { ...row, payload: json(row.payload, {}) };
+      return options.full && revealed ? event : {
+        sessionId: event.sessionId,
+        seq: event.seq,
+        eventId: event.eventId,
+        type: event.type,
+        occurredUtc: PRE_REVEAL_TIMING_SENSITIVE_EVENTS.has(event.type) ? null : event.occurredUtc,
+        payload: safePreRevealPayload(event.payload),
+      };
+    });
+    const total = Number(this.db.prepare(`SELECT COUNT(*) AS count FROM evidence_events WHERE ${where}`).get(...params).count);
+    return { sessionId, offset: requestedOffset, limit, total, events };
+  }
 
   recordOutput(sessionId, record = {}) {
     const outputSeq = Number(record.outputSeq ?? record.index ?? 0);
@@ -132,8 +170,18 @@ export class EvidenceRepository {
     if (!Number.isSafeInteger(requestedOffset) || requestedOffset < 0) throw new TypeError("output offset must be a non-negative safe integer");
     const limit = Math.min(5_000, requestedLimit);
     const offset = requestedOffset;
-    const query = "SELECT * FROM machine_outputs WHERE session_id=? ORDER BY output_seq LIMIT ? OFFSET ?";
-    const rows = this.db.prepare(query).all(sessionId, limit, offset);
+    const clauses = ["session_id=?"];
+    const params = [sessionId];
+    if (options.scheduledFromUtc !== undefined && options.scheduledFromUtc !== null) {
+      clauses.push("scheduled_utc>=?");
+      params.push(String(options.scheduledFromUtc));
+    }
+    if (options.scheduledToUtc !== undefined && options.scheduledToUtc !== null) {
+      clauses.push("scheduled_utc<=?");
+      params.push(String(options.scheduledToUtc));
+    }
+    const where = clauses.join(" AND ");
+    const rows = this.db.prepare(`SELECT * FROM machine_outputs WHERE ${where} ORDER BY output_seq LIMIT ? OFFSET ?`).all(...params, limit, offset);
     const records = rows.map((row) => ({
       sessionId: row.session_id, trialId: row.trial_id, outputSeq: row.output_seq, generatedUtc: row.generated_utc, monotonicNs: row.monotonic_ns, region: row.region, recordHash: row.record_hash, scheduledUtc: row.scheduled_utc, scheduledMonotonicNs: row.scheduled_monotonic_ns, actualUtc: row.actual_utc, actualMonotonicNs: row.actual_monotonic_ns, latenessMs: row.lateness_ms, timingStatus: row.timing_status,
       ...(options.full && revealed ? { value: json(row.value_json, null) } : {}),
@@ -142,7 +190,7 @@ export class EvidenceRepository {
       sessionId,
       offset,
       limit,
-      total: Number(this.db.prepare("SELECT COUNT(*) AS count FROM machine_outputs WHERE session_id=?").get(sessionId).count),
+      total: Number(this.db.prepare(`SELECT COUNT(*) AS count FROM machine_outputs WHERE ${where}`).get(...params).count),
       records,
     } : records;
   }
@@ -241,7 +289,14 @@ export class EvidenceRepository {
     return { id: Number(result.lastInsertRowid), sessionId, createdUtc, kind, payload, annotationHash };
   }
 
-  annotations(sessionId) {
-    return this.db.prepare("SELECT id,session_id AS sessionId,created_utc AS createdUtc,kind,payload_json AS payload,annotation_hash AS annotationHash FROM late_annotations WHERE session_id=? ORDER BY id").all(sessionId).map((row) => ({ ...row, payload: json(row.payload, {}) }));
+  annotations(sessionId, options = {}) {
+    const query = "SELECT id,session_id AS sessionId,created_utc AS createdUtc,kind,payload_json AS payload,annotation_hash AS annotationHash FROM late_annotations WHERE session_id=? ORDER BY id";
+    if (options.paginated !== true)
+      return this.db.prepare(query).all(sessionId).map((row) => ({ ...row, payload: json(row.payload, {}) }));
+    const limit = Math.min(500, Math.max(1, Number(options.limit ?? 100)));
+    const offset = Math.max(0, Number(options.offset ?? 0));
+    const rows = this.db.prepare(`${query} LIMIT ? OFFSET ?`).all(sessionId, limit, offset).map((row) => ({ ...row, payload: json(row.payload, {}) }));
+    const total = Number(this.db.prepare("SELECT COUNT(*) AS count FROM late_annotations WHERE session_id=?").get(sessionId).count);
+    return { sessionId, offset, limit, total, records: rows };
   }
 }

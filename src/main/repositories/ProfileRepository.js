@@ -1,4 +1,4 @@
-import { canonical, sha256, validateProfile } from "../../engine.js";
+import { canonical, sha256, validateProfile, OPERATIONAL_PROFILE_IDS } from "../../engine.js";
 import { clone, json, now, profileDto } from "../database/db.js";
 
 const DTO_KEYS = new Set(["configHash", "status", "isDraft", "isActive", "identity", "repositoryProvenance"]);
@@ -70,6 +70,11 @@ export class ProfileRepository {
   getVersion(id, version) { return this.get(id, version); }
   validate(profile) { return validateProfile(profile); }
 
+  _assertOperationalFrozen(id, operation = "edit") {
+    if (OPERATIONAL_PROFILE_IDS.includes(String(id)))
+      throw new Error(`Operational pilot profile ${id} is frozen; duplicate it to create an internal validation profile before ${operation}.`);
+  }
+
   _ensureIdentity(id, provenance, identity = {}) {
     this.db.prepare("INSERT OR IGNORE INTO experiment_profiles(profile_id,name,provenance) VALUES(?,?,?)").run(id, identity.name || id, provenance || identity.provenance || "USER");
     this.db.prepare("INSERT OR IGNORE INTO profile_identities(profile_id,identity_type,identity_label,provenance_json,source_kind,source_ref,created_utc) VALUES(?,?,?,?,?,?,?)").run(id, identity.type || "USER", identity.label || identity.name || id, JSON.stringify(provenance || identity), identity.sourceKind || "USER", identity.sourceRef || null, now());
@@ -78,6 +83,7 @@ export class ProfileRepository {
   createDraft(profile, options = {}) {
     const draft = clone(profile);
     if (!draft.id) throw new Error("profile.id is required");
+    this._assertOperationalFrozen(draft.id, "editing");
     const validation = validateProfile(draft);
     if (options.requireValid && !validation.valid) throw new Error(`Profile validation failed: ${validation.errors.join("; ")}`);
     const current = this.get(draft.id);
@@ -107,6 +113,7 @@ export class ProfileRepository {
   saveNewVersion(profile, options = {}) {
     const value = material(profile);
     if (!value.id) throw new Error("profile.id is required");
+    this._assertOperationalFrozen(value.id, "saving a new version");
     const validation = validateProfile(value);
     if (!validation.valid) throw new Error(`Profile validation failed: ${validation.errors.join("; ")}`);
     const latest = this.db.prepare("SELECT MAX(version) AS version FROM profile_versions WHERE profile_id=?").get(value.id)?.version;
@@ -134,6 +141,12 @@ export class ProfileRepository {
     if (!source) throw new Error(`Profile not found: ${id}${options.version ? ` v${options.version}` : ""}`);
     const copyId = newId || `${id}_COPY_${Date.now()}`;
     const copy = { ...clone(source), id: copyId, version: 1, name: options.name || `${source.name} Copy`, status: "Draft" };
+    // Operational pilot catalog membership is an explicit allow-list. A
+    // duplicate is a new owner-defined profile and therefore must not inherit
+    // the frozen three-profile owner selector, even when its source is one of
+    // the built-ins.
+    if (OPERATIONAL_PROFILE_IDS.includes(source.id) || source.catalog?.visibility === "OPERATIONAL")
+      copy.catalog = { visibility: "INTERNAL_VALIDATION", selectableForOwner: false };
     delete copy.configHash;
     delete copy.isDraft;
     delete copy.isActive;
@@ -142,6 +155,8 @@ export class ProfileRepository {
 
   activate(id, version) {
     const value = Number(version);
+    if (OPERATIONAL_PROFILE_IDS.includes(String(id)) && value !== 1)
+      throw new Error(`Operational pilot profile ${id} is frozen at v1; duplicate it before activating another version.`);
     const row = this.db.prepare("SELECT v.config_json,m.validation_json FROM profile_versions v LEFT JOIN profile_version_metadata m ON m.profile_id=v.profile_id AND m.version=v.version WHERE v.profile_id=? AND v.version=?").get(id, value);
     if (!row) throw new Error(`Profile version not found: ${id} v${version}`);
     const validation = json(row.validation_json, null);

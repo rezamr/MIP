@@ -1,6 +1,7 @@
 export const REPORT_TABS = Object.freeze([
   ["overview", "Overview"],
   ["timeline", "Timeline"],
+  ["audit", "Raw Audit Log"],
   ["machine", "Machine Output"],
   ["occurrences", "Target Occurrences"],
   ["raw", "Raw Report"],

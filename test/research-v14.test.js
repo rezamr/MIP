@@ -22,6 +22,12 @@ import {
   createCompatibilityFingerprint,
   evaluateRevealGate,
 } from "../src/domain/research-model.js";
+import {
+  OPERATIONAL_PROFILE_IDS,
+  profiles,
+  requestInstruction,
+  assignOutcome,
+} from "../src/engine.js";
 import { analyzeTemporalEvidence, aggregateCrossSession } from "../src/main/analysis/temporal-analysis.js";
 import { TemporalEvidenceScheduler } from "../src/main/sessions/temporal-evidence-scheduler.js";
 import { classifyStartupRecovery } from "../src/main/sessions/recovery-policy.js";
@@ -103,6 +109,71 @@ test("target frequency exposes observed and expected finite-space rates", () => 
   assert.equal(result.primary.expectedHits, 0.75);
   assert.equal(result.primary.observedFrequency, 2 / 3);
   assert.equal(result.primary.expectedFrequency, 0.25);
+});
+
+test("operational pilot catalog is exactly three binary participant-stop profiles", () => {
+  assert.deepEqual(OPERATIONAL_PROFILE_IDS, [
+    "OP_REQUEST_BINARY_V1",
+    "OP_CONTROL_BINARY_V1",
+    "OP_AUDIO_SHAM_BINARY_V1",
+  ]);
+  const pilotProfiles = OPERATIONAL_PROFILE_IDS.map((id) => profiles[id]);
+  assert.equal(pilotProfiles.length, 3);
+  for (const profile of pilotProfiles) {
+    assert.deepEqual(profile.outcomeSpace, { type: "BINARY", values: [0, 1] });
+    assert.equal(profile.targetAssignment, "SYSTEM_RANDOM_UNIFORM");
+    assert.equal(profile.rng.provider, "OS_CSPRNG");
+    assert.equal(profile.timing.mode, "PARTICIPANT_STOP_ANCHORED");
+    assert.equal(profile.timing.targetOffsetMs, 0);
+    assert.equal(profile.protocol.stageMode, "PARTICIPANT_PACED");
+    assert.equal(profile.protocol.cueMode, "NONE");
+    assert.deepEqual(profile.protocol.audibleStages, []);
+    assert.equal(profile.analysis.primaryEndpoint, "TARGET_FREQUENCY");
+    assert.equal(profile.analysis.intervalMs, 100);
+    assert.equal(profile.analysis.primaryWindow.preMs, 2_000);
+    assert.equal(profile.analysis.primaryWindow.postMs, 2_000);
+    const sampled = [0, 1, 2, 3].map((index) => assignOutcome(profile, { int: () => index % 2 }));
+    assert.deepEqual(sampled, [0, 1, 0, 1]);
+  }
+  assert.match(requestInstruction(profiles.OP_REQUEST_BINARY_V1, 1), /^Favor 1; return when ready\.$/);
+  assert.match(requestInstruction(profiles.OP_CONTROL_BINARY_V1, 1), /^No target request in this session\./);
+  assert.match(requestInstruction(profiles.OP_AUDIO_SHAM_BINARY_V1, 0), /^Favor 0; return when ready\.$/);
+  assert.equal(profiles.OP_AUDIO_SHAM_BINARY_V1.audio.recipeId, "A-SHAM-0");
+});
+
+test("TARGET_FREQUENCY counts only the committed primary scheduled window", () => {
+  const targetUtc = "2026-01-06T00:00:00.000Z";
+  const primaryWindow = { id: "primary", preMs: 2_000, postMs: 2_000 };
+  const outputs = [
+    { sequence: 0, value: 1, scheduledUtc: "2026-01-05T23:59:56.000Z", actualUtc: "2026-01-05T23:59:56.000Z", status: "ON_TIME" },
+    { sequence: 1, value: 0, scheduledUtc: "2026-01-05T23:59:59.000Z", actualUtc: "2026-01-05T23:59:59.000Z", status: "ON_TIME" },
+    { sequence: 2, value: 1, scheduledUtc: "2026-01-06T00:00:01.000Z", actualUtc: "2026-01-06T00:00:01.000Z", status: "ON_TIME" },
+    { sequence: 3, value: 1, scheduledUtc: "2026-01-06T00:00:04.000Z", actualUtc: "2026-01-06T00:00:04.000Z", status: "ON_TIME" },
+  ];
+  const options = {
+    target: 1,
+    outcomeSpace: { type: "BINARY", values: [0, 1] },
+    primaryEndpoint: "TARGET_FREQUENCY",
+    targetScheduledUtc: targetUtc,
+    primaryWindow,
+    plannedCount: outputs.length,
+    eligibleCount: outputs.length,
+    missedCount: 0,
+  };
+  const result = analyzeTemporalEvidence({ outputs, ...options });
+  assert.equal(result.primary.eligibleCount, 2);
+  assert.equal(result.primary.targetCount, 1);
+  assert.equal(result.primary.otherCount, 1);
+  assert.equal(result.primary.observedFrequency, 0.5);
+  assert.equal(result.primary.expectedFrequency, 0.5);
+  assert.equal(result.primary.deviation, 0);
+  assert.ok(Math.abs(result.primary.exactBinomialProbability.value - 0.5) < 1e-12);
+  assert.ok(Math.abs(result.primary.binomialTail.value - 0.75) < 1e-12);
+  const withoutOutside = analyzeTemporalEvidence({ outputs: outputs.slice(1, 3), ...options, plannedCount: 2, eligibleCount: 2 });
+  assert.equal(withoutOutside.primary.targetCount, result.primary.targetCount);
+  assert.equal(withoutOutside.primary.otherCount, result.primary.otherCount);
+  assert.equal(withoutOutside.primary.observedFrequency, result.primary.observedFrequency);
+  assert.equal(result.occurrences.length, 3);
 });
 
 test("temporal latency is signed from the committed target anchor and missed slots stay unavailable", () => {
@@ -404,6 +475,8 @@ test("reveal gate requires every independent condition", () => {
   const blocked = evaluateRevealGate({ mode: "FUTURE_TARGET", rawReportLocked: true, evidenceComplete: true, primaryResolved: true, postTargetComplete: true, integrityAcceptable: true, futureTargetGenerated: false, predictionCommitted: true });
   assert.equal(blocked.eligible, false);
   assert.deepEqual(blocked.missing, ["futureTargetGenerated"]);
+  assert.equal(blocked.diagnostics.futureTargetGenerated.pass, false);
+  assert.match(blocked.diagnostics.futureTargetGenerated.reason, /Future target generated/);
   assert.equal(evaluateRevealGate({ mode: "FUTURE_TARGET", rawReportLocked: true, evidenceComplete: true, primaryResolved: true, postTargetComplete: true, integrityAcceptable: true, futureTargetGenerated: true, predictionCommitted: true }).eligible, true);
 });
 

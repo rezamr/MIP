@@ -14,7 +14,11 @@ export class SessionService {
   }
 
   get(id) { return api(`/api/sessions/${encodeURIComponent(id)}`); }
-  events(id) { return api(`/api/sessions/${encodeURIComponent(id)}/events`); }
+  events(id, options = {}) {
+    if (window.mip?.getEvents) return window.mip.getEvents({ id, ...options });
+    const query = new URLSearchParams(Object.entries(options).filter(([, value]) => value !== undefined && value !== null)).toString();
+    return api(`/api/sessions/${encodeURIComponent(id)}/events${query ? `?${query}` : ""}`);
+  }
   verify(id) { return api(`/api/sessions/${encodeURIComponent(id)}/verify`); }
   report(id) { return api(`/api/sessions/${encodeURIComponent(id)}/report`); }
   output(id, options = {}) {
@@ -25,8 +29,9 @@ export class SessionService {
     return api(`/api/sessions/${encodeURIComponent(id)}/output${query ? `?${query}` : ""}`);
   }
   analysis(id) { return window.mip?.getAnalysis?.({ id }) ?? null; }
-  occurrences(id) { return window.mip?.getTargetOccurrences?.({ id }) ?? null; }
-  annotations(id) { return window.mip?.getLateAnnotations?.({ id }) ?? []; }
+  occurrences(id, options = {}) { return window.mip?.getTargetOccurrences?.({ id, ...options }) ?? null; }
+  annotations(id, options = {}) { return window.mip?.getLateAnnotations?.({ id, ...options }) ?? []; }
+  revealGate(id) { return window.mip?.getRevealGate?.({ id }) ?? null; }
   addAnnotation(id, kind, annotation) { return window.mip?.addLateAnnotation?.({ id, kind, annotation }); }
   export(id) { return window.mip?.exportSession?.({ id }); }
 

@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld(
     abortEvidence: (value) => call("sessions:abort-evidence", value),
     getResearchDefinition: (value) => call("research:definition", withId(value)),
     getResearchPhases: (value) => call("research:phases", withId(value)),
+    getRevealGate: (value) => call("research:reveal-gate", withId(value)),
     getFutureTarget: (value) => call("future-target:get", withId(value)),
     getTargetOccurrences: (value) => call("research:occurrences", withId(value)),
 

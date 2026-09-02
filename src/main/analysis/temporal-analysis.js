@@ -105,6 +105,40 @@ function windowEligibleCount(outputs, window, targetUtcMs, targetMonotonicNs, ta
   }).length;
 }
 
+function hasCommittedWindowBoundary(window = {}) {
+  return window.enabled === false ||
+    Number(window.preMs || 0) > 0 ||
+    Number(window.postMs || 0) > 0 ||
+    window.exactSequence !== null && window.exactSequence !== undefined ||
+    window.sequenceStart !== null && window.sequenceStart !== undefined ||
+    window.sequenceEnd !== null && window.sequenceEnd !== undefined ||
+    window.sequenceOffsetStart !== null && window.sequenceOffsetStart !== undefined ||
+    window.sequenceOffsetEnd !== null && window.sequenceOffsetEnd !== undefined;
+}
+
+/**
+ * Select the committed opportunity set for TARGET_FREQUENCY.  Membership is
+ * based on scheduled time/sequence, never on callback time.  Window-less
+ * legacy definitions retain their historical all-output behavior; every
+ * operational profile carries an explicit primary window.
+ */
+function primaryFrequencyRecords(outputs, window, targetUtcMs, targetMonotonicNs, targetSequence) {
+  const normalized = normalizeTemporalWindow(window);
+  if (!hasCommittedWindowBoundary(normalized)) return outputs;
+  const { start, end } = sequenceBounds(normalized, targetSequence);
+  if (start !== null || end !== null)
+    return outputs.filter((record) => {
+      if (normalized.enabled === false) return false;
+      const sequence = outputSequence(record);
+      return sequence !== null && start !== null && end !== null && sequence >= start && sequence <= end;
+    });
+  return outputs.filter((record) => isWithinCommittedTimeWindow(record, targetUtcMs, targetMonotonicNs, normalized));
+}
+
+function sameOutcome(left, right) {
+  return left === right || String(left) === String(right);
+}
+
 /**
  * Keep every occurrence of the target.  The exact primary slot is selected
  * separately by analyzeTemporalEvidence; early/late observations are never
@@ -208,8 +242,24 @@ function endpointPrimary({ outputs, target, outcomeSpace, endpoint, targetSequen
       slot: null,
     };
   }
-  const eligible = outputs.filter((record) => !isMissedStatus(record.status || record.timingStatus)).length;
-  return { resolved: eligible > 0, status: eligible > 0 ? "RESOLVED" : "UNAVAILABLE", hit: occurrences.length > 0, slot: null };
+  const selected = primaryFrequencyRecords(outputs, window, utcMs(targetScheduledUtc), targetScheduledMonotonicNs, targetSequence);
+  const missed = selected.filter((record) => isMissedStatus(record.status || record.timingStatus));
+  const eligible = selected.filter((record) => !isMissedStatus(record.status || record.timingStatus));
+  const targetCount = eligible.filter((record) => {
+    const value = record.value ?? record.output ?? record.result;
+    return target !== null && target !== undefined && containsOutcome(outcomeSpace, value) && sameOutcome(value, target);
+  }).length;
+  return {
+    resolved: selected.length > 0 && missed.length === 0,
+    status: missed.length > 0 ? "MISSED" : selected.length > 0 ? "RESOLVED" : "UNAVAILABLE",
+    hit: targetCount > 0,
+    slot: null,
+    selected,
+    eligible,
+    missed,
+    targetCount,
+    otherCount: Math.max(0, eligible.length - targetCount),
+  };
 }
 
 export function analyzeTemporalEvidence({
@@ -255,6 +305,19 @@ export function analyzeTemporalEvidence({
     throw new RangeError("missed and eligible opportunities cannot exceed planned opportunities");
   const hits = occurrences.length;
   const normalizedEndpoint = String(primaryEndpoint || PRIMARY_ENDPOINTS.EXACT_SLOT).toUpperCase();
+  const targetUtcMs = utcMs(effectiveTargetScheduledUtc);
+  const primaryFrequency = normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY
+    ? (() => {
+      const selected = primaryFrequencyRecords(outputs, normalizedWindow, targetUtcMs, effectiveTargetScheduledMonotonicNs, targetSequence);
+      const eligible = selected.filter((record) => !isMissedStatus(record.status || record.timingStatus));
+      const missed = selected.filter((record) => isMissedStatus(record.status || record.timingStatus));
+      const targetCount = eligible.filter((record) => {
+        const value = record.value ?? record.output ?? record.result;
+        return target !== null && target !== undefined && containsOutcome(space, value) && sameOutcome(value, target);
+      }).length;
+      return { selected, eligible, missed, targetCount, otherCount: Math.max(0, eligible.length - targetCount) };
+    })()
+    : null;
   const primaryEligibleCount = normalizedEndpoint === PRIMARY_ENDPOINTS.EXACT_SLOT
     ? (endpoint.slot && !isMissedStatus(endpoint.slot.status || endpoint.slot.timingStatus) ? 1 : 0)
     : normalizedEndpoint === PRIMARY_ENDPOINTS.FIXED_SEQUENCE_WINDOW
@@ -278,9 +341,18 @@ export function analyzeTemporalEvidence({
           if (isMissedStatus(record.status || record.timingStatus)) return false;
           return isWithinCommittedTimeWindow(record, utcMs(effectiveTargetScheduledUtc), effectiveTargetScheduledMonotonicNs, normalizedWindow);
         }).length
-        : nEligible;
+        : primaryFrequency.eligible.length;
+  const primaryTargetCount = normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY
+    ? primaryFrequency.targetCount
+    : endpoint.hit ? 1 : 0;
+  const primaryMissedCount = normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY
+    ? primaryFrequency.missed.length
+    : null;
   const primaryProbability = endpoint.resolved && endpoint.status !== "MISSED"
-    ? normalizedEndpoint === PRIMARY_ENDPOINTS.EXACT_SLOT ? 1 / cardinality : anyHitProbability(cardinality, Math.min(nEligible, primaryEligibleCount)).value
+    ? normalizedEndpoint === PRIMARY_ENDPOINTS.EXACT_SLOT ? 1 / cardinality
+      : normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY
+        ? binomialProbability(cardinality, primaryEligibleCount, primaryTargetCount)
+        : anyHitProbability(cardinality, Math.min(nEligible, primaryEligibleCount)).value
     : null;
   const committedWindows = Array.isArray(analysisWindows) && analysisWindows.length
     ? analysisWindows.map(normalizeTemporalWindow)
@@ -292,14 +364,24 @@ export function analyzeTemporalEvidence({
       return recordMatchesWindow(record || occurrence, occurrence, window, utcMs(effectiveTargetScheduledUtc), effectiveTargetScheduledMonotonicNs, targetSequence);
     });
     const eligible = windowEligibleCount(outputs, window, utcMs(effectiveTargetScheduledUtc), effectiveTargetScheduledMonotonicNs, targetSequence);
+    const frequencyWindow = normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY && window.id === normalizedWindow.id
+      ? primaryFrequencyRecords(outputs, window, targetUtcMs, effectiveTargetScheduledMonotonicNs, targetSequence)
+      : null;
+    const frequencyEligible = frequencyWindow?.filter((record) => !isMissedStatus(record.status || record.timingStatus)) || [];
+    const frequencyHits = frequencyEligible.filter((record) => {
+      const value = record.value ?? record.output ?? record.result;
+      return target !== null && target !== undefined && containsOutcome(space, value) && sameOutcome(value, target);
+    }).length;
+    const resultEligible = frequencyWindow ? frequencyEligible.length : eligible;
     return {
       id: window.id,
       exploratory: window.exploratory === true,
       enabled: window.enabled,
-      observedHits: windowOccurrences.length,
-      eligibleCount: eligible,
-      expectedHits: eligible / cardinality,
-      anyHitProbability: anyHitProbability(cardinality, eligible).value,
+      observedHits: frequencyWindow ? frequencyHits : windowOccurrences.length,
+      eligibleCount: resultEligible,
+      missedCount: frequencyWindow ? frequencyWindow.length - frequencyEligible.length : undefined,
+      expectedHits: resultEligible / cardinality,
+      anyHitProbability: anyHitProbability(cardinality, resultEligible).value,
     };
   });
   const chronologicalOccurrences = [...occurrences].sort((left, right) => {
@@ -357,10 +439,23 @@ export function analyzeTemporalEvidence({
       eligibleCount: primaryEligibleCount,
       probability: primaryProbability,
       classification: endpoint.hit ? "PRIMARY_HIT" : endpoint.status === "MISSED" ? "MISSED_OR_UNAVAILABLE" : endpoint.resolved ? "PRIMARY_NO_HIT" : "MISSED_OR_UNAVAILABLE",
-      observedHits: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY ? hits : undefined,
-      expectedHits: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY ? nEligible / cardinality : undefined,
-      observedFrequency: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY && nEligible ? hits / nEligible : undefined,
+      observedHits: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY ? primaryTargetCount : undefined,
+      expectedHits: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY ? primaryEligibleCount / cardinality : undefined,
+      observedFrequency: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY && primaryEligibleCount ? primaryTargetCount / primaryEligibleCount : null,
       expectedFrequency: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY ? 1 / cardinality : undefined,
+      targetCount: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY ? primaryTargetCount : undefined,
+      otherCount: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY ? primaryFrequency.otherCount : undefined,
+      missedCount: primaryMissedCount,
+      deviation: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY && primaryEligibleCount
+        ? primaryTargetCount / primaryEligibleCount - 1 / cardinality
+        : null,
+      exactBinomialProbability: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY && endpoint.selected?.length
+        ? binomialProbability(cardinality, primaryEligibleCount, primaryTargetCount)
+        : null,
+      binomialTail: normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY && endpoint.selected?.length
+        ? binomialTail(cardinality, primaryEligibleCount, primaryTargetCount, "GE")
+        : null,
+      analysisVersion,
     },
     occurrences,
     temporalWindow: normalizedWindow,
@@ -426,7 +521,18 @@ export function aggregateCrossSession(sessions = [], options = {}) {
   });
   const fingerprints = [...new Set(eligible.map((session) => session.compatibilityFingerprint || createCompatibilityFingerprint(session.definition || session)))];
   const cardinalities = [...new Set(eligible.map((session) => Number(session.analysis?.cardinality ?? session.definition?.cardinality ?? 0)).filter((value) => Number.isFinite(value) && value > 0))];
-  const compatible = fingerprints.length <= 1 && cardinalities.length <= 1;
+  const conditionOf = (session) => {
+    const explicit = session.condition || session.conditionId || session.profile?.catalog?.condition || session.definition?.condition || session.definition?.catalog?.condition;
+    if (explicit) return String(explicit).toUpperCase();
+    const mode = session.mode || session.definition?.mode || session.profile?.mode;
+    return mode ? String(mode).toUpperCase() : null;
+  };
+  const conditions = [...new Set(eligible.map(conditionOf).filter(Boolean))];
+  // Profile/condition identity is part of the compatibility boundary even
+  // when a legacy caller supplied an incomplete or hand-written fingerprint.
+  // REQUEST, CONTROL, and AUDIO_SHAM may be compared explicitly, but they are
+  // never silently pooled as one confirmatory condition.
+  const compatible = fingerprints.length <= 1 && cardinalities.length <= 1 && conditions.length <= 1;
   if (!compatible && options.requireCompatible !== false) throw new Error("Cross-session definitions are incompatible");
   const analyses = eligible.map((session) => session.analysis);
   const totalPlanned = analyses.reduce((sum, analysis) => sum + Number(analysis.plannedCount || 0), 0);
@@ -434,6 +540,11 @@ export function aggregateCrossSession(sessions = [], options = {}) {
   const totalMissed = analyses.reduce((sum, analysis) => sum + Number(analysis.missedCount || 0), 0);
   const totalHits = analyses.reduce((sum, analysis) => sum + Number(analysis.hits || 0), 0);
   const primaryHits = analyses.filter((analysis) => analysis.primary?.hit === true).length;
+  const primarySummaries = analyses.map((analysis) => analysis.primary || {});
+  const primaryEligibleCount = primarySummaries.reduce((sum, primary) => sum + Number(primary.eligibleCount || 0), 0);
+  const primaryTargetCount = primarySummaries.reduce((sum, primary) => sum + Number(primary.targetCount ?? primary.observedHits ?? 0), 0);
+  const primaryOtherCount = primarySummaries.reduce((sum, primary) => sum + Number(primary.otherCount || 0), 0);
+  const primaryMissedCount = primarySummaries.reduce((sum, primary) => sum + Number(primary.missedCount || 0), 0);
   const perSession = eligible.map((session) => {
     const analysis = session.analysis;
     const occurrences = (analysis.occurrences || []).map((occurrence) => ({
@@ -454,6 +565,9 @@ export function aggregateCrossSession(sessions = [], options = {}) {
     const completion = sessionCompletion(session, analysis);
     return {
       sessionId: session.sessionId,
+      profileId: session.profileId || session.definition?.profileId || session.profile?.id || null,
+      profileVersion: session.profileVersion || session.definition?.profileVersion || session.profile?.version || null,
+      condition: conditionOf(session),
       primaryHit: analysis.primary?.hit === true,
       hits: analysis.hits || 0,
       plannedCount: analysis.plannedCount || 0,
@@ -470,6 +584,10 @@ export function aggregateCrossSession(sessions = [], options = {}) {
       completed: completion.complete,
       deviated: completion.deviated,
       occurrences,
+      primaryEligibleCount: Number(analysis.primary?.eligibleCount || 0),
+      primaryTargetCount: Number(analysis.primary?.targetCount ?? analysis.primary?.observedHits ?? 0),
+      primaryOtherCount: Number(analysis.primary?.otherCount || 0),
+      primaryMissedCount: Number(analysis.primary?.missedCount || 0),
     };
   });
   const latencies = perSession.flatMap((session) => session.occurrences.map((occurrence) => occurrence.signedLatencyMs));
@@ -529,6 +647,13 @@ export function aggregateCrossSession(sessions = [], options = {}) {
     hits: totalHits,
     primaryHits,
     primaryHitRate: eligible.length ? primaryHits / eligible.length : null,
+    primaryEligibleCount,
+    primaryTargetCount,
+    primaryOtherCount,
+    primaryMissedCount,
+    primaryObservedFrequency: primaryEligibleCount ? primaryTargetCount / primaryEligibleCount : null,
+    primaryExpectedFrequency: cardinality ? 1 / cardinality : null,
+    primaryDeviation: primaryEligibleCount ? primaryTargetCount / primaryEligibleCount - 1 / cardinality : null,
     expectedPrimaryHits,
     expectedExactPrimaryMatches: analyses.reduce((sum, analysis) => {
       const endpoint = String(analysis.endpoint || PRIMARY_ENDPOINTS.EXACT_SLOT).toUpperCase();
@@ -567,6 +692,7 @@ export function aggregateCrossSession(sessions = [], options = {}) {
       }));
     }),
     perSession,
+    conditions,
     labels: { primary: "PRECOMMITTED_PRIMARY", secondary: "PRECOMMITTED_SECONDARY", occurrences: cross.exploratory ? "EXPLORATORY / POST-HOC" : "target-relative occurrences", aggregate: aggregateLabel, firstHitLatency: "signed milliseconds from committed target anchor T" },
   });
 }

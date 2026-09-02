@@ -1697,9 +1697,11 @@ export class MipDatabase {
             this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: repairedEligible ? "ELIGIBLE" : "BLOCKED" });
         })();
         const currentStatus = this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status;
-        return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: currentStatus === "REVEAL_ELIGIBLE", repaired: true };
+        const gate = temporalGate ? this.research.revealGate(sessionId) : null;
+        return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: currentStatus === "REVEAL_ELIGIBLE", repaired: true, revealGate: gate };
       }
-      return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: eligible };
+      const gate = temporalGate ? this.research.revealGate(sessionId) : null;
+      return { sessionId, lockedUtc: existing.locked_utc, lockHash: existing.lock_hash, schemaVersion: existing.schema_version, alreadyLocked: true, revealEligible: eligible, revealGate: gate };
     }
     if (!["RETURNED", "RAW_REPORT_DRAFT", "ABORTED"].includes(session.status))
       throw new Error("A report cannot be locked before formal return.");
@@ -1718,7 +1720,8 @@ export class MipDatabase {
         if (temporalGate)
           this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: "BLOCKED", sessionLifecycle: "ABORTED" });
       })();
-      return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: false, alreadyLocked: false, evidenceAborted: true };
+      const gate = temporalGate ? this.research.revealGate(sessionId) : null;
+      return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: false, alreadyLocked: false, evidenceAborted: true, revealGate: gate };
     }
     const appendEdge = (from, to, eventType, payload, evidence) => {
       const event = this.evidence.appendEvent(sessionId, trialId, eventType, payload);
@@ -1740,7 +1743,8 @@ export class MipDatabase {
         this.research.updatePhases(sessionId, { reportStatus: "LOCKED", revealStatus: eligible ? "ELIGIBLE" : "BLOCKED" });
     })();
     const finalStatus = this.db.prepare("SELECT status FROM sessions WHERE session_id=?").get(sessionId)?.status;
-    return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: finalStatus === "REVEAL_ELIGIBLE", alreadyLocked: false };
+    const gate = temporalGate ? this.research.revealGate(sessionId) : null;
+    return { sessionId, lockedUtc, lockHash, schemaVersion, revealEligible: finalStatus === "REVEAL_ELIGIBLE", alreadyLocked: false, revealGate: gate };
   }
 
   getReport(sessionId, options = {}) {

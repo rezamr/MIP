@@ -10,9 +10,9 @@ export const NAVIGATION_PAGE_IDS = Object.freeze([
 export const PAGE_HELP = Object.freeze({
   start: page(
     "Start Research Session",
-    "Commit and execute one declared research session from immutable profile and recipe versions.",
+    "Commit and execute one of exactly three small operational pilot conditions from immutable profile and recipe versions.",
     "The Electron main process owns profile resolution, target assignment, commitment, AudioWorklet authentication, named-event timing, evidence persistence, and reveal gating.",
-    "Select a profile, review outcome space/cardinality, RNG, cadence, target anchor, signed target offset, independent pre/post windows, endpoint, recipe, and reveal policy. For participant-paced profiles, START begins a self-paced procedure: the application does not choose induction, request, release, neutral, or return times and emits no fixed stage cue track. STOP/RETURN is the only authoritative reference point: target T is derived as STOP/RETURN plus the committed signed offset, and its UTC time is unknown until return. Confirm baseline/safety, memory/readiness, commit, wait for PROCESSOR_READY, then start. Return ends the participant phase; it does not necessarily end evidence monitoring.",
+    "Choose Binary Request, Binary No-Intention Control, or Binary Request — Audio Sham. Review the frozen BINARY [0,1], OS_CSPRNG, participant-paced STOP/RETURN, zero offset, A-U396-4 or A-SHAM-0 recipe, TARGET_FREQUENCY ±2 second window, 100 ms cadence, no-cue protocol, and reveal policy. Administrative participant, record, baseline, environment, and safety fields remain editable; arbitrary timing, outcome, and mapping overrides are not part of the pilot workflow. For participant-paced profiles, START begins a self-paced procedure: the application does not choose induction, request, release, neutral, or return times and emits no fixed stage cue track. STOP/RETURN is the only authoritative reference point: target T is derived as STOP/RETURN plus the committed signed offset, and its UTC time is unknown until return. Confirm baseline/safety, memory/readiness, commit, wait for PROCESSOR_READY, then start. Return ends the participant phase; it does not necessarily end evidence monitoring.",
     "Do not alter profile/recipe versions, target semantics, timing, endpoint, or reveal policy after commitment. Never infer hidden objective data from a pre-reveal screen.",
     "Participant phase is owner-facing; evidence phase may continue through T plus the independent post window. Raw report draft is mutable; lock is immutable. Reveal eligibility is separate from report lock.",
     "PASS means authenticated audio and protocol events are persisted. WARNING means a timing/recovery deviation or evidence phase is incomplete. FAILURE requires explicit recovery and no backfill.",
@@ -32,14 +32,14 @@ export const PAGE_HELP = Object.freeze({
   ),
   profiles: page(
     "Experiment Profiles",
-    "Manage immutable experiment/protocol definitions and versions.",
+    "Inspect the exactly three owner-facing operational pilot profiles and their immutable definitions.",
     "SQLite stores drafts, validation, config hashes, activation, and parent versions. Profiles define mode, outcome space, RNG, timing, windows, endpoint, recipe reference, and reveal policy.",
-    "Duplicate/Edit Draft, Validate, Diff, Save New Version, then Activate after review. Existing sessions retain their original profile version.",
+    "The normal catalog shows only Binary Request, Binary No-Intention Control, and Binary Request — Audio Sham. These pilot cards are read-only and frozen for the owner-facing workflow; engineering/demo profiles remain resolvable for historical audit but are not selectable for new owner sessions. Existing sessions retain their original profile version.",
     "Never edit a committed version in place or assume an outcome-range edit changes audio without selecting another recipe.",
     "Version, status, active flag, config fingerprint, outcome cardinality, recipe reference, stage policy, and cue policy identify the effective protocol. Participant-paced STOP/RETURN profiles have no timed internal-stage measurements.",
     "PASS means validation and immutable persistence succeeded. DRAFT/INACTIVE/UNKNOWN require review before use.",
     "A valid protocol is not evidence that a scientific hypothesis is true.",
-    "Duplicate the baseline, change one window, validate/diff/save, and confirm the old version is unchanged.",
+    "Verify that exactly three operational cards are shown, then inspect a version without changing it. Engineering-only profile IDs should remain available through historical reports, not the normal selector.",
   ),
   recipes: page(
     "Audio Recipe Library",

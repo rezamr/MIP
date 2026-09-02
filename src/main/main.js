@@ -27,11 +27,13 @@ import {
   normalizeExecutionWindow,
   normalizeTargetOffsetMs,
   isParticipantStopAnchor,
+  normalizeTemporalAnalysisPlan,
   createCompatibilityFingerprint,
   EXPERIMENT_MODES,
   sha256,
   timingPlan,
   validateProfile,
+  OPERATIONAL_PROFILE_IDS,
 } from "../engine.js";
 import {
   AUDIO_VERSION,
@@ -1343,6 +1345,106 @@ function validateRawReportForLock(report) {
   return report;
 }
 
+/**
+ * Operational pilot profiles are intentionally frozen protocol definitions.
+ * The generic engine still accepts rich session overrides for historical and
+ * internal validation profiles, but an owner/API caller must not turn one of
+ * the three pilot conditions into a different experiment by supplying a
+ * second mode, outcome space, timing plan, cadence, endpoint, or target.
+ * Administrative fields (participant label, record type, notes, and the
+ * optional execution window) are handled separately by the session handler.
+ */
+function assertOperationalSessionPayload(value, profile) {
+  if (!OPERATIONAL_PROFILE_IDS.includes(profile?.id)) return;
+  const expectedMode = String(profile.mode || profile.experimentMode || "").toUpperCase();
+  const suppliedMode = value.mode ?? value.experimentMode;
+  if (suppliedMode !== undefined && String(suppliedMode).toUpperCase() !== expectedMode)
+    throw new Error(`Operational profile ${profile.id} fixes experiment mode to ${expectedMode}.`);
+
+  if (value.outcomeSpace !== undefined && value.outcomeSpace !== null) {
+    let supplied;
+    try { supplied = normalizeOutcomeSpace(value.outcomeSpace); }
+    catch (error) { throw new Error(`Operational profile ${profile.id} requires BINARY outcome space: ${error.message}`); }
+    const expected = normalizeOutcomeSpace(profile.outcomeSpace);
+    if (canonical(supplied) !== canonical(expected))
+      throw new Error(`Operational profile ${profile.id} fixes outcome space to BINARY [0, 1].`);
+  }
+
+  const expectedTimingMode = String(profile.timing?.mode || "PARTICIPANT_STOP_ANCHORED").toUpperCase();
+  const suppliedTiming = value.timing;
+  if (suppliedTiming !== undefined && suppliedTiming !== null) {
+    if (!suppliedTiming || typeof suppliedTiming !== "object" || Array.isArray(suppliedTiming))
+      throw new Error(`Operational profile ${profile.id} does not accept a custom timing plan.`);
+    const allowedTimingKeys = new Set(["mode", "anchor", "anchorReference", "targetOffsetMs", "offsetMs"]);
+    const unexpected = Object.keys(suppliedTiming).filter((key) => !allowedTimingKeys.has(key));
+    if (unexpected.length) throw new Error(`Operational profile ${profile.id} freezes timing; unsupported override: ${unexpected.join(", ")}.`);
+    const mode = suppliedTiming.mode ?? suppliedTiming.timingMode;
+    if (mode !== undefined && String(mode).toUpperCase() !== expectedTimingMode)
+      throw new Error(`Operational profile ${profile.id} fixes timing mode to ${expectedTimingMode}.`);
+    const anchor = suppliedTiming.anchor ?? suppliedTiming.anchorReference;
+    if (anchor !== undefined && !["PARTICIPANT_STOP", "PARTICIPANT_STOP_RETURN"].includes(String(anchor).toUpperCase()))
+      throw new Error(`Operational profile ${profile.id} fixes the target anchor to PARTICIPANT_STOP_RETURN.`);
+    const offset = suppliedTiming.targetOffsetMs ?? suppliedTiming.offsetMs;
+    if (offset !== undefined && normalizeTargetOffsetMs(offset) !== 0)
+      throw new Error(`Operational profile ${profile.id} fixes targetOffsetMs to 0.`);
+  }
+
+  const suppliedOffset = value.targetOffsetMs ?? value.targetDefinition?.targetOffsetMs;
+  if (suppliedOffset !== undefined && normalizeTargetOffsetMs(suppliedOffset) !== 0)
+    throw new Error(`Operational profile ${profile.id} fixes targetOffsetMs to 0.`);
+
+  const targetDefinition = value.targetDefinition;
+  if (targetDefinition !== undefined && targetDefinition !== null) {
+    if (!targetDefinition || typeof targetDefinition !== "object" || Array.isArray(targetDefinition))
+      throw new Error(`Operational profile ${profile.id} does not accept a custom target definition.`);
+    const allowedTargetKeys = new Set(["mode", "anchor", "anchorReference", "targetOffsetMs", "offsetMs", "target", "prediction"]);
+    const unexpected = Object.keys(targetDefinition).filter((key) => !allowedTargetKeys.has(key));
+    if (unexpected.length) throw new Error(`Operational profile ${profile.id} freezes target timing; unsupported override: ${unexpected.join(", ")}.`);
+    const mode = targetDefinition.mode;
+    if (mode !== undefined && String(mode).toUpperCase() !== expectedMode)
+      throw new Error(`Operational profile ${profile.id} fixes experiment mode to ${expectedMode}.`);
+    const anchor = targetDefinition.anchor ?? targetDefinition.anchorReference;
+    if (anchor !== undefined && !["PARTICIPANT_STOP", "PARTICIPANT_STOP_RETURN"].includes(String(anchor).toUpperCase()))
+      throw new Error(`Operational profile ${profile.id} fixes the target anchor to PARTICIPANT_STOP_RETURN.`);
+    const offset = targetDefinition.targetOffsetMs ?? targetDefinition.offsetMs;
+    if (offset !== undefined && normalizeTargetOffsetMs(offset) !== 0)
+      throw new Error(`Operational profile ${profile.id} fixes targetOffsetMs to 0.`);
+    if (targetDefinition.target !== undefined && targetDefinition.target !== null)
+      throw new Error(`Operational profile ${profile.id} assigns the binary target independently; a caller cannot supply it.`);
+    if (targetDefinition.prediction !== undefined && targetDefinition.prediction !== null && String(targetDefinition.prediction).trim() !== "")
+      throw new Error(`Operational profile ${profile.id} does not accept a future-target prediction.`);
+  }
+  if (value.target !== undefined && value.target !== null)
+    throw new Error(`Operational profile ${profile.id} assigns the binary target independently; a caller cannot supply it.`);
+  if (value.prediction !== undefined && value.prediction !== null && String(value.prediction).trim() !== "")
+    throw new Error(`Operational profile ${profile.id} does not accept a future-target prediction.`);
+  for (const key of ["futureTargetUtc", "targetDelayMs"]) {
+    if (value[key] !== undefined && value[key] !== null && value[key] !== "")
+      throw new Error(`Operational profile ${profile.id} does not accept ${key}.`);
+  }
+
+  const suppliedAnalysis = value.temporalAnalysis ?? value.analysisPlan ?? value.analysis;
+  if (suppliedAnalysis !== undefined && suppliedAnalysis !== null) {
+    let supplied;
+    try { supplied = normalizeTemporalAnalysisPlan(suppliedAnalysis, { plannedBeforeCommit: true }); }
+    catch (error) { throw new Error(`Operational profile ${profile.id} requires its committed temporal plan: ${error.message}`); }
+    const expected = normalizeTemporalAnalysisPlan(profile.analysis || {}, { plannedBeforeCommit: true });
+    if (canonical(supplied) !== canonical(expected))
+      throw new Error(`Operational profile ${profile.id} fixes TARGET_FREQUENCY, a ±2 second primary window, and 100 ms cadence.`);
+  }
+  const suppliedEndpoint = value.primaryEndpoint;
+  if (suppliedEndpoint !== undefined && String(suppliedEndpoint).toUpperCase() !== String(profile.analysis?.primaryEndpoint || "TARGET_FREQUENCY").toUpperCase())
+    throw new Error(`Operational profile ${profile.id} fixes primary endpoint to TARGET_FREQUENCY.`);
+  const suppliedCadence = value.outputCadence;
+  if (suppliedCadence !== undefined && String(suppliedCadence).toUpperCase() !== String(profile.analysis?.outputCadence || "FIXED_INTERVAL").toUpperCase())
+    throw new Error(`Operational profile ${profile.id} fixes output cadence to FIXED_INTERVAL.`);
+  if (value.rng !== undefined && value.rng !== null) {
+    const provider = typeof value.rng === "string" ? value.rng : value.rng?.provider;
+    if (provider !== undefined && String(provider).toUpperCase() !== String(profile.rng?.provider || "OS_CSPRNG").toUpperCase())
+      throw new Error(`Operational profile ${profile.id} fixes RNG provider to OS_CSPRNG.`);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -1370,11 +1472,19 @@ function createWindow() {
 function registerLibraryHandlers() {
   handle("profiles:list", (payload) => {
     const options = objectPayload(payload, "profile filters", { optional: true, maxBytes: 32_000 });
+    const operationalOnly = options.allProfiles !== true && options.includeInternal !== true;
     return db.profiles.list({
       allVersions: options.allVersions === true,
       activeOnly: options.activeOnly === true,
       search: options.search ? stringValue(options.search, "profile search", { max: 128 }) : undefined,
-    }).map((profile) => ({ ...profile, validation: validateProfile(profile) }));
+    // The owner catalog is deliberately an allow-list, not a mutable metadata
+    // flag.  A duplicated/owner-created profile may inherit the OPERATIONAL
+    // catalog marker, but it must never expand the three-condition pilot
+    // selector.  Historical/internal profiles remain resolvable through the
+    // explicit allProfiles/includeInternal paths.
+    }).filter((profile) => !operationalOnly || OPERATIONAL_PROFILE_IDS.includes(profile.id))
+      .sort((left, right) => Number(left.catalog?.displayOrder || 99) - Number(right.catalog?.displayOrder || 99) || String(left.name).localeCompare(String(right.name)))
+      .map((profile) => ({ ...profile, validation: validateProfile(profile) }));
   });
   handle("profiles:get", (payload) => {
     const value = objectPayload(payload);
@@ -1406,7 +1516,7 @@ function registerLibraryHandlers() {
   });
   handle("profiles:duplicate", (payload) => {
     const value = objectPayload(payload, "profile duplicate request", { optional: true });
-    const source = identifier(value.profileId || value.id || "BASELINE_NOW_BINARY_V1", "profile id");
+    const source = identifier(value.profileId || value.id || "OP_REQUEST_BINARY_V1", "profile id");
     const newId = value.newId === undefined ? undefined : identifier(value.newId, "new profile id");
     return db.profiles.duplicate(source, newId, {
       version: value.version === undefined ? undefined : positiveInteger(value.version, "profile version"),
@@ -1485,10 +1595,21 @@ function registerSessionHandlers() {
   });
   handle("sessions:get", (payload) => sessionDto(sessionId(payload)));
   handle("sessions:events", (payload) => {
-    const id = sessionId(payload);
+    const value = objectPayload(payload, "event request", { optional: true, maxBytes: 32_000 });
+    const id = sessionId(value);
     const revealed = isRevealed(id);
-    const events = db.evidence.list(id, { full: revealed }).map((event) => redactSessionData(event, revealed));
-    return { sessionId: id, events };
+    const paginated = value.paginated === true || value.limit !== undefined || value.offset !== undefined || value.type !== undefined || value.search !== undefined;
+    if (!paginated) {
+      const events = db.evidence.list(id, { full: revealed }).map((event) => redactSessionData(event, revealed));
+      return { sessionId: id, events };
+    }
+    const limit = value.limit === undefined ? 100 : positiveInteger(value.limit, "event page size", { min: 1, max: 500 });
+    const offset = value.offset === undefined ? 0 : positiveInteger(value.offset, "event offset", { min: 0 });
+    const types = Array.isArray(value.types)
+      ? value.types.slice(0, 64).map((type) => stringValue(type, "event type", { max: 128 }))
+      : undefined;
+    const page = db.evidence.list(id, { full: revealed, paginated: true, limit, offset, type: value.type ? stringValue(value.type, "event type", { max: 128 }) : undefined, types, search: value.search ? stringValue(value.search, "event search", { max: 256 }) : undefined });
+    return { ...page, events: page.events.map((event) => redactSessionData(event, revealed)) };
   });
   handle("sessions:output", (payload) => {
     const value = objectPayload(payload, "output request");
@@ -1504,6 +1625,13 @@ function registerSessionHandlers() {
       // explicit page request.
       limit: value.limit === undefined ? 5_000 : positiveInteger(value.limit, "output page size", { min: 1, max: 5_000 }),
     };
+    for (const key of ["scheduledFromUtc", "scheduledToUtc"]) {
+      if (value[key] === undefined || value[key] === null || value[key] === "") continue;
+      const candidate = stringValue(value[key], key, { max: 64 });
+      const parsed = Date.parse(candidate);
+      if (!Number.isFinite(parsed)) throw new Error(`${key} must be a valid UTC datetime.`);
+      options[key] = new Date(parsed).toISOString();
+    }
     return db.evidence.outputs(id, options);
   });
   handle("sessions:verify", (payload) => {
@@ -1513,10 +1641,11 @@ function registerSessionHandlers() {
   });
   handle("sessions:create", (payload) => {
     const value = objectPayload(payload, "session request", { optional: true, maxBytes: 128_000 });
-    const profileId = identifier(value.profileId || "BASELINE_NOW_BINARY_V1", "profile id");
+    const profileId = identifier(value.profileId || "OP_REQUEST_BINARY_V1", "profile id");
     const requestedProfileVersion = value.profileVersion === undefined ? undefined : positiveInteger(value.profileVersion, "profile version");
     const profile = db.profiles.getVersion(profileId, requestedProfileVersion);
     if (!profile) throw new Error(`Profile version is not available in SQLite: ${profileId} v${requestedProfileVersion ?? "active"}.`);
+    assertOperationalSessionPayload(value, profile);
     const requestedMode = String(value.mode || value.experimentMode || profile.mode || EXPERIMENT_MODES.INFLUENCE).toUpperCase();
     if (!Object.values(EXPERIMENT_MODES).includes(requestedMode)) throw new Error(`Unsupported experiment mode: ${requestedMode}.`);
     const timingMode = String(value.timing?.mode || profile.timing?.mode || "IMMEDIATE_REQUEST").toUpperCase();
@@ -1594,6 +1723,8 @@ function registerSessionHandlers() {
       throw new Error(`Formal session requires an active, complete recipe: ${recipe.recipeId} v${recipe.version}.`);
     if (recipe.formalOperationalEligibility !== true)
       throw new Error(`Formal session requires an operationally eligible audio recipe: ${recipe.recipeId} v${recipe.version}. ${recipe.formalEligibilityReason || "One or more configuration, provenance, runtime, deterministic, activation, or applicable reference gates are not current."}`);
+    if (OPERATIONAL_PROFILE_IDS.includes(profile.id) && value.sampleRate !== undefined && Number(value.sampleRate) !== Number(recipe.sampleRate))
+      throw new Error(`Operational profile ${profile.id} fixes the audio sample rate to ${recipe.sampleRate} Hz.`);
     // RNG provider is part of the effective (session > profile > app)
     // research definition.  Reading only the profile silently ignored a
     // deliberate session/application override and could make the persisted
@@ -1614,10 +1745,8 @@ function registerSessionHandlers() {
     const participantTarget = objective === null
       ? (requestedMode === EXPERIMENT_MODES.FUTURE_TARGET ? `Prediction committed: ${String(requestedPrediction)}` : null)
       : requestedMode === EXPERIMENT_MODES.CONTROL
-        ? (profile.timing?.controlWording || "Control condition: observe the scheduled protocol neutrally; no participant target is requested.")
-        : requestedMode === EXPERIMENT_MODES.SHAM
-          ? (profile.timing?.shamWording || "Sham condition: observe the scheduled protocol neutrally.")
-          : requestInstruction({ ...profile, outcomeSpace: effective.outcomeSpace }, objective);
+        ? (profile.timing?.controlWording || "No target request in this session. Follow the neutral procedure and return when ready.")
+        : requestInstruction({ ...profile, outcomeSpace: effective.outcomeSpace }, objective);
     const audio = completeAudioRecipe(recipe, randomSources[RANDOM_SOURCES.AUDIO_NOISE], value.sampleRate, profile.protocol);
     const timing = timingPlan({ ...profile, timing: { ...profile.timing, ...(value.timing || {}), mode: timingMode, ...(stopAnchored ? { targetOffsetMs } : {}) } });
     const futureTargetUtc = requestedMode === EXPERIMENT_MODES.FUTURE_TARGET
@@ -2269,6 +2398,10 @@ function registerSessionHandlers() {
       } : {}),
     };
   });
+  handle("research:reveal-gate", (payload) => {
+    const id = sessionId(payload);
+    return db.research.revealGate(id);
+  });
   handle("future-target:get", (payload) => {
     const id = sessionId(payload);
     return db.research.getTargetGeneration(id, { full: isRevealed(id), revealed: isRevealed(id) });
@@ -2350,7 +2483,7 @@ function registerReportHandlers() {
         { sessionId: id, trialId: runtime.trialId },
       );
     }
-    return { sessionId: id, locked: true, rawReportLocked: true, revealEligible: result.revealEligible === true, revealed: false, alreadyLocked: result.alreadyLocked === true, schemaVersion: result.schemaVersion };
+    return { sessionId: id, locked: true, rawReportLocked: true, revealEligible: result.revealEligible === true, revealGate: result.revealGate || db.research?.revealGate(id) || null, revealed: false, alreadyLocked: result.alreadyLocked === true, schemaVersion: result.schemaVersion };
   });
   handle("sessions:reveal", async (payload) => {
     const id = sessionId(payload);
@@ -2460,8 +2593,15 @@ function registerReportHandlers() {
     return redactSessionData(annotation, isRevealed(id));
   });
   handle("annotations:list", (payload) => {
-    const id = sessionId(payload);
-    return db.evidence.annotations(id).map((annotation) => redactSessionData(annotation, isRevealed(id)));
+    const value = objectPayload(payload, "annotation request", { optional: true, maxBytes: 32_000 });
+    const id = sessionId(value);
+    const revealed = isRevealed(id);
+    const paginated = value.paginated === true || value.limit !== undefined || value.offset !== undefined;
+    if (!paginated) return db.evidence.annotations(id).map((annotation) => redactSessionData(annotation, revealed));
+    const limit = value.limit === undefined ? 100 : positiveInteger(value.limit, "annotation page size", { min: 1, max: 500 });
+    const offset = value.offset === undefined ? 0 : positiveInteger(value.offset, "annotation offset", { min: 0 });
+    const page = db.evidence.annotations(id, { paginated: true, limit, offset });
+    return { ...page, records: page.records.map((annotation) => redactSessionData(annotation, revealed)) };
   });
 }
 

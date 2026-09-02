@@ -291,6 +291,55 @@ const common = {
   },
   reveal: { policy: "AFTER_RAW_REPORT_LOCK" },
   reporting: { version: "report-v1" },
+  // Legacy/demo definitions remain available to the generic engine and to
+  // historical reports, but are not part of the owner-facing pilot catalog.
+  catalog: { visibility: "INTERNAL_VALIDATION", selectableForOwner: false },
+};
+
+const operationalCommon = {
+  schemaVersion: "1.0",
+  targetAssignment: "SYSTEM_RANDOM_UNIFORM",
+  outcomeSpace: { type: "BINARY", values: [0, 1] },
+  mapping: mappings.LITERAL_BINARY_V1,
+  encoding: common.encoding,
+  output: {
+    type: "CONTINUOUS_STREAM",
+    blockSize: 1,
+    preBlocks: 0,
+    primaryBlocks: 1,
+    postBlocks: 0,
+    intervalMs: 100,
+    cadence: "FIXED_INTERVAL",
+  },
+  rng: { provider: "OS_CSPRNG" },
+  protocol: {
+    ...baseProtocol,
+    stageMode: "PARTICIPANT_PACED",
+    cueMode: "NONE",
+    audibleStages: [],
+    participantPaced: true,
+    returnSeconds: 0,
+    cueVersion: null,
+  },
+  audio: { recipeId: "A-U396-4", version: 1 },
+  analysis: {
+    primaryWindow: { id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 },
+    windows: [{ id: "primary", enabled: true, preMs: 2_000, postMs: 2_000 }],
+    primaryEndpoint: "TARGET_FREQUENCY",
+    outputCadence: "FIXED_INTERVAL",
+    intervalMs: 100,
+    toleranceMs: 100,
+    version: "temporal-analysis-v1",
+  },
+  reveal: { policy: "AFTER_EVIDENCE_COMPLETE" },
+  reporting: { version: "report-v1" },
+  timing: {
+    mode: "PARTICIPANT_STOP_ANCHORED",
+    anchorReference: "PARTICIPANT_STOP_RETURN",
+    targetOffsetMs: 0,
+    wording: "Favor {target}; return when ready.",
+  },
+  catalog: { visibility: "OPERATIONAL", selectableForOwner: true },
 };
 
 export const profiles = {
@@ -522,7 +571,53 @@ export const profiles = {
     reveal: { policy: "AFTER_EVIDENCE_COMPLETE" },
     reporting: { version: "report-v1" },
   },
+  OP_REQUEST_BINARY_V1: {
+    ...operationalCommon,
+    id: "OP_REQUEST_BINARY_V1",
+    version: 1,
+    name: "Binary Request",
+    purpose: "Primary pilot REQUEST / INFLUENCE condition.",
+    status: "Validated",
+    mode: EXPERIMENT_MODES.INFLUENCE,
+    catalog: { visibility: "OPERATIONAL", selectableForOwner: true, condition: "REQUEST", displayOrder: 1 },
+  },
+  OP_CONTROL_BINARY_V1: {
+    ...operationalCommon,
+    id: "OP_CONTROL_BINARY_V1",
+    version: 1,
+    name: "Binary No-Intention Control",
+    purpose: "No-intention baseline using the same machine/audio/timing architecture.",
+    status: "Validated",
+    mode: EXPERIMENT_MODES.CONTROL,
+    timing: {
+      ...operationalCommon.timing,
+      controlWording: "No target request in this session. Follow the neutral procedure and return when ready.",
+    },
+    catalog: { visibility: "OPERATIONAL", selectableForOwner: true, condition: "CONTROL", displayOrder: 2 },
+  },
+  OP_AUDIO_SHAM_BINARY_V1: {
+    ...operationalCommon,
+    id: "OP_AUDIO_SHAM_BINARY_V1",
+    version: 1,
+    name: "Binary Request — Audio Sham",
+    purpose: "Request condition with matched 396/396 carrier and no binaural difference.",
+    status: "Validated",
+    mode: EXPERIMENT_MODES.SHAM,
+    audio: { recipeId: "A-SHAM-0", version: 1 },
+    catalog: { visibility: "OPERATIONAL", selectableForOwner: true, condition: "AUDIO_SHAM", displayOrder: 3 },
+  },
 };
+
+export const OPERATIONAL_PROFILE_IDS = Object.freeze([
+  "OP_REQUEST_BINARY_V1",
+  "OP_CONTROL_BINARY_V1",
+  "OP_AUDIO_SHAM_BINARY_V1",
+]);
+
+export function isOperationalProfile(profileOrId) {
+  const id = typeof profileOrId === "string" ? profileOrId : profileOrId?.id;
+  return OPERATIONAL_PROFILE_IDS.includes(id);
+}
 
 export function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -646,7 +741,10 @@ export function participantTarget(profile, objective) {
   return profile?.mapping?.entries?.[String(objective)]?.label ?? formatOutcome(profile?.outcomeSpace || { type: "BINARY" }, objective);
 }
 export function requestInstruction(profile, objective) {
-  return profile.timing.wording.replace(
+  const wording = profile?.mode === EXPERIMENT_MODES.CONTROL
+    ? profile.timing?.controlWording || "No target request in this session. Follow the neutral procedure and return when ready."
+    : profile.timing?.wording || "Favor {target}; return when ready.";
+  return wording.replace(
     "{target}",
     participantTarget(profile, objective),
   );

@@ -62,6 +62,23 @@ test("profiles and recipes are SQLite-authoritative, exact-versioned, validated,
   closeAndRemove(db, root);
 });
 
+test("operational pilot profile versions are frozen while duplicates remain internal", () => {
+  const root = tempRoot();
+  let db = new MipDatabase(root);
+  try {
+    const operational = db.profiles.getVersion("OP_REQUEST_BINARY_V1", 1);
+    assert.ok(operational);
+    assert.throws(() => db.profiles.editDraft("OP_REQUEST_BINARY_V1", { name: "Changed pilot" }), /frozen/i);
+    assert.throws(() => db.profiles.saveNewVersion({ ...operational, name: "Changed pilot" }), /frozen/i);
+    const copy = db.profiles.duplicate("OP_REQUEST_BINARY_V1", "INTERNAL_OP_REQUEST_COPY", { version: 1, activate: false });
+    assert.equal(copy.id, "INTERNAL_OP_REQUEST_COPY");
+    assert.equal(copy.catalog?.visibility, "INTERNAL_VALIDATION");
+    assert.equal(copy.catalog?.selectableForOwner, false);
+  } finally {
+    closeAndRemove(db, root);
+  }
+});
+
 test("calibration, audio health, transition, output, report, analysis and timing records persist with hashes", () => {
   const root = tempRoot();
   const db = new MipDatabase(root);

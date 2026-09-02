@@ -723,8 +723,40 @@ export function classifyLatency(actualUtcMs, scheduledUtcMs, window = {}) {
 export function evaluateRevealGate(status = {}) {
   const required = ["rawReportLocked", "evidenceComplete", "primaryResolved", "postTargetComplete", "integrityAcceptable"];
   const futureRequired = status.mode === EXPERIMENT_MODES.FUTURE_TARGET ? ["futureTargetGenerated", "predictionCommitted"] : [];
-  const missing = [...required, ...futureRequired].filter((key) => status[key] !== true);
-  return Object.freeze({ eligible: missing.length === 0, missing });
+  const audioRequired = status.audioFinalizationRequired === true ? ["audioFinalized"] : [];
+  const named = {
+    rawReportLocked: "Raw report locked",
+    evidenceComplete: "Evidence phase complete",
+    primaryResolved: "Primary endpoint resolved",
+    postTargetComplete: "Post-target monitoring complete",
+    integrityAcceptable: "Integrity",
+    audioFinalized: "Audio finalization",
+    futureTargetGenerated: "Future target generated",
+    predictionCommitted: "Prediction committed",
+  };
+  const allRequired = [...required, ...futureRequired, ...audioRequired];
+  const missing = allRequired.filter((key) => status[key] !== true);
+  const diagnostics = Object.fromEntries(allRequired.map((key) => [key, Object.freeze({
+    pass: status[key] === true,
+    label: named[key] || key,
+    reason: status[key] === true ? "PASS" : String(status[`${key}Reason`] || `Required condition not satisfied: ${named[key] || key}.`),
+  })]));
+  const additional = status.additionalGates && typeof status.additionalGates === "object" && !Array.isArray(status.additionalGates)
+    ? Object.fromEntries(Object.entries(status.additionalGates).map(([key, value]) => [key, Object.freeze({
+      pass: value === true || value?.pass === true,
+      label: value?.label || key,
+      reason: value === true || value?.pass === true ? "PASS" : value?.reason || `Required condition not satisfied: ${key}.`,
+    })]))
+    : {};
+  const additionalMissing = Object.entries(additional).filter(([, value]) => value.pass !== true).map(([key]) => key);
+  const allMissing = [...missing, ...additionalMissing];
+  return Object.freeze({
+    eligible: allMissing.length === 0,
+    // Keep the historical compact list stable for existing consumers/tests.
+    missing,
+    failedConditions: allMissing,
+    diagnostics: Object.freeze({ ...diagnostics, ...additional }),
+  });
 }
 
 export function normalizeCrossSessionAnalysis(value = {}) {

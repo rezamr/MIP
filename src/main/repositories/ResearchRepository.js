@@ -460,7 +460,7 @@ export class ResearchRepository {
       ? extra.primaryResolved
       : (() => {
         const normalizedEndpoint = String(endpoint || PRIMARY_ENDPOINTS.EXACT_SLOT).toUpperCase();
-        const rows = this.db.prepare("SELECT output_seq,scheduled_utc,timing_status FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(sessionId);
+        const rows = this.db.prepare("SELECT output_seq,scheduled_utc,scheduled_monotonic_ns,timing_status,value_json FROM machine_outputs WHERE session_id=? ORDER BY output_seq").all(sessionId);
         if (normalizedEndpoint === PRIMARY_ENDPOINTS.EXACT_SLOT) {
           const scheduledTargetUtc = participantStopAnchor?.targetUtc || participantStopAnchor?.utc || definitionValue?.targetDefinition?.scheduledUtc;
           const scheduledTargetMs = scheduledTargetUtc ? Date.parse(String(scheduledTargetUtc)) : NaN;
@@ -501,10 +501,20 @@ export class ResearchRepository {
               || (latency >= 0 && window.postMs > 0 && latency <= window.postMs)
               || (latency === 0 && (window.preMs > 0 || window.postMs > 0));
           }
-          // TARGET_FREQUENCY evaluates a committed opportunity set.  In the
-          // absence of a narrower window, every scheduled output is part of
-          // that set and must be present (generated or explicitly MISSED).
-          return normalizedEndpoint === PRIMARY_ENDPOINTS.TARGET_FREQUENCY;
+          // TARGET_FREQUENCY evaluates only the committed scheduled primary
+          // window.  A window-less legacy definition retains its historical
+          // all-output behavior; operational profiles always commit a
+          // bounded ±2 second window.
+          if (normalizedEndpoint !== PRIMARY_ENDPOINTS.TARGET_FREQUENCY) return false;
+          const hasBoundary = window.enabled === false || Number(window.preMs || 0) > 0 || Number(window.postMs || 0) > 0;
+          if (!hasBoundary) return true;
+          if (!Number.isFinite(targetUtcMs)) return false;
+          const scheduled = Date.parse(String(row.scheduled_utc || ""));
+          if (!Number.isFinite(scheduled)) return false;
+          const latency = scheduled - targetUtcMs;
+          return (latency < 0 && window.preMs > 0 && Math.abs(latency) <= window.preMs)
+            || (latency >= 0 && window.postMs > 0 && latency <= window.postMs)
+            || (latency === 0 && (window.preMs > 0 || window.postMs > 0));
         });
         return selected.length > 0 && selected.every((row) => !unavailableStatus(row.timing_status));
       })();
@@ -514,6 +524,12 @@ export class ResearchRepository {
     const integrityAcceptable = extra.integrityAcceptable !== undefined
       ? extra.integrityAcceptable
       : (this.owner.integrity?.verifySession ? this.owner.integrity.verifySession(sessionId, { persist: false }).valid : true);
+    const audioFinalizationRequired = extra.audioFinalizationRequired !== undefined
+      ? extra.audioFinalizationRequired === true
+      : Boolean(this.db.prepare("SELECT 1 FROM audio_commits WHERE session_id=?").get(sessionId));
+    const audioFinalized = extra.audioFinalized !== undefined
+      ? extra.audioFinalized === true
+      : Boolean(this.db.prepare("SELECT 1 FROM output_finalizations WHERE session_id=?").get(sessionId));
     return evaluateRevealGate({
       mode: definition?.mode,
       rawReportLocked: Boolean(this.db.prepare("SELECT 1 FROM raw_reports_locked WHERE session_id=?").get(sessionId)),
@@ -521,8 +537,11 @@ export class ResearchRepository {
       primaryResolved: effectivePrimaryResolved,
       postTargetComplete: extra.postTargetComplete ?? phases.evidencePhaseStatus === "COMPLETE",
       integrityAcceptable,
+      audioFinalizationRequired,
+      audioFinalized: audioFinalizationRequired ? audioFinalized : true,
       futureTargetGenerated: definition?.mode === "FUTURE_TARGET" ? ["GENERATED", "ON_TIME", "LATE"].includes(future?.status) : true,
       predictionCommitted: definition?.mode === "FUTURE_TARGET" ? committedPrediction !== undefined && committedPrediction !== null : true,
+      additionalGates: extra.additionalGates,
     });
   }
 }

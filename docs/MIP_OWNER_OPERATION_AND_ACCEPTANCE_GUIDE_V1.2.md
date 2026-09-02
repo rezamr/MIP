@@ -6,6 +6,13 @@ MIP data directory.  It does not require a browser, localhost server, or
 Internet connection.  Read the Integrity and protocol status before interpreting
 any statistical or audio result.
 
+The owner-facing pilot catalog is intentionally small: it contains exactly
+three operational profiles — **Binary Request**, **Binary No-Intention
+Control**, and **Binary Request — Audio Sham**. Older DRY/demo and engineering
+profiles remain in the engine and SQLite so historical sessions stay readable,
+but they are internal validation records and are not selectable for new owner
+sessions.
+
 ## Interpretation rules used everywhere
 
 - A **profile** is an immutable experiment/protocol definition.  A **recipe**
@@ -50,23 +57,28 @@ controls; no raw JSON inspection is required for ordinary operation.
 
 ### Start Research Session
 
-**Purpose.** Start one declared research session from an active immutable
-profile, after the owner has reviewed its effective configuration.
+**Purpose.** Start one declared research session from one of the three active
+immutable operational profiles, after the owner has reviewed its effective
+configuration.
 
 **What the system is doing.** The Electron main process resolves the profile and
 version from SQLite, derives the declared outcome space/cardinality, separates
 target assignment from participant representation, and prepares the shared
 AudioWorklet recipe.  The renderer is not the authoritative timer.
 
-**Workflow.** Select a profile; review experiment mode, outcome space, RNG,
-cadence, target anchor, signed target offset (when participant-paced),
-independent participant/evidence windows, endpoint, reveal policy, and recipe
-version.  Enter participant/pre-session fields, baseline,
-environment, and safety confirmation.  In Target & Memory review the encoded
-participant instruction without asking for hidden objective data.  Confirm
-memory/readiness, then commit.  Wait for `PROCESSOR_READY`; only then start the
-participant phase.  The main process records participant and evidence phases,
-scheduled/actual times, power state, and timing deviations.
+**Workflow.** Choose **Binary Request**, **Binary No-Intention Control**, or
+**Binary Request — Audio Sham**. The pilot profile freezes BINARY `[0, 1]`,
+OS_CSPRNG assignment, participant-paced STOP/RETURN, zero target offset,
+TARGET_FREQUENCY scoring, a ±2 second primary window, 100 ms cadence, no cues,
+and the profile's A-U396-4 or A-SHAM-0 recipe. Only administrative
+participant/pre-session fields, baseline, environment, safety confirmation,
+and optional execution-window metadata remain editable. In Target &amp; Memory,
+Request and Audio Sham show exactly one binary value (0 or 1); Control shows no
+target request because its independently assigned scoring target stays hidden
+until reveal. Confirm memory/readiness, then commit. Wait for
+`PROCESSOR_READY`; only then start the participant phase. The main process
+records participant and evidence phases, scheduled/actual times, power state,
+and timing deviations.
 
 After the participant returns, use **Return / End participant phase**.  The
 main process records `stopUtc` and `stopMonotonicNs` once, then derives and
@@ -87,7 +99,8 @@ signed `targetOffsetMs`), RNG provider, cadence, independent windows, endpoint,
 recipe version, and reveal policy are evidence
 bearing.  Do not edit a committed session.
 
-**Acceptance test.** Use a dry run: verify the profile and recipe fingerprint,
+**Acceptance test.** Use a dry run: verify one of the three operational
+profiles and its recipe fingerprint,
 observe `PROCESSOR_READY`, start and stop, return, verify the captured stop
 clock and derived T/offset, save/lock a report, confirm
 reveal remains gated if evidence is active, verify integrity, then export.
@@ -137,20 +150,26 @@ observation separately if an acoustic artifact is heard.
 
 ### Experiment Profiles
 
-**Purpose.** Manage protocol definitions and immutable versions.
+**Purpose.** Inspect the three owner-facing operational protocol definitions
+and their immutable versions.
 
 **What the system is doing.** SQLite stores identity, draft, validation,
 version, activation, and config fingerprint.  A profile controls experiment
 mode, outcome space/cardinality, RNG, timing, participant/evidence windows,
 endpoint, analysis windows, audio recipe reference, and reveal policy.
 
-**Safe workflow.** Duplicate or edit a draft; Validate; inspect the material
-Diff; Save New Version; Activate only after review.  Activation never mutates a
-prior version.  A committed session always references its original version.
+**Safe workflow.** The normal list contains exactly **Binary Request**,
+**Binary No-Intention Control**, and **Binary Request — Audio Sham**. These
+three pilot cards are read-only and frozen in the owner-facing workflow.
+Older DRY/demo IDs are internal validation fixtures: they remain resolvable for
+historical reports, but do not appear in Start Research Session. Engineering
+versioning remains available to the underlying repository without changing a
+committed session. A committed session always references its original version.
 
-**Acceptance test.** Duplicate the active baseline, change one declared window,
-validate, compare the diff, save as a draft, and verify the old version and any
-old session are unchanged.
+**Acceptance test.** Confirm that exactly three operational cards are shown.
+Verify old versions and old sessions remain unchanged; engineering-only
+profiles stay available through historical reports rather than the pilot
+selector.
 
 ### Audio Recipes
 
@@ -318,7 +337,8 @@ Restore, and Export are data-integrity operations.
    signed stop-relative offset (if participant-paced), independent windows,
    endpoint, reveal policy, and recipe version.  Confirm readiness shows target
    UTC as unknown until STOP/RETURN.
-7. Execute a dry-run session and confirm AudioWorklet readiness.
+7. Select one of the three operational profiles, execute a dry-run session,
+   and confirm AudioWorklet readiness.
 8. Save/lock the raw report; observe that return does not imply evidence
    completion and that reveal stays gated when monitoring remains active.
 9. Verify session integrity and export the bundle.
