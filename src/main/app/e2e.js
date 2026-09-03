@@ -252,6 +252,15 @@ export async function runElectronE2E(mainWindow, options = {}) {
         base.dispatchEvent(new Event("change", { bubbles: true }));
         recipeSelect.value = layeredOption.value;
         recipeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        // Optional purpose/notes are intentionally left blank for the first
+        // validation. This exercises the same renderer payload path that
+        // previously sent present-but-undefined properties through IPC.
+        document.querySelector("#validateExperimentalProfile")?.click();
+        for (let attempt = 0; attempt < 160; attempt += 1) {
+          if (/Validated\./i.test(document.querySelector("#experimentalProfileValidation")?.textContent || "") && document.querySelector("#saveExperimentalProfile")?.disabled === false) break;
+          await sleep(25);
+        }
+        const optionalFieldsOmitted = /Validated\./i.test(document.querySelector("#experimentalProfileValidation")?.textContent || "");
         const setCreatorInput = (selector, value) => {
           const element = document.querySelector(selector);
           if (!element) return false;
@@ -262,9 +271,10 @@ export async function runElectronE2E(mainWindow, options = {}) {
         setCreatorInput("#experimentalProfileName", "Binary Request — MIP Layered");
         setCreatorInput("#experimentalPurpose", "Electron composability fixture");
         setCreatorInput("#experimentalNotes", "Owner-created profile must remain versioned.");
+        document.querySelector("#experimentalProfileValidation").textContent = "";
         document.querySelector("#validateExperimentalProfile")?.click();
         for (let attempt = 0; attempt < 160; attempt += 1) {
-          if (/Validated\./i.test(document.querySelector("#experimentalProfileValidation")?.textContent || "")) break;
+          if (/Validated\./i.test(document.querySelector("#experimentalProfileValidation")?.textContent || "") && document.querySelector("#saveExperimentalProfile")?.disabled === false) break;
           await sleep(25);
         }
         const validationText = document.querySelector("#experimentalProfileValidation")?.textContent || "";
@@ -317,6 +327,7 @@ export async function runElectronE2E(mainWindow, options = {}) {
         const result = {
           builtInRecommendedCount: builtInCards.length,
           validated,
+          optionalFieldsOmitted,
           saved,
           customProfileId,
           experimentalActive,
@@ -339,7 +350,7 @@ export async function runElectronE2E(mainWindow, options = {}) {
           oldSessionPinned: beforeArchive?.profileId === customProfileId && Number(beforeArchive?.profileVersion) === 1 && afterArchive?.profileId === customProfileId && Number(afterArchive?.profileVersion) === 1,
           overwriteRejected,
         };
-        if (result.builtInRecommendedCount !== 3 || !result.validated || !result.saved || !result.customProfileId || !result.experimentalActive || !result.customAppearsAtStart || !result.archivedStatus || !result.archivedHiddenAtStart || !result.layeredRecipeCommitted || !result.committedSessionAccepted || !result.noProtocolCues || !result.participantPaced || result.targetOffsetMs !== 0 || !result.oldSessionPinned || !result.overwriteRejected)
+        if (result.builtInRecommendedCount !== 3 || !result.validated || !result.optionalFieldsOmitted || !result.saved || !result.customProfileId || !result.experimentalActive || !result.customAppearsAtStart || !result.archivedStatus || !result.archivedHiddenAtStart || !result.layeredRecipeCommitted || !result.committedSessionAccepted || !result.noProtocolCues || !result.participantPaced || result.targetOffsetMs !== 0 || !result.oldSessionPinned || !result.overwriteRejected)
           throw new Error("Profile composability E2E failed: " + JSON.stringify(result));
         return result;
       };

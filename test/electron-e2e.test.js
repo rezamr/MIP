@@ -93,6 +93,7 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     assert.deepEqual(initial.profileComposability && {
       builtInRecommendedCount: initial.profileComposability.builtInRecommendedCount,
       validated: initial.profileComposability.validated,
+      optionalFieldsOmitted: initial.profileComposability.optionalFieldsOmitted,
       saved: initial.profileComposability.saved,
       experimentalActive: initial.profileComposability.experimentalActive,
       customAppearsAtStart: initial.profileComposability.customAppearsAtStart,
@@ -107,6 +108,7 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     }, {
       builtInRecommendedCount: 3,
       validated: true,
+      optionalFieldsOmitted: true,
       saved: true,
       experimentalActive: true,
       customAppearsAtStart: true,

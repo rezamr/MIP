@@ -1157,13 +1157,18 @@ async function renderProfiles() {
       let savedProfile = null;
       const readInput = () => {
         const [recipeId, version] = String($("#experimentalRecipe").value || "").split("::");
+        const purpose = $("#experimentalPurpose").value.trim();
+        const notes = $("#experimentalNotes").value.trim();
         return {
           baseProfileId: $("#experimentalBaseProfile").value,
           name: $("#experimentalProfileName").value.trim(),
           recipeId,
           recipeVersion: Number(version),
-          purpose: $("#experimentalPurpose").value.trim() || undefined,
-          notes: $("#experimentalNotes").value.trim() || undefined,
+          // IPC payloads are JSON-shaped and deliberately reject undefined
+          // values. Optional owner fields must therefore be omitted when the
+          // controls are blank, rather than sent as present-but-undefined.
+          ...(purpose ? { purpose } : {}),
+          ...(notes ? { notes } : {}),
           ...(validatedId ? { newId: validatedId } : {}),
         };
       };
