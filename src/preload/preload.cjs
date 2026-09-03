@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld(
     diffProfileVersions: (value) => call("profiles:diff", value),
     saveProfileVersion: (value) => call("profiles:save", value),
     activateProfileVersion: (value) => call("profiles:activate", value),
+    validateExperimentalProfile: (value) => call("profiles:validate-experimental", value),
+    createExperimentalProfile: (value) => call("profiles:create-experimental", value),
+    archiveProfile: (value) => call("profiles:archive", value),
     duplicateProfile: (value) => call("profiles:duplicate", value),
 
     getAudioPresets: (value) => call("audio:presets", value),

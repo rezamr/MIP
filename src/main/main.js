@@ -1355,7 +1355,8 @@ function validateRawReportForLock(report) {
  * optional execution window) are handled separately by the session handler.
  */
 function assertOperationalSessionPayload(value, profile) {
-  if (!OPERATIONAL_PROFILE_IDS.includes(profile?.id)) return;
+  const ownerSelectable = OPERATIONAL_PROFILE_IDS.includes(profile?.id) || profile?.catalog?.selectableForOwner === true;
+  if (!ownerSelectable) return;
   const expectedMode = String(profile.mode || profile.experimentMode || "").toUpperCase();
   const suppliedMode = value.mode ?? value.experimentMode;
   if (suppliedMode !== undefined && String(suppliedMode).toUpperCase() !== expectedMode)
@@ -1472,17 +1473,13 @@ function createWindow() {
 function registerLibraryHandlers() {
   handle("profiles:list", (payload) => {
     const options = objectPayload(payload, "profile filters", { optional: true, maxBytes: 32_000 });
-    const operationalOnly = options.allProfiles !== true && options.includeInternal !== true;
-    return db.profiles.list({
+    const ownerCatalog = options.ownerCatalog !== false && options.allProfiles !== true && options.includeInternal !== true;
+    const rows = db.profiles.list({
       allVersions: options.allVersions === true,
       activeOnly: options.activeOnly === true,
       search: options.search ? stringValue(options.search, "profile search", { max: 128 }) : undefined,
-    // The owner catalog is deliberately an allow-list, not a mutable metadata
-    // flag.  A duplicated/owner-created profile may inherit the OPERATIONAL
-    // catalog marker, but it must never expand the three-condition pilot
-    // selector.  Historical/internal profiles remain resolvable through the
-    // explicit allProfiles/includeInternal paths.
-    }).filter((profile) => !operationalOnly || OPERATIONAL_PROFILE_IDS.includes(profile.id))
+    });
+    return rows.filter((profile) => !ownerCatalog || OPERATIONAL_PROFILE_IDS.includes(profile.id) || profile.catalog?.selectableForOwner === true)
       .sort((left, right) => Number(left.catalog?.displayOrder || 99) - Number(right.catalog?.displayOrder || 99) || String(left.name).localeCompare(String(right.name)))
       .map((profile) => ({ ...profile, validation: validateProfile(profile) }));
   });
@@ -1510,9 +1507,35 @@ function registerLibraryHandlers() {
       provenance: value.provenance,
     });
   });
+  handle("profiles:validate-experimental", (payload) => {
+    const value = objectPayload(payload, "experimental profile validation", { maxBytes: 64_000 });
+    const baseProfileId = identifier(value.baseProfileId || value.baseId, "base profile id");
+    const name = stringValue(value.name, "experimental profile name", { max: 200 });
+    const purpose = value.purpose === undefined || value.purpose === null || String(value.purpose).trim() === "" ? undefined : stringValue(value.purpose, "experimental profile purpose", { max: 500 });
+    const notes = value.notes === undefined || value.notes === null || String(value.notes).trim() === "" ? undefined : stringValue(value.notes, "experimental profile notes", { max: 2_000 });
+    const recipeId = identifier(value.recipeId || value.audio?.recipeId, "audio recipe id");
+    const recipeVersion = positiveInteger(value.recipeVersion ?? value.audio?.version ?? value.audio?.recipeVersion, "audio recipe version");
+    const newId = value.newId === undefined || value.newId === null || value.newId === "" ? undefined : identifier(value.newId, "experimental profile id");
+    return db.profiles.validateExperimental({ baseProfileId, name, purpose, notes, recipeId, recipeVersion, newId });
+  });
+  handle("profiles:create-experimental", (payload) => {
+    const value = objectPayload(payload, "experimental profile", { maxBytes: 64_000 });
+    const baseProfileId = identifier(value.baseProfileId || value.baseId, "base profile id");
+    const name = stringValue(value.name, "experimental profile name", { max: 200 });
+    const purpose = value.purpose === undefined || value.purpose === null || String(value.purpose).trim() === "" ? undefined : stringValue(value.purpose, "experimental profile purpose", { max: 500 });
+    const notes = value.notes === undefined || value.notes === null || String(value.notes).trim() === "" ? undefined : stringValue(value.notes, "experimental profile notes", { max: 2_000 });
+    const recipeId = identifier(value.recipeId || value.audio?.recipeId, "audio recipe id");
+    const recipeVersion = positiveInteger(value.recipeVersion ?? value.audio?.version ?? value.audio?.recipeVersion, "audio recipe version");
+    const newId = value.newId === undefined || value.newId === null || value.newId === "" ? undefined : identifier(value.newId, "experimental profile id");
+    return db.profiles.createExperimental({ baseProfileId, name, purpose, notes, recipeId, recipeVersion, newId }, { activate: value.activate === true });
+  });
   handle("profiles:activate", (payload) => {
     const value = objectPayload(payload);
     return db.profiles.activate(identifier(value.id || value.profileId, "profile id"), positiveInteger(value.version, "profile version"));
+  });
+  handle("profiles:archive", (payload) => {
+    const value = objectPayload(payload);
+    return db.profiles.archive(identifier(value.id || value.profileId, "profile id"), value.version === undefined ? undefined : positiveInteger(value.version, "profile version"));
   });
   handle("profiles:duplicate", (payload) => {
     const value = objectPayload(payload, "profile duplicate request", { optional: true });
@@ -1527,11 +1550,14 @@ function registerLibraryHandlers() {
 
   handle("audio:presets", (payload) => {
     const options = objectPayload(payload, "recipe filters", { optional: true, maxBytes: 32_000 });
-    return db.recipes.list({
+    const recipes = db.recipes.list({
       allVersions: options.allVersions === true,
       activeOnly: options.activeOnly === true,
       search: options.search ? stringValue(options.search, "recipe search", { max: 128 }) : undefined,
     });
+    return options.formalOperationalOnly === true
+      ? recipes.filter((recipe) => recipe.isDraft !== true && recipe.isActive === true && recipe.status === "ACTIVE" && recipe.incomplete !== true && recipe.formalOperationalEligibility === true)
+      : recipes;
   });
   handle("recipes:get", (payload) => {
     const value = objectPayload(payload);
@@ -1670,7 +1696,9 @@ function registerSessionHandlers() {
         const suppliedExecutionWindow = hasExecutionWindowOverride
           ? value.executionWindow
           : profile.timing?.executionWindow;
-        executionWindow = normalizeExecutionWindow(suppliedExecutionWindow);
+        executionWindow = suppliedExecutionWindow === undefined || suppliedExecutionWindow === null
+          ? null
+          : normalizeExecutionWindow(suppliedExecutionWindow);
       } catch (error) {
         throw new Error(`Participant-stop execution window is invalid: ${error.message}`);
       }
@@ -1723,7 +1751,7 @@ function registerSessionHandlers() {
       throw new Error(`Formal session requires an active, complete recipe: ${recipe.recipeId} v${recipe.version}.`);
     if (recipe.formalOperationalEligibility !== true)
       throw new Error(`Formal session requires an operationally eligible audio recipe: ${recipe.recipeId} v${recipe.version}. ${recipe.formalEligibilityReason || "One or more configuration, provenance, runtime, deterministic, activation, or applicable reference gates are not current."}`);
-    if (OPERATIONAL_PROFILE_IDS.includes(profile.id) && value.sampleRate !== undefined && Number(value.sampleRate) !== Number(recipe.sampleRate))
+    if ((OPERATIONAL_PROFILE_IDS.includes(profile.id) || profile.catalog?.selectableForOwner === true) && value.sampleRate !== undefined && Number(value.sampleRate) !== Number(recipe.sampleRate))
       throw new Error(`Operational profile ${profile.id} fixes the audio sample rate to ${recipe.sampleRate} Hz.`);
     // RNG provider is part of the effective (session > profile > app)
     // research definition.  Reading only the profile silently ignored a

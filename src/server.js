@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { profiles, OPERATIONAL_PROFILE_IDS, resolveProfile, validateProfile, assignOutcome, participantTarget, requestInstruction, analyzeStream, timingPlan, sha256 } from './engine.js';
+import { profiles, resolveProfile, validateProfile, assignOutcome, participantTarget, requestInstruction, analyzeStream, timingPlan, sha256 } from './engine.js';
 import { RANDOM_SOURCES, createRandomSources } from './main/random/random-domains.js';
 import { PRESETS, quickRecipe, validateRecipe, writeArtifact } from './audio.js';
 import { Storage } from './storage.js';
@@ -50,7 +50,7 @@ function runSession(id) {
 async function route(req, res, url) {
   try {
     if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { ok: true, appVersion: '1.1.0', runtimeRoot: storage.root });
-    if (req.method === 'GET' && url.pathname === '/api/profiles') return send(res, 200, Object.values(profiles).filter(p => OPERATIONAL_PROFILE_IDS.includes(p.id)).sort((a, b) => Number(a.catalog?.displayOrder || 99) - Number(b.catalog?.displayOrder || 99)).map(p => ({ ...p, validation: validateProfile(p) })));
+    if (req.method === 'GET' && url.pathname === '/api/profiles') return send(res, 200, Object.values(profiles).filter(p => p.catalog?.selectableForOwner === true).sort((a, b) => Number(a.catalog?.displayOrder || 99) - Number(b.catalog?.displayOrder || 99)).map(p => ({ ...p, validation: validateProfile(p) })));
     if (req.method === 'POST' && url.pathname === '/api/profiles/validate') return send(res, 200, validateProfile(await body(req)));
     if (req.method === 'GET' && url.pathname === '/api/audio/presets') return send(res, 200, Object.values(PRESETS));
     if (req.method === 'POST' && url.pathname === '/api/audio/quick') { const b = await body(req), recipe = quickRecipe(b.centerHz, b.beatHz); return send(res, 200, { recipe, validation: validateRecipe(recipe) }); }

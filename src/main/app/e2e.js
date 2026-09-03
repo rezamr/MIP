@@ -235,6 +235,114 @@ export async function runElectronE2E(mainWindow, options = {}) {
       };
       if (!Object.values(output.layeredRecipePanels).every(Boolean)) throw new Error("Layered recipe panel E2E failed: " + JSON.stringify(output.layeredRecipePanels));
 
+      // Owner composability flow: the three pilot templates remain the only
+      // Recommended entries, while a validated owner-created profile can be
+      // created from a template, activated, selected for a draft session, and
+      // archived without rewriting the profile/version pinned by that session.
+      const runProfileComposabilityFlow = async () => {
+        document.querySelector('[data-page="profiles"]')?.click();
+        await waitForSelector("#newExperimentalProfile");
+        document.querySelector("#newExperimentalProfile")?.click();
+        await waitForSelector("#experimentalProfileCreator");
+        const base = document.querySelector("#experimentalBaseProfile");
+        const recipeSelect = document.querySelector("#experimentalRecipe");
+        const layeredOption = [...(recipeSelect?.options || [])].find((option) => option.value.startsWith("MIP_LAYERED_EXPERIMENTAL_V1::"));
+        if (!base || !recipeSelect || !layeredOption) throw new Error("Experimental profile creator did not expose the layered eligible recipe");
+        base.value = "OP_REQUEST_BINARY_V1";
+        base.dispatchEvent(new Event("change", { bubbles: true }));
+        recipeSelect.value = layeredOption.value;
+        recipeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        const setCreatorInput = (selector, value) => {
+          const element = document.querySelector(selector);
+          if (!element) return false;
+          element.value = value;
+          element.dispatchEvent(new Event("input", { bubbles: true }));
+          return true;
+        };
+        setCreatorInput("#experimentalProfileName", "Binary Request — MIP Layered");
+        setCreatorInput("#experimentalPurpose", "Electron composability fixture");
+        setCreatorInput("#experimentalNotes", "Owner-created profile must remain versioned.");
+        document.querySelector("#validateExperimentalProfile")?.click();
+        for (let attempt = 0; attempt < 160; attempt += 1) {
+          if (/Validated\./i.test(document.querySelector("#experimentalProfileValidation")?.textContent || "")) break;
+          await sleep(25);
+        }
+        const validationText = document.querySelector("#experimentalProfileValidation")?.textContent || "";
+        const validated = /Validated\./i.test(validationText) && document.querySelector("#saveExperimentalProfile")?.disabled === false;
+        document.querySelector("#saveExperimentalProfile")?.click();
+        for (let attempt = 0; attempt < 160; attempt += 1) {
+          if (document.querySelector("#activateExperimentalProfile")?.hidden === false) break;
+          await sleep(25);
+        }
+        const activateButton = document.querySelector("#activateExperimentalProfile");
+        const customProfileId = activateButton?.dataset.profileId || null;
+        const saved = Boolean(customProfileId && activateButton?.hidden === false);
+        activateButton?.click();
+        let customCard = null;
+        for (let attempt = 0; attempt < 160; attempt += 1) {
+          customCard = [...document.querySelectorAll(".profile-card")].find((card) => card.dataset.profileId === customProfileId);
+          if (customCard && /ACTIVE/.test(customCard.innerText)) break;
+          await sleep(25);
+        }
+        const builtInCards = [...document.querySelectorAll(".profile-card")].filter((card) => /RECOMMENDED · FROZEN/.test(card.innerText));
+        const experimentalActive = Boolean(customCard && /EXPERIMENTAL · OWNER-CREATED/.test(customCard.innerText) && /ACTIVE/.test(customCard.innerText));
+        document.querySelector('[data-page="start"]')?.click();
+        await waitForSelector("#profileSelect");
+        const startOptions = [...(document.querySelector("#profileSelect")?.options || [])];
+        const customAppearsAtStart = startOptions.some((option) => option.value === customProfileId);
+        const customDraft = customProfileId ? await window.mip.createSession({ profileId: customProfileId, profileVersion: 1, recordType: "dry", participantLabel: "Electron profile composition fixture", deferCommit: true }) : null;
+        const customCommit = customDraft ? await window.mip.commitSession({ id: customDraft.sessionId, memoryConfirmed: true, safetyConfirmed: true, safetyNote: "Composability fixture." }) : null;
+        const prepared = customDraft ? await window.mip.prepareAudio({ id: customDraft.sessionId }) : null;
+        const definition = customDraft ? await window.mip.getResearchDefinition({ id: customDraft.sessionId }) : null;
+        const beforeArchive = customDraft ? await window.mip.getSession({ id: customDraft.sessionId }) : null;
+        if (customDraft) await window.mip.audioFailed({ id: customDraft.sessionId, error: "Composability fixture cleanup." });
+        document.querySelector('[data-page="profiles"]')?.click();
+        await waitForSelector(".profile-card");
+        window.confirm = () => true;
+        const archiveButton = customProfileId ? document.querySelector('[data-profile-archive="' + customProfileId + '"]') : null;
+        archiveButton?.click();
+        await sleep(180);
+        const archivedCard = customProfileId ? [...document.querySelectorAll(".profile-card")].find((card) => card.dataset.profileId === customProfileId) : null;
+        document.querySelector('[data-page="start"]')?.click();
+        await waitForSelector("#profileSelect");
+        const archivedOptions = [...(document.querySelector("#profileSelect")?.options || [])];
+        const archivedHiddenAtStart = !archivedOptions.some((option) => option.value === customProfileId);
+        const afterArchive = customDraft ? await window.mip.getSession({ id: customDraft.sessionId }) : null;
+        const overwriteRejected = await (async () => {
+          try {
+            await window.mip.saveProfileVersion({ profile: { id: "OP_REQUEST_BINARY_V1", version: 1, name: "Overwrite" }, parentVersion: 1 });
+            return false;
+          } catch { return true; }
+        })();
+        const result = {
+          builtInRecommendedCount: builtInCards.length,
+          validated,
+          saved,
+          customProfileId,
+          experimentalActive,
+          customAppearsAtStart,
+          archivedStatus: archivedCard?.innerText?.match(/ARCHIVED/i)?.[0] || null,
+          archivedHiddenAtStart,
+          layeredRecipeCommitted: prepared?.audio?.recipeId === "MIP_LAYERED_EXPERIMENTAL_V1" && Number(prepared?.audio?.version) === 1,
+          committedSessionAccepted: customCommit?.status === "COMMITTED",
+          noProtocolCues: Number(prepared?.audio?.protocolCueCount || 0) === 0,
+          participantPaced: String(definition?.timingMode || "").toUpperCase() === "PARTICIPANT_STOP_ANCHORED",
+          // The research-definition IPC intentionally exposes the committed offset
+          // as a redacted top-level projection before reveal; the creation
+          // response also carries the nested target definition.  Accept both
+          // representations while asserting the same frozen owner-profile
+          // value.
+          targetOffsetMs: definition?.targetOffsetMs
+            ?? definition?.targetDefinition?.targetOffsetMs
+            ?? customDraft?.researchDefinition?.targetDefinition?.targetOffsetMs
+            ?? null,
+          oldSessionPinned: beforeArchive?.profileId === customProfileId && Number(beforeArchive?.profileVersion) === 1 && afterArchive?.profileId === customProfileId && Number(afterArchive?.profileVersion) === 1,
+          overwriteRejected,
+        };
+        if (result.builtInRecommendedCount !== 3 || !result.validated || !result.saved || !result.customProfileId || !result.experimentalActive || !result.customAppearsAtStart || !result.archivedStatus || !result.archivedHiddenAtStart || !result.layeredRecipeCommitted || !result.committedSessionAccepted || !result.noProtocolCues || !result.participantPaced || result.targetOffsetMs !== 0 || !result.oldSessionPinned || !result.overwriteRejected)
+          throw new Error("Profile composability E2E failed: " + JSON.stringify(result));
+        return result;
+      };
       // Exercise the complete immutable recipe editor path through the real
       // preload bridge and SQLite repository.  The guided controls must write
       // canonical carriers/execution fields; aliases are only projections.
@@ -642,6 +750,10 @@ export async function runElectronE2E(mainWindow, options = {}) {
       const restored = await window.mip.restoreBackup({ backupId: output.backup.backupId, sha256: output.backup.sha256 });
       output.restore = { restored: restored.restored, schemaVersion: restored.schemaVersion, postRestore: restored.postRestore };
       output.afterRestore = await window.mip.getSession({ id: session.sessionId });
+      // Run the owner-profile composition flow after the backup/restore gate.
+      // Its intentionally failed dry fixture is terminal recovery evidence,
+      // but remains an active formal row for restore-safety purposes.
+      output.profileComposability = await runProfileComposabilityFlow();
       // Keep these administrative acceptance fixtures out of the backup and
       // restore gate itself. They are intentionally closed later in this
       // flow and do not represent a participant session.

@@ -22,6 +22,20 @@ let stopInFlight = null;
 let prepareInFlight = null;
 const pendingPreparations = new Set();
 let stopEvidencePollTimer = null;
+const PILOT_PROFILE_IDS = Object.freeze([
+  "OP_REQUEST_BINARY_V1",
+  "OP_CONTROL_BINARY_V1",
+  "OP_AUDIO_SHAM_BINARY_V1",
+]);
+function isPilotProfile(profile) {
+  return PILOT_PROFILE_IDS.includes(profile?.id);
+}
+function isOwnerSelectableProfile(profile) {
+  return isPilotProfile(profile) || profile?.catalog?.selectableForOwner === true;
+}
+function isStartEligibleProfile(profile) {
+  return isOwnerSelectableProfile(profile) && !profile?.isDraft && profile?.isActive === true && String(profile?.status || "").toUpperCase() === "ACTIVE" && profile?.validation?.valid !== false && profile?.reveal?.policy !== "AFTER_BLOCK_LOCK";
+}
 let player = {
   ctx: null,
   node: null,
@@ -278,11 +292,17 @@ async function init() {
 }
 function renderStart() {
   const available = profiles
-    .filter((profile) => ["OP_REQUEST_BINARY_V1", "OP_CONTROL_BINARY_V1", "OP_AUDIO_SHAM_BINARY_V1"].includes(profile?.id))
-    .filter((profile) => !profile.isDraft && profile.status !== "UNKNOWN" && profile.isActive === true && profile.reveal?.policy !== "AFTER_BLOCK_LOCK")
-    .sort((left, right) => Number(left.catalog?.displayOrder || 99) - Number(right.catalog?.displayOrder || 99));
+    .filter(isStartEligibleProfile)
+    .sort((left, right) => Number(left.catalog?.displayOrder || 99) - Number(right.catalog?.displayOrder || 99) || String(left.name).localeCompare(String(right.name)));
+  const recommended = available.filter(isPilotProfile);
+  const experimental = available.filter((profile) => !isPilotProfile(profile));
+  const option = (profile) => `<option value="${esc(profile.id)}" ${profile.id === selectedProfile?.id ? "selected" : ""}>${esc(profile.name)} · ${esc(profile.audio?.recipeId || "recipe unavailable")} v${esc(profile.audio?.version || 1)}</option>`;
+  const groups = [
+    recommended.length ? `<optgroup label="Recommended pilot conditions">${recommended.map(option).join("")}</optgroup>` : "",
+    experimental.length ? `<optgroup label="Experimental owner profiles">${experimental.map(option).join("")}</optgroup>` : "",
+  ].join("");
   selectedProfile = available.find((profile) => profile.id === selectedProfile?.id) || available[0] || selectedProfile;
-  app.innerHTML = `<div class="section-intro"><div><h2>Begin a controlled research session</h2><p>Choose one of the three frozen pilot conditions. Engineering/demo profiles remain available only for historical audit.</p></div>${pill("Step 1 of 5")}</div>${steps(1)}<div class="card"><div class="field"><label for="profileSelect">Pilot condition</label><select id="profileSelect">${available.map((profile) => `<option value="${esc(profile.id)}" ${profile.id === selectedProfile?.id ? "selected" : ""}>${esc(profile.name)}</option>`).join("")}</select><small>Binary outcome, participant-paced STOP/RETURN, no cues, 100 ms cadence, and ±2 s primary window are fixed by the selected profile.</small></div><div id="profileSummary"></div></div><div class="actions" style="margin-top:20px"><button class="button primary" id="next">Continue to pre-session setup →</button></div>`;
+  app.innerHTML = `<div class="section-intro"><div><h2>Begin a controlled research session</h2><p>Recommended pilot conditions are frozen. Active, validated owner-created profiles appear under Experimental and inherit the same binary participant-paced protocol.</p></div>${pill("Step 1 of 5")}</div>${steps(1)}<div class="card"><div class="field"><label for="profileSelect">Research profile</label><select id="profileSelect">${groups || '<option value="">No owner-selectable active profile is available</option>'}</select><small>Every selectable profile uses BINARY [0,1], OS_CSPRNG, participant-paced STOP/RETURN, no cues, TARGET_FREQUENCY, a ±2 s primary window, and 100 ms cadence.</small></div><div id="profileSummary"></div></div><div class="actions" style="margin-top:20px"><button class="button primary" id="next" ${available.length ? "" : "disabled"}>Continue to pre-session setup →</button></div>`;
   const summary = () => { const profile = available.find((item) => item.id === $("#profileSelect")?.value) || selectedProfile; selectedProfile = profile; $("#profileSummary").innerHTML = `<div class="review-row"><span>Purpose</span><strong>${esc(profile?.purpose || "Not recorded")}</strong></div><div class="review-row"><span>Condition</span><strong>${esc(profile?.catalog?.condition || "REQUEST")}</strong></div><div class="review-row"><span>Outcome / timing</span><strong>BINARY [0, 1] · participant-paced STOP/RETURN</strong></div><div class="review-row"><span>Audio</span><strong>${esc(profile?.audio?.recipeId || "UNKNOWN")} v${esc(profile?.audio?.version || 1)}</strong></div>`; };
   $("#profileSelect").onchange = summary;
   summary();
@@ -290,7 +310,7 @@ function renderStart() {
 }
 async function renderPre() {
   const settings = window.mip?.getSettings ? await window.mip.getSettings().catch(() => ({})) : {};
-  if (["OP_REQUEST_BINARY_V1", "OP_CONTROL_BINARY_V1", "OP_AUDIO_SHAM_BINARY_V1"].includes(selectedProfile?.id)) return renderOperationalPre(settings);
+  if (isOwnerSelectableProfile(selectedProfile)) return renderOperationalPre(settings);
   const profileSpace = selectedProfile?.outcomeSpace || settings?.researchDefaults?.outcomeSpace || { type: "BINARY", values: [0, 1] };
   const integerSpace = String(profileSpace.type || "").toUpperCase() === "INTEGER_RANGE";
   const minDefault = profileSpace.minInclusive ?? profileSpace.min ?? 0;
@@ -1107,13 +1127,94 @@ function renderAudio() {
   updatePlayer();
 }
 async function renderProfiles() {
-  profiles = window.mip ? await window.mip.getProfiles({ allVersions: false }) : profiles;
-  const pilotIds = new Set(["OP_REQUEST_BINARY_V1", "OP_CONTROL_BINARY_V1", "OP_AUDIO_SHAM_BINARY_V1"]);
+  profiles = window.mip ? await window.mip.getProfiles({ ownerCatalog: true, allVersions: false }) : profiles;
+  const pilotIds = new Set(PILOT_PROFILE_IDS);
+  const ownerProfiles = (profiles || []).filter((profile) => isOwnerSelectableProfile(profile));
+  const recommended = ownerProfiles.filter((profile) => pilotIds.has(profile.id));
+  const experimental = ownerProfiles.filter((profile) => !pilotIds.has(profile.id));
   const actionButtons = (profile) => pilotIds.has(profile.id)
     ? '<span class="subtle">Frozen pilot profile · duplicate for an internal validation profile.</span>'
-    : `<button class="button" data-profile-duplicate="${esc(profile.id)}" data-version="${esc(profile.version)}">Duplicate</button><button class="button" data-profile-edit="${esc(profile.id)}" data-version="${esc(profile.version)}">Edit draft</button><button class="button" data-profile-versions="${esc(profile.id)}">Versions</button>${profile.status !== "ACTIVE" && !profile.isDraft ? `<button class="button" data-profile-activate="${esc(profile.id)}" data-version="${esc(profile.version)}">Activate</button>` : profile.isDraft ? `<button class="button" data-profile-activate="${esc(profile.id)}" data-version="${esc(profile.version)}">Activate after review</button>` : ""}`;
-  app.innerHTML = `<div class="section-intro"><div><h2>Experiment Profiles</h2><p>Exactly three frozen operational pilot profiles are available here. Historical/demo profiles remain resolvable for audit but are not owner-selectable.</p></div></div><div class="grid two">${profiles.map((p) => `<article class="card profile-card"><div style="display:flex;justify-content:space-between;gap:12px"><h3>${esc(p.name)} · v${esc(p.version)}</h3>${pill(p.status || "ACTIVE")}</div><p class="subtle">${esc(p.purpose)}</p><div class="review-row"><span>Condition</span><strong>${esc(p.catalog?.condition || "UNKNOWN")}</strong></div><div class="review-row"><span>Timing</span><strong>PARTICIPANT_STOP_ANCHORED · no cues</strong></div><div class="review-row"><span>Outcome / endpoint</span><strong>BINARY [0,1] · TARGET_FREQUENCY</strong></div><div class="review-row"><span>Audio</span><strong>${esc(p.audio?.recipeId || "UNKNOWN")} v${esc(p.audio?.version || 1)}</strong></div><div class="review-row"><span>Config fingerprint</span><strong class="mono">${esc(p.configHash || "UNKNOWN")}</strong></div><div class="actions">${actionButtons(p)}</div><details><summary>Effective JSON (read-only)</summary><pre class="json">${esc(JSON.stringify(p, null, 2))}</pre></details></article>`).join("")}</div><div id="profileEditor" style="margin-top:18px"></div>`;
+    : `<button class="button" data-profile-edit="${esc(profile.id)}" data-version="${esc(profile.version)}">Edit draft</button><button class="button" data-profile-versions="${esc(profile.id)}">Versions</button>${profile.isDraft ? `<button class="button" data-profile-activate="${esc(profile.id)}" data-version="${esc(profile.version)}">Activate after review</button>` : profile.status !== "ACTIVE" || profile.isActive !== true ? `<button class="button" data-profile-activate="${esc(profile.id)}" data-version="${esc(profile.version)}">Activate for future sessions</button>` : `<button class="button" data-profile-archive="${esc(profile.id)}" data-version="${esc(profile.version)}">Archive / deactivate</button>`}`;
+  const profileCard = (p) => `<article class="card profile-card" data-profile-id="${esc(p.id)}"><div style="display:flex;justify-content:space-between;gap:12px"><h3>${esc(p.name)} · v${esc(p.version)}</h3>${pill(p.status || "ACTIVE")}</div><p class="subtle">${esc(p.purpose || "No purpose recorded.")}</p><div class="review-row"><span>Catalog</span><strong>${pilotIds.has(p.id) ? "RECOMMENDED · FROZEN" : "EXPERIMENTAL · OWNER-CREATED"}</strong></div><div class="review-row"><span>Condition</span><strong>${esc(p.catalog?.condition || "UNKNOWN")}</strong></div><div class="review-row"><span>Timing</span><strong>PARTICIPANT_STOP_ANCHORED · no cues</strong></div><div class="review-row"><span>Outcome / endpoint</span><strong>BINARY [0,1] · TARGET_FREQUENCY</strong></div><div class="review-row"><span>Audio</span><strong>${esc(p.audio?.recipeId || "UNKNOWN")} v${esc(p.audio?.version || 1)}</strong></div><div class="review-row"><span>Config fingerprint</span><strong class="mono">${esc(p.configHash || "UNKNOWN")}</strong></div><div class="actions">${actionButtons(p)}</div><details><summary>Effective JSON (read-only)</summary><pre class="json">${esc(JSON.stringify(p, null, 2))}</pre></details></article>`;
+  app.innerHTML = `<div class="section-intro"><div><h2>Experiment Profiles</h2><p>The three recommended pilot profiles are frozen. Create validated owner profiles under Experimental without changing the engine or protocol semantics.</p></div><button class="button primary" id="newExperimentalProfile">＋ New Experimental Profile</button></div><section><h3>Recommended</h3><p class="subtle">Frozen pilot templates; immutable and always available when active.</p><div class="grid two">${recommended.map(profileCard).join("") || '<div class="card empty">No recommended profile is available.</div>'}</div></section><section style="margin-top:22px"><h3>Experimental</h3><p class="subtle">Active validated owner-created profiles explicitly marked selectable for future sessions. Archived and draft profiles remain visible for administration but are not selectable at Start.</p><div class="grid two">${experimental.map(profileCard).join("") || '<div class="card empty">No owner-created experimental profiles yet.</div>'}</div></section><div id="profileEditor" style="margin-top:18px"></div>`;
   const editor = $("#profileEditor");
+  const showExperimentalCreator = async () => {
+    if (!window.mip) return toast("Creating profiles requires the packaged Electron application.");
+    try {
+      const templates = PILOT_PROFILE_IDS.map((id) => profiles.find((profile) => profile.id === id)).filter(Boolean);
+      const eligibleRecipes = (await window.mip.getAudioPresets({ activeOnly: true, formalOperationalOnly: true }) || [])
+        .filter((recipe) => recipe.isDraft !== true && recipe.isActive === true && recipe.status === "ACTIVE" && recipe.incomplete !== true && recipe.formalOperationalEligibility === true)
+        .sort((left, right) => {
+          const rank = (recipe) => recipe.recipeId === "A-U396-4" ? 0 : recipe.recipeId === "A-P100-104" ? 1 : recipe.recipeId === "A-SHAM-0" ? 2 : recipe.recipeId === "MIP_LAYERED_EXPERIMENTAL_V1" ? 3 : 10;
+          return rank(left) - rank(right) || String(left.recipeId).localeCompare(String(right.recipeId));
+        });
+      if (!templates.length) throw new Error("Frozen pilot templates are unavailable.");
+      if (!eligibleRecipes.length) throw new Error("No active, complete, formally operationally eligible audio recipe is available.");
+      const layered = eligibleRecipes.find((recipe) => recipe.recipeId === "MIP_LAYERED_EXPERIMENTAL_V1");
+      const defaultRecipe = layered || eligibleRecipes[0];
+      editor.innerHTML = `<div class="card" id="experimentalProfileCreator"><h3>New Experimental Profile</h3><p class="subtle">This owner workflow changes only the profile identity and selected audio recipe. Binary outcome, OS_CSPRNG, participant-paced STOP/RETURN, no cues, zero offset, TARGET_FREQUENCY, ±2 second primary window, 100 ms cadence, reveal, integrity, and report rules are inherited and frozen.</p><div class="form-grid"><div class="field"><label for="experimentalBaseProfile">Base template</label><select id="experimentalBaseProfile">${templates.map((profile) => `<option value="${esc(profile.id)}">${esc(profile.name)}</option>`).join("")}</select></div><div class="field"><label for="experimentalProfileName">Profile name</label><input id="experimentalProfileName" value="Binary Request — MIP Layered" maxlength="200"></div><div class="field full"><label for="experimentalRecipe">Audio recipe · active complete eligible versions</label><select id="experimentalRecipe">${eligibleRecipes.map((recipe) => { const id = recipe.recipeId || recipe.id; const experimentalLabel = id === "MIP_LAYERED_EXPERIMENTAL_V1" ? " · EXPERIMENTAL RECONSTRUCTION · NOT HISTORICALLY EXACT" : ""; return `<option value="${esc(`${id}::${recipe.version}`)}" ${id === defaultRecipe.recipeId && Number(recipe.version) === Number(defaultRecipe.version) ? "selected" : ""}>${esc(id)} v${esc(recipe.version)} · ${esc(recipe.provenance || "UNKNOWN")}${experimentalLabel}</option>`; }).join("")}</select><small>Only ACTIVE, complete recipes passing formal operational eligibility are offered. A recipe's engineering eligibility is not a historical-exact claim.</small></div><div class="field full"><label for="experimentalPurpose">Purpose (optional)</label><input id="experimentalPurpose" maxlength="500" placeholder="Optional short purpose"></div><div class="field full"><label for="experimentalNotes">Notes (optional)</label><textarea id="experimentalNotes" maxlength="2000" placeholder="Optional owner notes"></textarea></div></div><div class="actions" style="margin-top:14px"><button class="button" id="validateExperimentalProfile">Validate</button><button class="button primary" id="saveExperimentalProfile" disabled>Save immutable profile</button><button class="button" id="activateExperimentalProfile" hidden>Activate for future sessions</button></div><div id="experimentalProfileValidation" class="callout" role="status" aria-live="polite" style="margin-top:12px">Enter the owner fields, then Validate.</div></div>`;
+      let validatedId = null;
+      let savedProfile = null;
+      const readInput = () => {
+        const [recipeId, version] = String($("#experimentalRecipe").value || "").split("::");
+        return {
+          baseProfileId: $("#experimentalBaseProfile").value,
+          name: $("#experimentalProfileName").value.trim(),
+          recipeId,
+          recipeVersion: Number(version),
+          purpose: $("#experimentalPurpose").value.trim() || undefined,
+          notes: $("#experimentalNotes").value.trim() || undefined,
+          ...(validatedId ? { newId: validatedId } : {}),
+        };
+      };
+      const invalidate = () => {
+        validatedId = null;
+        $("#saveExperimentalProfile").disabled = true;
+        $("#activateExperimentalProfile").hidden = true;
+        savedProfile = null;
+      };
+      ["#experimentalBaseProfile", "#experimentalProfileName", "#experimentalRecipe", "#experimentalPurpose", "#experimentalNotes"].forEach((selector) => $(selector)?.addEventListener("input", invalidate));
+      ["#experimentalBaseProfile", "#experimentalRecipe"].forEach((selector) => $(selector)?.addEventListener("change", invalidate));
+      $("#validateExperimentalProfile").onclick = async () => {
+        try {
+          const result = await window.mip.validateExperimentalProfile(readInput());
+          const validation = result?.validation || {};
+          if (!validation.valid) {
+            invalidate();
+            $("#experimentalProfileValidation").textContent = `Validation failed: ${(validation.errors || []).join("; ")}`;
+            return;
+          }
+          validatedId = result.profile.id;
+          $("#saveExperimentalProfile").disabled = false;
+          $("#experimentalProfileValidation").textContent = `Validated. ${result.audio?.recipeId} v${result.audio?.version} is active, complete, and formally operationally eligible. Save to create immutable profile ${validatedId}.`;
+        } catch (error) {
+          invalidate();
+          $("#experimentalProfileValidation").textContent = error.message;
+        }
+      };
+      $("#saveExperimentalProfile").onclick = async () => {
+        try {
+          if (!validatedId) throw new Error("Validate the experimental profile before saving.");
+          savedProfile = await window.mip.createExperimentalProfile(readInput());
+          $("#saveExperimentalProfile").disabled = true;
+          $("#activateExperimentalProfile").hidden = false;
+          $("#activateExperimentalProfile").dataset.profileId = savedProfile.id;
+          $("#activateExperimentalProfile").dataset.profileVersion = String(savedProfile.version);
+          $("#experimentalProfileValidation").textContent = `Immutable profile ${savedProfile.id} v${savedProfile.version} saved as ${savedProfile.status}. Activate it before using it in a future session.`;
+          profiles = await window.mip.getProfiles({ ownerCatalog: true, allVersions: false });
+        } catch (error) { $("#experimentalProfileValidation").textContent = error.message; }
+      };
+      $("#activateExperimentalProfile").onclick = async () => {
+        try {
+          if (!savedProfile) throw new Error("Save the profile first.");
+          await window.mip.activateProfileVersion({ id: savedProfile.id, version: savedProfile.version });
+          toast("Experimental profile activated for future sessions.");
+          await renderProfiles();
+        } catch (error) { $("#experimentalProfileValidation").textContent = error.message; }
+      };
+    } catch (error) { toast(error.message); }
+  };
+  $("#newExperimentalProfile").onclick = showExperimentalCreator;
   const duplicate = async (id, version) => {
     if (!window.mip) return toast("Profile editing requires the packaged Electron application.");
     try { await window.mip.duplicateProfile({ profileId: id, version: Number(version), activate: false }); toast("Immutable profile copy created in SQLite."); profiles = await window.mip.getProfiles(); renderProfiles(); } catch (error) { toast(error.message); }
@@ -1127,6 +1228,14 @@ async function renderProfiles() {
     try {
       await window.mip?.activateProfileVersion({ id: button.dataset.profileActivate, version: Number(button.dataset.version) });
       toast("Profile version activated for future formal sessions.");
+      await renderProfiles();
+    } catch (error) { toast(error.message); }
+  });
+  document.querySelectorAll("[data-profile-archive]").forEach((button) => button.onclick = async () => {
+    if (!confirm("Archive/deactivate this owner-created profile? Existing sessions remain pinned to their immutable version.")) return;
+    try {
+      await window.mip?.archiveProfile({ id: button.dataset.profileArchive, version: Number(button.dataset.version) });
+      toast("Experimental profile archived; it will not appear in Start Research Session.");
       await renderProfiles();
     } catch (error) { toast(error.message); }
   });
