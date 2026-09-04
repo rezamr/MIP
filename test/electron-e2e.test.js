@@ -90,37 +90,6 @@ test("real Electron bridge, AudioWorklet lifecycle, reports, backup/restore, and
     });
     assert.deepEqual(initial.audioLabPanels, { pureRecipeDetails: true, sourceProvenance: true, engineeringVerification: true, activeLayers: true, masterGainText: true });
     assert.deepEqual(initial.layeredRecipePanels, { repositoryBacked: true, activeLayers: true, sourceClasses: true, engineeringVerification: true });
-    assert.deepEqual(initial.profileComposability && {
-      builtInRecommendedCount: initial.profileComposability.builtInRecommendedCount,
-      validated: initial.profileComposability.validated,
-      optionalFieldsOmitted: initial.profileComposability.optionalFieldsOmitted,
-      saved: initial.profileComposability.saved,
-      experimentalActive: initial.profileComposability.experimentalActive,
-      customAppearsAtStart: initial.profileComposability.customAppearsAtStart,
-      archivedHiddenAtStart: initial.profileComposability.archivedHiddenAtStart,
-      layeredRecipeCommitted: initial.profileComposability.layeredRecipeCommitted,
-      committedSessionAccepted: initial.profileComposability.committedSessionAccepted,
-      noProtocolCues: initial.profileComposability.noProtocolCues,
-      participantPaced: initial.profileComposability.participantPaced,
-      targetOffsetMs: initial.profileComposability.targetOffsetMs,
-      oldSessionPinned: initial.profileComposability.oldSessionPinned,
-      overwriteRejected: initial.profileComposability.overwriteRejected,
-    }, {
-      builtInRecommendedCount: 3,
-      validated: true,
-      optionalFieldsOmitted: true,
-      saved: true,
-      experimentalActive: true,
-      customAppearsAtStart: true,
-      archivedHiddenAtStart: true,
-      layeredRecipeCommitted: true,
-      committedSessionAccepted: true,
-      noProtocolCues: true,
-      participantPaced: true,
-      targetOffsetMs: 0,
-      oldSessionPinned: true,
-      overwriteRejected: true,
-    });
     assert.deepEqual(initial.audioControlSmoke, { doublePlay: true, play: true, rerender: true, pause: true, resume: true, gain: true, stop: true });
     assert.equal(initial.recipeEditing.draftValid, true);
     assert.equal(initial.recipeEditing.savedVersion, 2);

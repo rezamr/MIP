@@ -150,34 +150,24 @@ observation separately if an acoustic artifact is heard.
 
 ### Experiment Profiles
 
-**Purpose.** Inspect the three recommended frozen operational protocol
-definitions and create validated owner-defined experimental profiles without
-changing the protocol semantics.
+**Purpose.** Inspect the three owner-facing operational protocol definitions
+and their immutable versions.
 
 **What the system is doing.** SQLite stores identity, draft, validation,
 version, activation, and config fingerprint.  A profile controls experiment
 mode, outcome space/cardinality, RNG, timing, participant/evidence windows,
 endpoint, analysis windows, audio recipe reference, and reveal policy.
 
-**Safe workflow.** The **Recommended** list contains **Binary Request**,
+**Safe workflow.** The normal list contains exactly **Binary Request**,
 **Binary No-Intention Control**, and **Binary Request — Audio Sham**. These
-three pilot cards are read-only and frozen in the owner-facing workflow. Use
-**+ New Experimental Profile** to choose one of those templates, select an
-active complete formally operationally eligible audio recipe, enter a profile
-name and optional purpose/notes, Validate, Save immutable profile, and Activate
-it for future sessions. Experimental profiles inherit BINARY [0,1],
-OS_CSPRNG, participant-paced STOP/RETURN, zero offset, TARGET_FREQUENCY,
-the ±2 second primary window, 100 ms cadence, no protocol cues, and the same
-reveal/integrity/report rules. Older DRY/demo IDs are internal validation
-fixtures: they remain resolvable for historical reports, but do not appear in
-Start Research Session. Engineering versioning remains available to the
-underlying repository without changing a committed session. A committed
-session always references its original version.
+three pilot cards are read-only and frozen in the owner-facing workflow.
+Older DRY/demo IDs are internal validation fixtures: they remain resolvable for
+historical reports, but do not appear in Start Research Session. Engineering
+versioning remains available to the underlying repository without changing a
+committed session. A committed session always references its original version.
 
-**Acceptance test.** Confirm the three Recommended cards. Create and activate
-an Experimental profile using an eligible recipe, verify it appears in Start
-Research Session, then Archive/Deactivate it and verify it no longer appears
-there. Verify old versions and old sessions remain unchanged; engineering-only
+**Acceptance test.** Confirm that exactly three operational cards are shown.
+Verify old versions and old sessions remain unchanged; engineering-only
 profiles stay available through historical reports rather than the pilot
 selector.
 
