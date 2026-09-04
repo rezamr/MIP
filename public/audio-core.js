@@ -1289,6 +1289,10 @@ export class PcmStreamHasher {
     this.sampleRate = number(sampleRate, "sampleRate", { integer: true, min: 1 });
     this.hash = new SHA256();
     this.frameBytes = new Uint8Array(4);
+    // Reusable storage for render-quantum PCM.  Keeping this buffer on the
+    // stream avoids allocating a byte array for every frame in the
+    // AudioWorklet render path while preserving the canonical byte order.
+    this.blockBytes = new Uint8Array(0);
     this.header = new Uint8Array(32);
     for (let i = 0; i < PCM_CANONICAL_FORMAT.magic.length; i += 1) this.header[i] = PCM_CANONICAL_FORMAT.magic.charCodeAt(i);
     this.header[16] = this.sampleRate;
@@ -1313,6 +1317,31 @@ export class PcmStreamHasher {
     this.frameBytes[3] = r >> 8;
     this.hash.update(this.frameBytes);
     this.frames += 1;
+  }
+
+  updateStereoBlock(left, right, frameCount = Math.min(left?.length ?? 0, right?.length ?? 0)) {
+    if (this.finished) throw new Error("PCM hash is already finalized");
+    if (!left || !right || typeof left.length !== "number" || typeof right.length !== "number")
+      throw new Error("updateStereoBlock requires equal stereo arrays");
+    if (left.length !== right.length) throw new Error("updateStereoBlock requires equal stereo arrays");
+    const frames = number(frameCount, "frameCount", { integer: true, min: 0, max: Number.MAX_SAFE_INTEGER });
+    if (frames > left.length) throw new Error("frameCount exceeds channel length");
+    if (frames === 0) return this;
+    const byteCount = frames * 4;
+    if (this.blockBytes.length < byteCount) this.blockBytes = new Uint8Array(byteCount);
+    for (let i = 0; i < frames; i += 1) {
+      const l = quantize(left[i]);
+      const r = quantize(right[i]);
+      const offset = i * 4;
+      this.blockBytes[offset] = l;
+      this.blockBytes[offset + 1] = l >>> 8;
+      this.blockBytes[offset + 2] = r;
+      this.blockBytes[offset + 3] = r >>> 8;
+    }
+    // Exactly one SHA update is performed for the complete render block.
+    this.hash.update(this.blockBytes.subarray(0, byteCount));
+    this.frames += frames;
+    return this;
   }
 
   finish(totalFrames = this.frames) {
@@ -1736,11 +1765,14 @@ export class AudioEngine {
       left[i] = outLeft;
       right[i] = outRight;
       if (active) {
-        this.hasher.updateFrame(outLeft, outRight);
         this.totalFrames += 1;
         rendered += 1;
       }
     }
+    // Active frames are emitted as a contiguous prefix of a render block. A
+    // pause/stop/finite transition can make the following frames silent, so
+    // hash only the frames that were part of the authoritative active stream.
+    if (rendered > 0) this.hasher.updateStereoBlock(left, right, rendered);
     this.lastRenderResult.left = left;
     this.lastRenderResult.right = right;
     this.lastRenderResult.frames = rendered;

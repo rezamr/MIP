@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   AudioEngine,
   BUILTIN_RECIPES,
+  EXPERIMENTAL_RECIPES,
   PCM_CANONICAL_FORMAT,
   PCM_DIGEST_VERSION,
   PcmStreamHasher,
@@ -132,6 +133,52 @@ test("known canonical PCM stream digest is reproducible incrementally", () => {
   for (let i = 0; i < left.length; i += 1) stream.updateFrame(left[i], right[i]);
   assert.equal(stream.finish(), direct);
   assert.equal(direct, "3c45cfafff5105288de80bd30ac559119c52df51d23b2ca6f9638d764b51e181");
+});
+
+test("stereo block hashing is byte-for-byte equivalent to per-frame hashing", () => {
+  const lengths = [0, 1, 127, 128, 129, 4097];
+  for (const length of lengths) {
+    const left = new Float32Array(length);
+    const right = new Float32Array(length);
+    for (let i = 0; i < length; i += 1) {
+      left[i] = Math.sin(i * 0.071) * 0.93;
+      right[i] = ((i * 37) % 101) / 100 - 0.5;
+    }
+    const perFrame = new PcmStreamHasher(SAMPLE_RATE);
+    for (let i = 0; i < length; i += 1) perFrame.updateFrame(left[i], right[i]);
+    const block = new PcmStreamHasher(SAMPLE_RATE);
+    let bodyUpdates = 0;
+    const update = block.hash.update.bind(block.hash);
+    block.hash.update = (bytes) => {
+      bodyUpdates += 1;
+      return update(bytes);
+    };
+    for (let offset = 0; offset < length; offset += 128) {
+      const end = Math.min(length, offset + 128);
+      block.updateStereoBlock(left.subarray(offset, end), right.subarray(offset, end));
+    }
+    if (length === 0) block.updateStereoBlock(left, right, 0);
+    assert.equal(block.frames, length);
+    assert.equal(block.finish(length), perFrame.finish(length), `length ${length}`);
+    assert.ok(bodyUpdates <= Math.ceil(length / 128) + 1, `block update count for ${length}`);
+  }
+});
+
+test("existing deterministic fixture PCM digests remain unchanged", () => {
+  const expected = {
+    "A-U396-4": "2805792803105de190cfe6daad9f9e33f09584c34a3ce67a5892985c85d4a0ea",
+    "A-P100-104": "a294b6ef2eb0f1b7d3a7e568b12ec691b4fb6c5c1782ecde410ca41b267508cb",
+    "A-SHAM-0": "6102a16105fffd13e91411fafeaac33f4e585f9517518dc195c830f85f0a2d60",
+    "MIP_LAYERED_EXPERIMENTAL_V1": "489d589462f3444e7e204f3b6b504fad8684ff29a3b773165b7348d1d3124b86",
+  };
+  const recipes = { ...BUILTIN_RECIPES, ...EXPERIMENTAL_RECIPES };
+  for (const [recipeId, digest] of Object.entries(expected)) {
+    const rendered = renderFinite(recipes[recipeId], 2048);
+    assert.equal(rendered.digest, digest, recipeId);
+    const legacy = new PcmStreamHasher(rendered.recipe.sampleRate);
+    for (let i = 0; i < rendered.frames; i += 1) legacy.updateFrame(rendered.left[i], rendered.right[i]);
+    assert.equal(rendered.digest, legacy.finish(rendered.frames), `${recipeId} legacy digest`);
+  }
 });
 
 test("canonical configuration serialization is key-order independent", () => {
@@ -393,6 +440,30 @@ test("live preview remains indefinite beyond one-hour frame semantics", () => {
   assert.equal(engine.recipe.targetFrames, null);
   assert.equal(engine.state, "running");
   assert.equal(engine.frame, SAMPLE_RATE * 3601 + 8);
+});
+
+test("live A-U396-4 stays continuous across 180 seconds of 128-frame blocks", { timeout: 30000 }, () => {
+  const engine = new AudioEngine(BUILTIN_RECIPES["A-U396-4"]).start();
+  const left = new Float32Array(128);
+  const right = new Float32Array(128);
+  const blocks = Math.ceil((180 * SAMPLE_RATE) / left.length);
+  engine.renderInto(left, right);
+  const firstBlock = left.slice();
+  const phaseAfterFirstBlock = engine.components.map((state) => [state.leftPhase, state.rightPhase]);
+  engine.renderInto(left, right);
+  assert.notEqual(left[0], firstBlock[0], "carrier phase must continue into the next block");
+  assert.notDeepEqual(engine.components.map((state) => [state.leftPhase, state.rightPhase]), phaseAfterFirstBlock);
+  for (let block = 2; block < blocks; block += 1) engine.renderInto(left, right);
+  assert.equal(engine.state, "running");
+  assert.equal(engine.recipe.execution.mode, "live");
+  assert.equal(engine.recipe.targetFrames, null);
+  assert.equal(engine.frame, blocks * left.length);
+  assert.equal(engine.totalFrames, engine.frame);
+  assert.equal(engine.cuesTriggered, 0);
+  assert.equal(engine.clipping, 0);
+  engine.stop();
+  while (engine.state !== "stopped") engine.renderInto(left, right);
+  assert.equal(engine.finalize().length, 64);
 });
 
 test("finite formal mode stops at exact targetFrames and hashes all ramps/master gain", () => {

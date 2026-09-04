@@ -7,6 +7,7 @@ import { fieldRow as renderFieldRow, renderError } from "../renderer/core.js";
 import { sessionService } from "../renderer/services/session-service.js";
 import { activeLayers as projectActiveLayers, summarizeProvenance } from "./audio-core.js";
 import { getPageHelp, FIELD_HELP } from "../renderer/help-registry.js";
+import { FormalTelemetryThrottle } from "../renderer/audio/telemetry-throttle.js";
 
 const $ = (s) => document.querySelector(s),
   app = $("#app");
@@ -34,6 +35,7 @@ let player = {
   timer: null,
   frames: 0,
   finalization: null,
+  telemetryThrottle: null,
 };
 const esc = (x) =>
   String(x ?? "").replace(
@@ -738,8 +740,13 @@ async function stopPlayer({ cancelPreparations = true } = {}) {
   finally { if (stopInFlight === operation) stopInFlight = null; }
 }
 async function stopPlayerInternal() {
-  const generation = ++audioGeneration;
   const previous = player;
+  // Persist one final ordinary packet only when its normal interval is due;
+  // never flush early merely because the player is stopping. Finalization and
+  // lifecycle acknowledgements below remain immediate and authoritative.
+  previous.telemetryThrottle?.flushIfDue();
+  previous.telemetryThrottle?.cancel();
+  const generation = ++audioGeneration;
   if (previous.timer) clearInterval(previous.timer);
   if (previous.healthTimer) clearTimeout(previous.healthTimer);
   if (previous.status !== "stopped") {
@@ -780,6 +787,7 @@ async function stopPlayerInternal() {
     timer: null,
     frames: 0,
     finalization,
+    telemetryThrottle: null,
     formal: false,
     scheduler: null,
     generation,
@@ -843,12 +851,19 @@ async function preparePlayerInternal(recipe, {
   await stopPlayer({ cancelPreparations: false });
   if (preparation?.cancelled) throw new Error("Audio preparation was cancelled");
   const generation = ++audioGeneration;
-  const audioRuntime = new RendererAudio((message) => {
+  let audioRuntime = null;
+  const telemetryThrottle = formal
+    ? new FormalTelemetryThrottle((message) => {
+      if (generation !== audioGeneration || player.audioRuntime !== audioRuntime || !currentSession?.sessionId || !window.mip) return;
+      window.mip.audioTelemetry({ id: currentSession.sessionId, telemetry: message }).catch(() => {});
+    })
+    : null;
+  audioRuntime = new RendererAudio((message) => {
     if (generation !== audioGeneration || player.audioRuntime !== audioRuntime) return;
     player.frames = Number(message.generatedFrames ?? message.frames ?? player.frames);
     if (formal && currentSession?.sessionId && window.mip) {
       const telemetry = jsonSafe({ ...message, type: "TELEMETRY" });
-      window.mip.audioTelemetry({ id: currentSession.sessionId, telemetry }).catch(() => {});
+      telemetryThrottle?.accept(telemetry);
     }
     updatePlayer();
   });
@@ -870,6 +885,7 @@ async function preparePlayerInternal(recipe, {
     healthTimer: null,
     frames: 0,
     finalization: null,
+    telemetryThrottle,
     formal,
     scheduler: null,
     progress: 0,
@@ -909,6 +925,7 @@ async function preparePlayerInternal(recipe, {
     }
     return ack;
   } catch (error) {
+    telemetryThrottle?.cancel();
     await audioRuntime.stop({ timeoutMs: 5000 }).catch(() => audioRuntime.dispose());
     throw error;
   }
